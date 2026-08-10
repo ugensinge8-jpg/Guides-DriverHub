@@ -393,8 +393,8 @@ function WelcomeBullet({ Icon, title, body }) {
 
 /* ================================= Shell ================================== */
 const NAV = {
-  guide: [{ id: "post", label: "Post", Icon: ImagePlus }, { id: "jobs", label: "Jobs", Icon: Briefcase }, { id: "trips", label: "Trips", Icon: Map }, { id: "profile", label: "Profile", Icon: User }],
-  driver: [{ id: "post", label: "Post", Icon: ImagePlus }, { id: "jobs", label: "Jobs", Icon: Briefcase }, { id: "trips", label: "Trips", Icon: Map }, { id: "profile", label: "Profile", Icon: User }],
+  guide: [{ id: "post", label: "Feed", Icon: Newspaper }, { id: "jobs", label: "Jobs", Icon: Briefcase }, { id: "trips", label: "Trips", Icon: Map }, { id: "profile", label: "Profile", Icon: User }],
+  driver: [{ id: "post", label: "Feed", Icon: Newspaper }, { id: "jobs", label: "Jobs", Icon: Briefcase }, { id: "trips", label: "Trips", Icon: Map }, { id: "profile", label: "Profile", Icon: User }],
   operator: [{ id: "discover", label: "Discover", Icon: Search }, { id: "requests", label: "Jobs", Icon: Briefcase }, { id: "trips", label: "Trips", Icon: Map }, { id: "feed", label: "Feed", Icon: Newspaper }],
   admin: [{ id: "review", label: "Review", Icon: ShieldCheck }],
 };
@@ -564,30 +564,44 @@ function Empty({ Icon, title, body }) {
 }
 const roleLabel = (r) => (r === "guide" ? "Guide" : "Driver");
 
-/* ============================ Post tab (talent) =========================== */
+/* ======================== Feed tab (guides & drivers) ===================== */
 function PostTab({ user, posts, onAdd, eng }) {
-  const mine = posts.filter((p) => p.talentId === user.talentId);
-  const t = talentById(user.talentId);
+  const me = user.talentId;
+  const t = talentById(me);
+  const visible = posts.filter((p) => p.status === "approved" || p.talentId === me);
   return (
     <div className="px-5 py-4">
       <Composer talent={t} onAdd={onAdd} />
-      <div className="mt-7"><SectionLabel>Your posts</SectionLabel></div>
-      {mine.length === 0 ? (
-        <Empty Icon={ImagePlus} title="Nothing posted yet" body="Share a moment from a recent trip — it goes live once an admin approves it." />
+      <div className="mt-7"><SectionLabel trailing={`${visible.length}`}>Feed</SectionLabel></div>
+      {visible.length === 0 ? (
+        <Empty Icon={Inbox} title="Nothing here yet" body="Approved highlights from every guide and driver appear here — share the first one." />
       ) : (
-        <div className="space-y-3">
-          {mine.map((p) => (
-            <div key={p.id} className="rounded-2xl p-4" style={{ background: C.card, border: `1px solid ${C.line}` }}>
-              <div className="flex items-center justify-between">
-                <span className="text-[12px]" style={{ color: C.muted }}>{relTime(p.createdAt)}</span>
-                <StatusBadge status={p.status} reason={p.reason} />
+        <div className="space-y-3.5">
+          {visible.map((p) => {
+            const author = talentById(p.talentId);
+            const mine = p.talentId === me;
+            return (
+              <div key={p.id} className="rounded-2xl p-4" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+                <div className="flex items-center gap-3">
+                  <Avatar initials={author?.initials || "?"} size={40} />
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[14.5px] font-semibold truncate" style={{ color: C.ink }}>{mine ? "You" : (author?.name || "Member")}</span>
+                      {author?.verified && <BadgeCheck size={15} color={C.pine} />}
+                    </div>
+                    <div className="flex items-center gap-1 text-[12px]" style={{ color: C.muted }}>
+                      <MapPin size={11} /> {author?.base || ""} · {relTime(p.createdAt)}
+                    </div>
+                  </div>
+                  {mine && p.status !== "approved" && <StatusBadge status={p.status} reason={p.reason} />}
+                </div>
+                {p.text && <p className="text-[15px] leading-relaxed mt-3" style={{ color: C.ink }}>{p.text}</p>}
+                <PostMedia media={p.media} />
+                <PostLocation location={p.location} />
+                <PostEngagement post={p} eng={eng} />
               </div>
-              {p.text && <p className="text-[14.5px] leading-snug mt-2.5" style={{ color: C.ink }}>{p.text}</p>}
-              <PostMedia media={p.media} />
-              <PostLocation location={p.location} />
-              <PostEngagement post={p} eng={eng} />
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>
