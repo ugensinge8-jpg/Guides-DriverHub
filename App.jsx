@@ -1,11 +1,12 @@
-import React, { useState, useRef, useMemo } from "react";
+import React, { useState, useRef, useMemo, useEffect } from "react";
 import {
   Compass, Car, Building2, ShieldCheck, ImagePlus, X, Check, Clock, Send,
   BadgeCheck, MapPin, Inbox, ChevronLeft, Star, Phone, Mail, Briefcase,
   Search, LogOut, Newspaper, User, CalendarCheck, MessageCircle,
-  Map, MessageSquare, Users, Download, Mic, Video,
+  Map, MessageSquare, Users, Download, Mic, Video, Heart, Share2, Trash2,
 } from "lucide-react";
 import mapImg from "./map.jpg";
+import { supabase } from "./supabase.js";
 
 /* DrukConnect design system — paper, pine forest, temple gold, kemar red. */
 const C = {
@@ -62,6 +63,46 @@ const initialsOf = (name) => name.split(" ").map((w) => w[0]).slice(0, 2).join("
 const isoDay = (offset = 0) => new Date(Date.now() + offset * 86400e3).toISOString().slice(0, 10);
 const sysMsg = (text) => ({ id: uid(), senderId: null, kind: "system", body: text, photo: null, ts: Date.now() });
 
+/* ── Cloud (Supabase) ── posts are global when configured; everything falls back to local demo mode when not. */
+const CLOUD = Boolean(supabase);
+
+async function shrinkImage(dataUri, maxW = 1280, quality = 0.82) {
+  try {
+    const img = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = dataUri; });
+    const scale = Math.min(1, maxW / img.width);
+    if (scale === 1 && dataUri.length < 900000) return dataUri;
+    const c = document.createElement("canvas");
+    c.width = Math.round(img.width * scale); c.height = Math.round(img.height * scale);
+    c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+    return c.toDataURL("image/jpeg", quality);
+  } catch { return dataUri; }
+}
+
+async function uploadPostMedia(talentId, media) {
+  try {
+    const dataUri = media.kind === "photo" ? await shrinkImage(media.dataUri) : media.dataUri;
+    const blob = await (await fetch(dataUri)).blob();
+    const ext = (blob.type.split("/")[1] || "bin").split(";")[0];
+    const path = `${talentId}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
+    const { error } = await supabase.storage.from("post-media").upload(path, blob, { contentType: blob.type });
+    if (error) return { media_url: null, media_kind: null };
+    const { data } = supabase.storage.from("post-media").getPublicUrl(path);
+    return { media_url: data.publicUrl, media_kind: media.kind };
+  } catch { return { media_url: null, media_kind: null }; }
+}
+
+const rowToPost = (r) => ({
+  id: r.id, talentId: r.talent_id, text: r.body || "",
+  media: r.media_url ? { kind: r.media_kind || "photo", dataUri: r.media_url } : null,
+  location: r.lat != null ? { lat: r.lat, lng: r.lng, place: r.place, description: r.loc_desc, source: r.loc_source } : null,
+  status: r.status, reason: r.reject_reason, createdAt: new Date(r.created_at).getTime(),
+});
+
+const ACTOR_FALLBACK = { a_operator: { name: "Druk Journeys", initials: "DJ" }, a_admin: { name: "Admin", initials: "A" } };
+const actorName = (id) => talentById(id)?.name || ACTOR_FALLBACK[id]?.name || "Member";
+const actorInitials = (id) => talentById(id)?.initials || ACTOR_FALLBACK[id]?.initials || "?";
+
+
 const SEED_POSTS = [
   { id: uid(), talentId: "t_karma", text: "Clear skies over Jomolhari this morning — the whole group made base camp before the clouds rolled in.", media: null, location: { lat: 27.83, lng: 89.27, place: "Jomolhari" }, status: "approved", reason: null, createdAt: Date.now() - 5 * HOUR },
   { id: uid(), talentId: "t_sonam", text: "Dochula Pass was glorious today. All 108 chortens out of the mist by 9am.", media: null, location: { lat: 27.49, lng: 89.75, place: "Dochula" }, status: "pending", reason: null, createdAt: Date.now() - 1 * HOUR },
@@ -111,17 +152,94 @@ const LANG_OPTIONS = ["English", "Hindi", "Japanese", "Mandarin", "German", "Fre
 /* ================================== App =================================== */
 export default function App() {
   const [accountId, setAccountId] = useState(null);
-  const [posts, setPosts] = useState(SEED_POSTS);
+  const [posts, setPosts] = useState(CLOUD ? [] : SEED_POSTS);
   const [jobs, setJobs] = useState(SEED_JOBS);
   const [trips, setTrips] = useState(SEED_TRIPS);
   const [listings, setListings] = useState(SEED_LISTINGS);
+  const [likes, setLikes] = useState([]);
+  const [comments, setComments] = useState([]);
 
   const user = ACCOUNTS.find((a) => a.id === accountId) || null;
 
-  const addPost = ({ talentId, text, photo }) =>
-    setPosts((p) => [{ id: uid(), talentId, text, photo, status: "pending", reason: null, createdAt: Date.now() }, ...p]);
-  const approve = (id) => setPosts((p) => p.map((x) => (x.id === id ? { ...x, status: "approved", reason: null } : x)));
-  const reject = (id, reason) => setPosts((p) => p.map((x) => (x.id === id ? { ...x, status: "rejected", reason } : x)));
+  const fetchPosts = async () => {
+    if (!CLOUD) return;
+    const { data, error } = await supabase.from("posts").select("*").order("created_at", { ascending: false });
+    if (!error && data) setPosts(data.map(rowToPost));
+  };
+
+  useEffect(() => {
+    if (!CLOUD) return;
+    fetchPosts();
+    const ch = supabase.channel("posts-live")
+      .on("postgres_changes", { event: "*", schema: "public", table: "posts" }, fetchPosts)
+      .subscribe();
+    return () => { supabase.removeChannel(ch); };
+  }, []);
+
+  const addPost = async ({ talentId, text, media, location }) => {
+    if (!CLOUD) {
+      setPosts((p) => [{ id: uid(), talentId, text, media: media || null, location: location || null, status: "pending", reason: null, createdAt: Date.now() }, ...p]);
+      return;
+    }
+    const up = media ? await uploadPostMedia(talentId, media) : { media_url: null, media_kind: null };
+    await supabase.from("posts").insert({
+      talent_id: talentId, body: text || null,
+      media_url: up.media_url, media_kind: up.media_kind,
+      lat: location?.lat ?? null, lng: location?.lng ?? null,
+      place: location?.place ?? null, loc_desc: location?.description ?? null, loc_source: location?.source ?? null,
+    });
+    fetchPosts();
+  };
+  const approve = async (id) => {
+    if (!CLOUD) { setPosts((p) => p.map((x) => (x.id === id ? { ...x, status: "approved", reason: null } : x))); return; }
+    await supabase.from("posts").update({ status: "approved", reject_reason: null }).eq("id", id);
+    fetchPosts();
+  };
+  const reject = async (id, reason) => {
+    if (!CLOUD) { setPosts((p) => p.map((x) => (x.id === id ? { ...x, status: "rejected", reason } : x))); return; }
+    await supabase.from("posts").update({ status: "rejected", reject_reason: reason }).eq("id", id);
+    fetchPosts();
+  };
+  const fetchEngagement = async () => {
+    if (!CLOUD) return;
+    const [{ data: L }, { data: Cm }] = await Promise.all([
+      supabase.from("post_likes").select("*"),
+      supabase.from("post_comments").select("*").order("created_at", { ascending: true }),
+    ]);
+    if (L) setLikes(L.map((r) => ({ post_id: r.post_id, liker_id: r.liker_id })));
+    if (Cm) setComments(Cm.map((r) => ({ id: r.id, post_id: r.post_id, author_id: r.author_id, body: r.body, ts: new Date(r.created_at).getTime() })));
+  };
+
+  useEffect(() => {
+    if (!CLOUD) return;
+    fetchEngagement();
+    const ch = supabase.channel("engagement-live")
+      .on("postgres_changes", { event: "*", schema: "public", table: "post_likes" }, fetchEngagement)
+      .on("postgres_changes", { event: "*", schema: "public", table: "post_comments" }, fetchEngagement)
+      .subscribe();
+    return () => { supabase.removeChannel(ch); };
+  }, []);
+
+  const toggleLike = async (postId, me) => {
+    const mine = likes.some((l) => l.post_id === postId && l.liker_id === me);
+    setLikes((L) => (mine ? L.filter((l) => !(l.post_id === postId && l.liker_id === me)) : [...L, { post_id: postId, liker_id: me }]));
+    if (!CLOUD) return;
+    if (mine) await supabase.from("post_likes").delete().eq("post_id", postId).eq("liker_id", me);
+    else await supabase.from("post_likes").insert({ post_id: postId, liker_id: me });
+    fetchEngagement();
+  };
+  const addComment = async (postId, me, body) => {
+    setComments((Cm) => [...Cm, { id: uid(), post_id: postId, author_id: me, body, ts: Date.now() }]);
+    if (!CLOUD) return;
+    await supabase.from("post_comments").insert({ post_id: postId, author_id: me, body });
+    fetchEngagement();
+  };
+  const deleteComment = async (id) => {
+    setComments((Cm) => Cm.filter((c) => c.id !== id));
+    if (!CLOUD) return;
+    await supabase.from("post_comments").delete().eq("id", id);
+  };
+
   const sendJob = (job) => setJobs((j) => [{ id: uid(), status: "pending", createdAt: Date.now(), ...job }, ...j]);
 
   const createTripFromJob = (job) => {
@@ -185,7 +303,7 @@ export default function App() {
           <Login onPick={setAccountId} />
         ) : (
           <Shell key={user.id} user={user} posts={posts} jobs={jobs} trips={trips} listings={listings}
-            actions={{ addPost, approve, reject, sendJob, setJobStatus, postChat, openChat, postListing, applyToListing, setApplicant, hireApplicant }} onLogout={() => setAccountId(null)} />
+            actions={{ addPost, approve, reject, sendJob, setJobStatus, postChat, openChat, postListing, applyToListing, setApplicant, hireApplicant }} engagement={{ likes, comments, toggleLike, addComment, deleteComment }} onLogout={() => setAccountId(null)} />
         )}
       </div>
     </div>
@@ -253,7 +371,7 @@ function Login({ onPick }) {
             </button>
           ))}
         </div>
-        <p className="text-[12px] mt-4 text-center" style={{ color: C.muted }}>Demo preview — accounts and data reset when the page reloads.</p>
+        <p className="text-[12px] mt-4 text-center" style={{ color: C.muted }}>{CLOUD ? "Demo accounts — posts are live and shared with everyone. Other data still resets on reload." : "Demo preview — accounts and data reset when the page reloads."}</p>
       </div>
     </div>
   );
@@ -282,10 +400,12 @@ const NAV = {
 };
 const DEFAULT_TAB = { guide: "post", driver: "post", operator: "discover", admin: "review" };
 
-function Shell({ user, posts, jobs, trips, listings, actions, onLogout }) {
+function Shell({ user, posts, jobs, trips, listings, actions, engagement, onLogout }) {
   const [tab, setTab] = useState(DEFAULT_TAB[user.kind]);
   const [overlay, setOverlay] = useState(null); // {type:'profile'|'request', talentId}
   const nav = NAV[user.kind];
+  const actorId = user.talentId || (user.kind === "operator" ? "a_operator" : "a_admin");
+  const eng = { ...engagement, me: actorId, isAdmin: user.kind === "admin" };
 
   const pendingModCount = posts.filter((p) => p.status === "pending").length;
   const myTalent = user.talentId ? talentById(user.talentId) : null;
@@ -314,14 +434,14 @@ function Shell({ user, posts, jobs, trips, listings, actions, onLogout }) {
           )
         ) : (
           <div key={tab} className="fade">
-            {tab === "post" && <PostTab user={user} posts={posts} onAdd={actions.addPost} />}
+            {tab === "post" && <PostTab user={user} posts={posts} onAdd={actions.addPost} eng={eng} />}
             {tab === "jobs" && <JobsHub user={user} jobs={jobs} listings={listings} actions={actions} />}
             {tab === "trips" && <TripsTab user={user} trips={trips} actions={actions} />}
             {tab === "profile" && <TalentProfile talent={talentById(user.talentId)} posts={posts} self onBack={null} />}
             {tab === "discover" && <Discover onOpen={openProfile} />}
             {tab === "requests" && <OperatorJobs user={user} jobs={jobs} listings={listings} posts={posts} actions={actions} onOpen={openProfile} />}
-            {tab === "feed" && <Feed posts={posts} />}
-            {tab === "review" && <Review posts={posts} onApprove={actions.approve} onReject={actions.reject} />}
+            {tab === "feed" && <Feed posts={posts} eng={eng} />}
+            {tab === "review" && <Review posts={posts} onApprove={actions.approve} onReject={actions.reject} eng={eng} />}
           </div>
         )}
       </div>
@@ -445,7 +565,7 @@ function Empty({ Icon, title, body }) {
 const roleLabel = (r) => (r === "guide" ? "Guide" : "Driver");
 
 /* ============================ Post tab (talent) =========================== */
-function PostTab({ user, posts, onAdd }) {
+function PostTab({ user, posts, onAdd, eng }) {
   const mine = posts.filter((p) => p.talentId === user.talentId);
   const t = talentById(user.talentId);
   return (
@@ -465,6 +585,7 @@ function PostTab({ user, posts, onAdd }) {
               {p.text && <p className="text-[14.5px] leading-snug mt-2.5" style={{ color: C.ink }}>{p.text}</p>}
               <PostMedia media={p.media} />
               <PostLocation location={p.location} />
+              <PostEngagement post={p} eng={eng} />
             </div>
           ))}
         </div>
@@ -740,7 +861,7 @@ function SentRequests({ operator, jobs, onOpen }) {
 }
 
 /* ============================== Feed (operator) ========================== */
-function Feed({ posts }) {
+function Feed({ posts, eng }) {
   const live = posts.filter((p) => p.status === "approved");
   return (
     <div className="px-5 py-4">
@@ -761,6 +882,7 @@ function Feed({ posts }) {
                 {p.text && <p className="text-[15px] leading-relaxed mt-3" style={{ color: C.ink }}>{p.text}</p>}
                 <PostMedia media={p.media} />
                 <PostLocation location={p.location} showMap />
+                <PostEngagement post={p} eng={eng} />
               </div>
             );
           })}
@@ -771,7 +893,7 @@ function Feed({ posts }) {
 }
 
 /* ============================== Review (admin) =========================== */
-function Review({ posts, onApprove, onReject }) {
+function Review({ posts, onApprove, onReject, eng }) {
   const [tab, setTab] = useState("pending");
   const pending = posts.filter((p) => p.status === "pending");
   const reviewed = posts.filter((p) => p.status !== "pending");
@@ -787,13 +909,13 @@ function Review({ posts, onApprove, onReject }) {
       {list.length === 0 ? (
         <Empty Icon={Check} title="All clear" body="New posts land here for review." />
       ) : (
-        <div className="space-y-3">{list.map((p) => <ModCard key={p.id} post={p} onApprove={onApprove} onReject={onReject} />)}</div>
+        <div className="space-y-3">{list.map((p) => <ModCard key={p.id} post={p} onApprove={onApprove} onReject={onReject} eng={eng} />)}</div>
       )}
     </div>
   );
 }
 const REASONS = ["Blurry or low quality", "Off-topic", "Inappropriate", "Other"];
-function ModCard({ post, onApprove, onReject }) {
+function ModCard({ post, onApprove, onReject, eng }) {
   const [rejecting, setRejecting] = useState(false);
   const t = talentById(post.talentId);
   const pending = post.status === "pending";
@@ -808,6 +930,7 @@ function ModCard({ post, onApprove, onReject }) {
       {post.text && <p className="text-[14.5px] leading-snug mt-3" style={{ color: C.ink }}>{post.text}</p>}
       <PostMedia media={post.media} />
       <PostLocation location={post.location} showMap />
+      <PostEngagement post={post} eng={eng} />
       {pending && !rejecting && (
         <div className="flex gap-2.5 mt-3.5">
           <button onClick={() => setRejecting(true)} className="tap flex-1 h-11 rounded-xl text-[14px] font-semibold inline-flex items-center justify-center gap-2" style={{ background: C.card, border: `1.5px solid ${C.maroon}`, color: C.maroon }}><X size={17} /> Reject</button>
@@ -1572,6 +1695,75 @@ function PostLocation({ location, showMap }) {
       </span>
       {location.description && <p className="text-[12.5px] leading-snug mt-1.5" style={{ color: C.muted }}>{location.description}</p>}
       {showMap && <div className="mt-2.5"><BhutanMap readOnly value={location} /></div>}
+    </div>
+  );
+}
+
+/* ============================ Post engagement ============================ */
+function PostEngagement({ post, eng }) {
+  const { likes, comments, me, isAdmin, toggleLike, addComment, deleteComment } = eng;
+  const postLikes = likes.filter((l) => l.post_id === post.id);
+  const liked = postLikes.some((l) => l.liker_id === me);
+  const list = comments.filter((c) => c.post_id === post.id);
+  const [open, setOpen] = useState(false);
+  const [text, setText] = useState("");
+  const [note, setNote] = useState(null);
+
+  const share = async () => {
+    const line = `${actorName(post.talentId)} on DrukConnect${post.text ? `: \u201c${post.text}\u201d` : ""}`;
+    const url = window.location.origin;
+    try {
+      if (navigator.share) { await navigator.share({ title: "DrukConnect", text: line, url }); }
+      else { await navigator.clipboard.writeText(`${line}\n${url}`); setNote("Link copied"); setTimeout(() => setNote(null), 2000); }
+    } catch (e) {}
+  };
+  const send = () => { const t = text.trim(); if (!t) return; addComment(post.id, me, t); setText(""); setOpen(true); };
+
+  return (
+    <div className="mt-3 pt-3" style={{ borderTop: `1px solid ${C.lineSoft}` }}>
+      <div className="flex items-center gap-5">
+        <button onClick={() => toggleLike(post.id, me)} className="tap inline-flex items-center gap-1.5" aria-label="Like">
+          <Heart size={18} color={liked ? C.maroon : C.muted} fill={liked ? C.maroon : "transparent"} strokeWidth={2} />
+          {postLikes.length > 0 && <span className="text-[13px] font-semibold" style={{ color: liked ? C.maroon : C.muted }}>{postLikes.length}</span>}
+        </button>
+        <button onClick={() => setOpen((o) => !o)} className="tap inline-flex items-center gap-1.5" aria-label="Comments">
+          <MessageCircle size={18} color={open ? C.pine : C.muted} strokeWidth={2} />
+          {list.length > 0 && <span className="text-[13px] font-semibold" style={{ color: C.muted }}>{list.length}</span>}
+        </button>
+        <button onClick={share} className="tap inline-flex items-center gap-1.5 ml-auto" aria-label="Share">
+          <Share2 size={17} color={C.muted} strokeWidth={2} />
+        </button>
+      </div>
+      {note && <div className="text-[12px] mt-1.5" style={{ color: C.pine }}>{note}</div>}
+
+      {open && (
+        <div className="mt-3 space-y-2.5 fade">
+          {list.map((c) => (
+            <div key={c.id} className="flex items-start gap-2.5">
+              <Avatar initials={actorInitials(c.author_id)} size={28} />
+              <div className="flex-1 rounded-xl px-3 py-2" style={{ background: C.bg }}>
+                <div className="flex items-baseline gap-2">
+                  <span className="text-[12.5px] font-semibold" style={{ color: C.ink }}>{actorName(c.author_id)}</span>
+                  <span className="text-[10.5px]" style={{ color: C.muted }}>{relTime(c.ts)}</span>
+                  {isAdmin && (
+                    <button onClick={() => deleteComment(c.id)} className="ml-auto tap" aria-label="Delete comment">
+                      <Trash2 size={13} color={C.maroon} />
+                    </button>
+                  )}
+                </div>
+                <p className="text-[13.5px] leading-snug mt-0.5" style={{ color: C.ink }}>{c.body}</p>
+              </div>
+            </div>
+          ))}
+          <div className="flex items-center gap-2">
+            <input value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => e.key === "Enter" && send()} maxLength={240}
+              placeholder={"Reply\u2026"} className="flex-1 h-10 px-3.5 rounded-full text-[13.5px]" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
+            <button onClick={send} disabled={!text.trim()} className="tap w-9 h-9 rounded-full flex items-center justify-center shrink-0" style={{ background: text.trim() ? C.pine : "#C7CEC7" }} aria-label="Send reply">
+              <Send size={15} color="#fff" />
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
