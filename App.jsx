@@ -192,30 +192,82 @@ export default function App() {
   );
 }
 
-/* ================================= Login ================================== */
+/* ================================ Welcome ================================= */
 function Login({ onPick }) {
   return (
-    <div className="flex-1 flex flex-col px-6 pt-16 fade">
-      <div className="w-14 h-14 rounded-2xl flex items-center justify-center mb-7" style={{ background: C.pine, boxShadow: `0 10px 24px ${C.pine}33` }}>
-        <Compass size={26} color={C.goldSoft} strokeWidth={1.8} />
+    <div className="flex-1 overflow-y-auto hidescroll fade" style={{ scrollbarWidth: "none" }}>
+      {/* brand row */}
+      <div className="px-6 pt-6 flex items-center gap-2.5">
+        <div className="w-9 h-9 rounded-xl flex items-center justify-center" style={{ background: C.pine, boxShadow: `0 6px 14px ${C.pine}33` }}>
+          <Compass size={18} color={C.goldSoft} strokeWidth={1.9} />
+        </div>
+        <span className="text-[17px] font-semibold tracking-[-0.01em]" style={{ color: C.ink }}>DrukConnect</span>
       </div>
-      <h1 className="text-[30px] leading-tight font-semibold tracking-[-0.02em]" style={{ color: C.ink }}>DrukConnect</h1>
-      <p className="text-[15px] mt-2 mb-8" style={{ color: C.muted }}>Sign in to continue. Pick a demo account to explore each role.</p>
 
-      <div className="space-y-2.5">
-        {ACCOUNTS.map((a) => (
-          <button key={a.id} onClick={() => onPick(a.id)} className="tap w-full text-left rounded-2xl p-4 flex items-center gap-3.5"
-            style={{ background: C.card, border: `1px solid ${C.line}` }}>
-            <div className="w-11 h-11 rounded-xl flex items-center justify-center shrink-0" style={{ background: C.pine }}>
-              <a.Icon size={20} color={C.goldSoft} strokeWidth={1.9} />
-            </div>
-            <div className="flex-1">
-              <div className="text-[15.5px] font-semibold" style={{ color: C.ink }}>{a.name}</div>
-              <div className="text-[13px]" style={{ color: C.muted }}>{a.sub}</div>
-            </div>
-            <ChevronLeft size={18} color={C.muted} style={{ transform: "rotate(180deg)" }} />
-          </button>
-        ))}
+      {/* hero — the relief map of Bhutan */}
+      <div className="relative w-full mt-4" style={{ aspectRatio: "5 / 2" }}>
+        <img src={mapImg} alt="Relief map of Bhutan" className="absolute inset-0 w-full h-full" style={{ objectFit: "cover", objectPosition: "center bottom" }} />
+        <div className="absolute inset-0" style={{ background: `linear-gradient(to bottom, ${C.bg} 0%, rgba(244,245,241,0) 24%, rgba(244,245,241,0) 72%, ${C.bg} 100%)` }} />
+      </div>
+
+      {/* story */}
+      <div className="px-6 -mt-1">
+        <div className="text-[11.5px] font-semibold tracking-[.16em] uppercase mb-2.5" style={{ color: C.gold }}>
+          Bhutan · Guides · Drivers · Operators
+        </div>
+        <h1 className="text-[30px] leading-[1.12] font-semibold tracking-[-0.02em]" style={{ color: C.ink }}>
+          Your work, vouched for.
+        </h1>
+        <p className="mt-3 text-[15px] leading-relaxed" style={{ color: C.muted }}>
+          A living portfolio for Bhutan's licensed guides and drivers — and the
+          marketplace where tour operators find, vet and book them.
+        </p>
+
+        <div className="mt-6 space-y-3.5">
+          <WelcomeBullet Icon={BadgeCheck} title="Verified, not just listed" body="Licenses checked with the Department of Tourism and RSTA." />
+          <WelcomeBullet Icon={Star} title="A trip record that travels with you" body="Reliability, punctuality and awareness — graded by operators after every trip." />
+          <WelcomeBullet Icon={MapPin} title="Proof of where you've worked" body="Photos pinned to the exact spot on the map of Bhutan." />
+          <WelcomeBullet Icon={MessageSquare} title="One hub per trip" body="Crew chat that opens before departure and clears itself after." />
+        </div>
+      </div>
+
+      {/* demo accounts */}
+      <div className="px-6 mt-8 pb-8">
+        <div className="flex items-center justify-between mb-1">
+          <div className="text-[12px] font-semibold tracking-[.14em] uppercase" style={{ color: C.gold }}>Explore the demo</div>
+          <span className="text-[10.5px] font-bold rounded-full px-2 py-0.5" style={{ background: C.goldSoft, color: "#7a5a1e" }}>SAMPLE DATA</span>
+        </div>
+        <p className="text-[13px] mb-3.5" style={{ color: C.muted }}>Pick a seat — each account shows the app from a different side.</p>
+        <div className="space-y-2.5">
+          {ACCOUNTS.map((a) => (
+            <button key={a.id} onClick={() => onPick(a.id)} className="tap w-full text-left rounded-2xl p-4 flex items-center gap-3.5"
+              style={{ background: C.card, border: `1px solid ${C.line}` }}>
+              <div className="w-11 h-11 rounded-xl flex items-center justify-center shrink-0" style={{ background: C.pine }}>
+                <a.Icon size={20} color={C.goldSoft} strokeWidth={1.9} />
+              </div>
+              <div className="flex-1">
+                <div className="text-[15.5px] font-semibold" style={{ color: C.ink }}>{a.name}</div>
+                <div className="text-[13px]" style={{ color: C.muted }}>{a.sub}</div>
+              </div>
+              <ChevronLeft size={18} color={C.muted} style={{ transform: "rotate(180deg)" }} />
+            </button>
+          ))}
+        </div>
+        <p className="text-[12px] mt-4 text-center" style={{ color: C.muted }}>Demo preview — accounts and data reset when the page reloads.</p>
+      </div>
+    </div>
+  );
+}
+
+function WelcomeBullet({ Icon, title, body }) {
+  return (
+    <div className="flex gap-3.5">
+      <div className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0 mt-0.5" style={{ background: C.goldSoft }}>
+        <Icon size={17} color={C.gold} strokeWidth={2} />
+      </div>
+      <div>
+        <div className="text-[14px] font-semibold" style={{ color: C.ink }}>{title}</div>
+        <div className="text-[13px] leading-snug" style={{ color: C.muted }}>{body}</div>
       </div>
     </div>
   );
