@@ -239,6 +239,14 @@ export default function App() {
     if (!CLOUD) return;
     await supabase.from("post_comments").delete().eq("id", id);
   };
+  const deletePost = async (id) => {
+    setPosts((P) => P.filter((p) => p.id !== id));
+    setLikes((L) => L.filter((l) => l.post_id !== id));
+    setComments((Cm) => Cm.filter((c) => c.post_id !== id));
+    if (!CLOUD) return;
+    await supabase.from("posts").delete().eq("id", id);
+    fetchPosts();
+  };
 
   const sendJob = (job) => setJobs((j) => [{ id: uid(), status: "pending", createdAt: Date.now(), ...job }, ...j]);
 
@@ -303,7 +311,7 @@ export default function App() {
           <Login onPick={setAccountId} />
         ) : (
           <Shell key={user.id} user={user} posts={posts} jobs={jobs} trips={trips} listings={listings}
-            actions={{ addPost, approve, reject, sendJob, setJobStatus, postChat, openChat, postListing, applyToListing, setApplicant, hireApplicant }} engagement={{ likes, comments, toggleLike, addComment, deleteComment }} onLogout={() => setAccountId(null)} />
+            actions={{ addPost, approve, reject, deletePost, sendJob, setJobStatus, postChat, openChat, postListing, applyToListing, setApplicant, hireApplicant }} engagement={{ likes, comments, toggleLike, addComment, deleteComment }} onLogout={() => setAccountId(null)} />
         )}
       </div>
     </div>
@@ -396,7 +404,7 @@ const NAV = {
   guide: [{ id: "post", label: "Feed", Icon: Newspaper }, { id: "jobs", label: "Jobs", Icon: Briefcase }, { id: "trips", label: "Trips", Icon: Map }, { id: "profile", label: "Profile", Icon: User }],
   driver: [{ id: "post", label: "Feed", Icon: Newspaper }, { id: "jobs", label: "Jobs", Icon: Briefcase }, { id: "trips", label: "Trips", Icon: Map }, { id: "profile", label: "Profile", Icon: User }],
   operator: [{ id: "discover", label: "Discover", Icon: Search }, { id: "requests", label: "Jobs", Icon: Briefcase }, { id: "trips", label: "Trips", Icon: Map }, { id: "feed", label: "Feed", Icon: Newspaper }],
-  admin: [{ id: "review", label: "Review", Icon: ShieldCheck }],
+  admin: [{ id: "review", label: "Review", Icon: ShieldCheck }, { id: "feed", label: "Feed", Icon: Newspaper }],
 };
 const DEFAULT_TAB = { guide: "post", driver: "post", operator: "discover", admin: "review" };
 
@@ -440,7 +448,7 @@ function Shell({ user, posts, jobs, trips, listings, actions, engagement, onLogo
             {tab === "profile" && <TalentProfile talent={talentById(user.talentId)} posts={posts} self onBack={null} />}
             {tab === "discover" && <Discover onOpen={openProfile} />}
             {tab === "requests" && <OperatorJobs user={user} jobs={jobs} listings={listings} posts={posts} actions={actions} onOpen={openProfile} />}
-            {tab === "feed" && <Feed posts={posts} eng={eng} />}
+            {tab === "feed" && <Feed posts={posts} eng={eng} admin={user.kind === "admin"} onDelete={actions.deletePost} />}
             {tab === "review" && <Review posts={posts} onApprove={actions.approve} onReject={actions.reject} eng={eng} />}
           </div>
         )}
@@ -874,12 +882,12 @@ function SentRequests({ operator, jobs, onOpen }) {
   );
 }
 
-/* ============================== Feed (operator) ========================== */
-function Feed({ posts, eng }) {
-  const live = posts.filter((p) => p.status === "approved");
+/* ========================= Feed (operator & admin) ======================== */
+function Feed({ posts, eng, admin, onDelete }) {
+  const live = admin ? posts : posts.filter((p) => p.status === "approved");
   return (
     <div className="px-5 py-4">
-      <SectionLabel>Highlights</SectionLabel>
+      <SectionLabel trailing={admin ? `${live.length} total` : undefined}>Highlights</SectionLabel>
       {live.length === 0 ? (
         <Empty Icon={Inbox} title="No highlights yet" body="Approved posts from guides and drivers appear here." />
       ) : (
@@ -889,9 +897,13 @@ function Feed({ posts, eng }) {
             return (
               <div key={p.id} className="rounded-2xl p-4" style={{ background: C.card, border: `1px solid ${C.line}` }}>
                 <div className="flex items-center gap-3">
-                  <Avatar initials={t.initials} size={40} />
-                  <div className="flex-1"><div className="flex items-center gap-1.5"><span className="text-[14.5px] font-semibold" style={{ color: C.ink }}>{t.name}</span>{t.verified && <BadgeCheck size={15} color={C.pine} />}</div>
-                    <div className="flex items-center gap-1 text-[12px]" style={{ color: C.muted }}><MapPin size={11} /> {t.base} · {relTime(p.createdAt)}</div></div>
+                  <Avatar initials={t?.initials || "?"} size={40} />
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-1.5"><span className="text-[14.5px] font-semibold truncate" style={{ color: C.ink }}>{t?.name || "Member"}</span>{t?.verified && <BadgeCheck size={15} color={C.pine} />}</div>
+                    <div className="flex items-center gap-1 text-[12px]" style={{ color: C.muted }}><MapPin size={11} /> {t?.base || ""} · {relTime(p.createdAt)}</div>
+                  </div>
+                  {admin && p.status !== "approved" && <StatusBadge status={p.status} reason={p.reason} />}
+                  {admin && <DeletePost onConfirm={() => onDelete(p.id)} />}
                 </div>
                 {p.text && <p className="text-[15px] leading-relaxed mt-3" style={{ color: C.ink }}>{p.text}</p>}
                 <PostMedia media={p.media} />
@@ -902,6 +914,21 @@ function Feed({ posts, eng }) {
           })}
         </div>
       )}
+    </div>
+  );
+}
+
+function DeletePost({ onConfirm }) {
+  const [arm, setArm] = useState(false);
+  if (!arm) return (
+    <button onClick={() => setArm(true)} className="tap w-8 h-8 rounded-full flex items-center justify-center shrink-0" style={{ background: C.maroonSoft }} aria-label="Delete post">
+      <Trash2 size={15} color={C.maroon} />
+    </button>
+  );
+  return (
+    <div className="flex items-center gap-1.5 shrink-0">
+      <button onClick={onConfirm} className="tap text-[12px] font-bold rounded-full px-2.5 py-1.5" style={{ background: C.maroon, color: "#fff" }}>Delete</button>
+      <button onClick={() => setArm(false)} className="tap text-[12px] font-semibold rounded-full px-2 py-1.5" style={{ background: C.bg, color: C.muted }}>Keep</button>
     </div>
   );
 }
