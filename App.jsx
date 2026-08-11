@@ -4,11 +4,12 @@ import {
   BadgeCheck, MapPin, Inbox, ChevronLeft, Star, Phone, Mail, Briefcase,
   Search, LogOut, Newspaper, User, CalendarCheck, MessageCircle,
   Map, MessageSquare, Users, Download, Mic, Video, Heart, Share2, Trash2, Maximize2, Upload, Loader2, ArrowRight,
+  Award,
 } from "lucide-react";
 import mapImg from "./map.jpg";
 import { supabase } from "./supabase.js";
 
-/* DrukConnect design system — paper, pine forest, temple gold, kemar red. */
+/* Bhutan Tourism Hub design system — paper, pine forest, temple gold, kemar red. */
 const C = {
   bg: "#F4F5F1", card: "#FFFFFF", ink: "#1A241E", muted: "#6E7A72",
   line: "#E4E7E0", lineSoft: "#EEF0EB", pine: "#21402F", pineDeep: "#16281E",
@@ -68,7 +69,7 @@ const profileToTalent = (p) => ({
   phone: p.phone || "", email: p.email || "", pitch: p.pitch || "", vehicle: p.vehicle || null,
 });
 const talentById = (id) => TALENT.find((t) => t.id === id) || PROFILE_DIR[id] || null;
-const initialsOf = (name) => name.split(" ").map((w) => w[0]).slice(0, 2).join("").toUpperCase();
+const initialsOf = (name) => (String(name || "?").trim().split(/\s+/).filter(Boolean).map((w) => w[0]).slice(0, 2).join("") || "?").toUpperCase();
 const isoDay = (offset = 0) => new Date(Date.now() + offset * 86400e3).toISOString().slice(0, 10);
 const sysMsg = (text) => ({ id: uid(), senderId: null, kind: "system", body: text, photo: null, ts: Date.now() });
 
@@ -377,7 +378,10 @@ function Login({ onPick, session, myProfile, onAuthed }) {
         <div className="w-9 h-9 rounded-xl flex items-center justify-center" style={{ background: C.pine, boxShadow: `0 6px 14px ${C.pine}33` }}>
           <Compass size={18} color={C.goldSoft} strokeWidth={1.9} />
         </div>
-        <span className="text-[17px] font-semibold tracking-[-0.01em]" style={{ color: C.ink }}>DrukConnect</span>
+        <span className="leading-none">
+          <span className="block text-[17px] font-semibold tracking-[-0.01em]" style={{ color: C.ink }}>Bhutan Tourism Hub</span>
+          <span className="block text-[10px] font-semibold tracking-[.14em] uppercase mt-0.5" style={{ color: C.gold }}>Guides · Drivers · Operators</span>
+        </span>
       </div>
 
       {/* hero — the relief map of Bhutan */}
@@ -409,7 +413,7 @@ function Login({ onPick, session, myProfile, onAuthed }) {
 
       {CLOUD && (
         <div className="px-6 mt-8">
-          <div className="text-[12px] font-semibold tracking-[.14em] uppercase mb-3" style={{ color: C.gold }}>Join DrukConnect</div>
+          <div className="text-[12px] font-semibold tracking-[.14em] uppercase mb-3" style={{ color: C.gold }}>Join the hub</div>
           <button onClick={() => setAuthView("signup")} className="tap w-full rounded-xl flex items-center justify-center gap-2 text-[15px] font-semibold"
             style={{ height: 52, background: C.pine, color: "#fff", boxShadow: `0 6px 16px ${C.pine}33` }}>
             Create your account <ArrowRight size={18} strokeWidth={2.4} />
@@ -533,7 +537,7 @@ function TopBar({ user, onLogout }) {
         <div className="w-7 h-7 rounded-lg flex items-center justify-center" style={{ background: C.pine }}>
           <Compass size={15} color={C.goldSoft} />
         </div>
-        <span className="text-[15px] font-semibold" style={{ color: C.ink }}>DrukConnect</span>
+        <span className="text-[15px] font-semibold" style={{ color: C.ink }}>Bhutan Tourism Hub</span>
       </div>
       <button onClick={onLogout} className="tap flex items-center gap-2 rounded-full pl-1 pr-3 py-1" style={{ border: `1px solid ${C.line}`, background: C.card }}>
         <div className="w-6 h-6 rounded-full flex items-center justify-center" style={{ background: C.pine }}>
@@ -646,7 +650,7 @@ function Empty({ Icon, title, body }) {
     </div>
   );
 }
-const roleLabel = (r) => (r === "guide" ? "Guide" : "Driver");
+const roleLabel = (r) => (r === "guide" ? "Guide" : r === "operator" ? "Tour Operator" : "Driver");
 
 /* ======================== Feed tab (guides & drivers) ===================== */
 function PostTab({ user, posts, onAdd, eng, onOpenProfile }) {
@@ -671,7 +675,7 @@ function PostTab({ user, posts, onAdd, eng, onOpenProfile }) {
                   <Avatar initials={author?.initials || "?"} size={40} />
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-1.5">
-                      <span className="text-[14.5px] font-semibold truncate" style={{ color: C.ink }}>{mine ? "You" : (author?.name || "Member")}</span>
+                      <span className="text-[14.5px] font-semibold" style={{ color: C.ink }}>{mine ? "You" : (author?.name || "Member")}</span>
                       {author?.verified && <BadgeCheck size={15} color={C.pine} />}
                     </div>
                     <div className="flex items-center gap-1 text-[12px]" style={{ color: C.muted }}>
@@ -726,7 +730,7 @@ function Composer({ talent, onAdd }) {
       readExifGps(f).then((gps) => {
         if (gps && gps.lat != null) {
           setLocation({ lat: gps.lat, lng: gps.lng, place: nearestPlace(gps.lat, gps.lng), source: "photo" });
-          flash("Location read from the photo\u2019s GPS.");
+          flash("Location read from the photo’s GPS.");
         }
       });
     }
@@ -991,7 +995,7 @@ function Feed({ posts, eng, admin, onDelete, onOpenProfile }) {
                   <button onClick={() => onOpenProfile(p.talentId)} className="tap flex items-center gap-3 flex-1 min-w-0 text-left">
                   <Avatar initials={t?.initials || "?"} size={40} />
                   <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-1.5"><span className="text-[14.5px] font-semibold truncate" style={{ color: C.ink }}>{t?.name || "Member"}</span>{t?.verified && <BadgeCheck size={15} color={C.pine} />}</div>
+                    <div className="flex items-center gap-1.5"><span className="text-[14.5px] font-semibold" style={{ color: C.ink }}>{t?.name || "Member"}</span>{t?.verified && <BadgeCheck size={15} color={C.pine} />}</div>
                     <div className="flex items-center gap-1 text-[12px]" style={{ color: C.muted }}><MapPin size={11} /> {t?.base || ""} · {relTime(p.createdAt)}</div>
                   </div>
                   </button>
@@ -1107,8 +1111,11 @@ function TalentProfile({ talent, posts, canRequest, self, contactOnly, onRequest
               <span className="text-[22px] font-semibold" style={{ color: C.goldSoft }}>{t.initials}</span>
             </div>
             <div className="pb-1 flex-1">
-              <div className="flex items-center gap-1.5"><h1 className="text-[20px] font-semibold" style={{ color: C.ink }}>{t.name}</h1>{t.verified && <BadgeCheck size={16} color={C.pine} />}</div>
-              <div className="flex items-center gap-1 text-[13px]" style={{ color: C.muted }}><MapPin size={13} /> {roleLabel(t.role)} · {t.base}</div>
+              <div className="flex items-start gap-1.5">
+                <h1 className="text-[20px] font-semibold leading-tight" style={{ color: C.ink, wordBreak: "break-word" }}>{t.name}</h1>
+                {t.verified && <BadgeCheck size={16} color={C.pine} className="shrink-0 mt-1" />}
+              </div>
+              <div className="flex items-center gap-1 text-[13px] mt-0.5" style={{ color: C.muted }}><MapPin size={13} /> {roleLabel(t.role)}{t.base ? ` · ${t.base}` : ""}</div>
             </div>
           </div>
           <div className="flex items-center gap-4 mt-3.5 text-[13px]" style={{ color: C.muted }}>
@@ -1120,45 +1127,57 @@ function TalentProfile({ talent, posts, canRequest, self, contactOnly, onRequest
       </div>
 
       <div className="px-5">
-        {/* trip record */}
-        <div className="rounded-2xl overflow-hidden mt-5" style={{ border: `1px solid ${C.line}` }}>
-          <div className="px-4 py-3.5 flex items-center justify-between" style={{ background: C.pine }}>
-            <div><div className="text-[11px] font-semibold tracking-[.14em] uppercase" style={{ color: C.goldSoft }}>Trip record</div>
-              <div className="text-[12.5px] mt-0.5" style={{ color: "#ffffffcc" }}>Graded by operators</div></div>
-            <div className="text-right"><div className="text-[26px] font-semibold leading-none text-white">{t.rating ? t.rating.toFixed(1) : "New"}</div><div className="mt-1 flex justify-end"><Stars score={t.rating || 0} light /></div></div>
-          </div>
-          <div className="px-4 py-4 space-y-3.5" style={{ background: C.card }}>
-            {Object.entries(t.grades).map(([k, v]) => (
-              <div key={k}><div className="flex items-baseline justify-between mb-1.5"><span className="text-[13.5px] font-medium" style={{ color: C.ink }}>{k}</span><span className="text-[13px] font-semibold" style={{ color: C.pine }}>{v.toFixed(1)}</span></div>
-                <div className="h-2 rounded-full overflow-hidden" style={{ background: C.lineSoft }}><div className="h-full rounded-full" style={{ width: `${(v / 5) * 100}%`, background: `linear-gradient(90deg, ${C.gold}, #D9A94E)` }} /></div></div>
-            ))}
-          </div>
-        </div>
+        <ProfileTabs
+          cv={
+            <>
+              {/* trip record */}
+              <div className="rounded-2xl overflow-hidden" style={{ border: `1px solid ${C.line}` }}>
+                <div className="px-4 py-3.5 flex items-center justify-between" style={{ background: C.pine }}>
+                  <div><div className="text-[11px] font-semibold tracking-[.14em] uppercase" style={{ color: C.goldSoft }}>Trip record</div>
+                    <div className="text-[12.5px] mt-0.5" style={{ color: "#ffffffcc" }}>Graded by operators</div></div>
+                  <div className="text-right"><div className="text-[26px] font-semibold leading-none text-white">{t.rating ? t.rating.toFixed(1) : "New"}</div><div className="mt-1 flex justify-end"><Stars score={t.rating || 0} light /></div></div>
+                </div>
+                <div className="px-4 py-4 space-y-3.5" style={{ background: C.card }}>
+                  {Object.keys(t.grades || {}).length === 0 ? (
+                    <p className="text-[13.5px]" style={{ color: C.muted }}>No trips graded yet — the record fills in after the first completed trip.</p>
+                  ) : Object.entries(t.grades).map(([kk, v]) => (
+                    <div key={kk}><div className="flex items-baseline justify-between mb-1.5"><span className="text-[13.5px] font-medium" style={{ color: C.ink }}>{kk}</span><span className="text-[13px] font-semibold" style={{ color: C.pine }}>{v.toFixed(1)}</span></div>
+                      <div className="h-2 rounded-full overflow-hidden" style={{ background: C.lineSoft }}><div className="h-full rounded-full" style={{ width: `${(v / 5) * 100}%`, background: `linear-gradient(90deg, ${C.gold}, #D9A94E)` }} /></div></div>
+                  ))}
+                </div>
+              </div>
 
-        <div className="mt-5 pl-4" style={{ borderLeft: `3px solid ${C.gold}` }}><p className="text-[15px] leading-relaxed" style={{ color: C.ink }}>{t.pitch}</p></div>
+              {t.pitch && <div className="mt-5 pl-4" style={{ borderLeft: `3px solid ${C.gold}` }}><p className="text-[15px] leading-relaxed" style={{ color: C.ink }}>{t.pitch}</p></div>}
 
-        <div className="mt-6"><SectionLabel>{t.role === "guide" ? "Specialities" : "Drives"}</SectionLabel>
-          <div className="flex flex-wrap gap-2">{t.tags.map((s) => <span key={s} className="rounded-full px-3 py-1.5 text-[13.5px] font-medium" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }}>{s}</span>)}</div>
-          {t.vehicle && <div className="mt-2.5 text-[13.5px]" style={{ color: C.muted }}><Car size={14} color={C.gold} className="inline mr-1" /> {t.vehicle}</div>}
-        </div>
+              {t.tags && t.tags.length > 0 && (
+                <div className="mt-6"><SectionLabel>{t.role === "guide" ? "Specialities" : "Drives"}</SectionLabel>
+                  <div className="flex flex-wrap gap-2">{t.tags.map((x) => <span key={x} className="rounded-full px-3 py-1.5 text-[13.5px] font-medium" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }}>{x}</span>)}</div>
+                  {t.vehicle && <div className="mt-2.5 text-[13.5px]" style={{ color: C.muted }}><Car size={14} color={C.gold} className="inline mr-1" /> {t.vehicle}</div>}
+                </div>
+              )}
 
-        <div className="mt-6"><SectionLabel>Languages</SectionLabel>
-          <div className="flex flex-wrap gap-2">{t.languages.map((l) => (
-            <span key={l.n} className="inline-flex items-center gap-2 rounded-full pl-3.5 pr-2 py-1.5 text-[13.5px] font-medium" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }}>{l.n}<span className="text-[11px] px-1.5 py-0.5 rounded-full" style={{ background: C.goldSoft, color: "#7a5a1e" }}>{l.l}</span></span>
-          ))}</div>
-        </div>
+              {t.languages && t.languages.length > 0 && (
+                <div className="mt-6"><SectionLabel>Languages</SectionLabel>
+                  <div className="flex flex-wrap gap-2">{t.languages.map((l) => (
+                    <span key={l.n} className="inline-flex items-center gap-2 rounded-full pl-3.5 pr-2 py-1.5 text-[13.5px] font-medium" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }}>{l.n}<span className="text-[11px] px-1.5 py-0.5 rounded-full" style={{ background: C.goldSoft, color: "#7a5a1e" }}>{l.l}</span></span>
+                  ))}</div>
+                </div>
+              )}
 
-        {gallery.length > 0 && (
-          <div className="mt-6"><SectionLabel trailing={`${gallery.length} photos`}>Gallery</SectionLabel>
-            <PhotoGrid items={gallery} />
-          </div>
-        )}
-
-        {located.length > 0 && (
-          <div className="mt-6"><SectionLabel trailing={`${located.length} pins`}>Where they've worked</SectionLabel>
-            <BhutanMap readOnly pins={located.map((p) => p.location)} />
-          </div>
-        )}
+              {located.length > 0 && (
+                <div className="mt-6"><SectionLabel trailing={`${located.length} pins`}>Where they've worked</SectionLabel>
+                  <BhutanMap readOnly pins={located.map((p) => p.location)} />
+                </div>
+              )}
+            </>
+          }
+          gallery={
+            gallery.length > 0
+              ? <PhotoGrid items={gallery} />
+              : <Empty Icon={ImagePlus} title="No photos yet" body="Approved trip photos appear here as a gallery." />
+          }
+          galleryCount={gallery.length}
+        />
 
         {(canRequest || self || contactOnly) && (
           <div className="mt-6"><SectionLabel>Contact</SectionLabel>
@@ -1738,17 +1757,17 @@ const BT_MAP_AR = 2.1722;
 
 // Iconic photography viewpoints — selecting one fills exact coordinates + a description.
 const VIEWPOINTS = [
-  { n: "Tiger's Nest (Paro Taktsang)", lat: 27.4917, lng: 89.3639, d: "Cliffside monastery on a 900 m granite face \u2014 the classic Bhutan shot, best in morning light." },
+  { n: "Tiger's Nest (Paro Taktsang)", lat: 27.4917, lng: 89.3639, d: "Cliffside monastery on a 900 m granite face — the classic Bhutan shot, best in morning light." },
   { n: "Dochula Pass (108 Chortens)", lat: 27.4903, lng: 89.7511, d: "108 chortens on a ridge with a Himalayan panorama on clear winter mornings." },
   { n: "Punakha Dzong", lat: 27.5852, lng: 89.8615, d: "Fortress at the meeting of the Pho and Mo rivers; lilac jacaranda in spring." },
-  { n: "Punakha Suspension Bridge", lat: 27.5980, lng: 89.8880, d: "One of Bhutan\u2019s longest footbridges, strung with prayer flags over the Po Chhu." },
-  { n: "Chele La Pass", lat: 27.3670, lng: 89.3450, d: "Bhutan\u2019s highest motorable pass (~3,988 m); prayer flags and views toward Jomolhari." },
+  { n: "Punakha Suspension Bridge", lat: 27.5980, lng: 89.8880, d: "One of Bhutan’s longest footbridges, strung with prayer flags over the Po Chhu." },
+  { n: "Chele La Pass", lat: 27.3670, lng: 89.3450, d: "Bhutan’s highest motorable pass (~3,988 m); prayer flags and views toward Jomolhari." },
   { n: "Rinpung Dzong (Paro)", lat: 27.4256, lng: 89.4200, d: "Classic whitewashed fortress above Paro town and its valley." },
-  { n: "Buddha Dordenma (Thimphu)", lat: 27.4442, lng: 89.6375, d: "51 m gilded Buddha above Thimphu \u2014 glows at golden hour." },
+  { n: "Buddha Dordenma (Thimphu)", lat: 27.4442, lng: 89.6375, d: "51 m gilded Buddha above Thimphu — glows at golden hour." },
   { n: "Tashichho Dzong (Thimphu)", lat: 27.4894, lng: 89.6353, d: "Riverside seat of government, beautifully floodlit at dusk." },
   { n: "Gangtey / Phobjikha Valley", lat: 27.4600, lng: 90.1800, d: "Glacial valley and winter home of black-necked cranes; sweeping meadows." },
-  { n: "Trongsa Dzong", lat: 27.5030, lng: 90.5070, d: "Bhutan\u2019s largest dzong, dramatic on its ridge above the gorge." },
-  { n: "Jakar Dzong (Bumthang)", lat: 27.5460, lng: 90.7520, d: "The \u2018castle of the white bird\u2019 over the Chamkhar valley." },
+  { n: "Trongsa Dzong", lat: 27.5030, lng: 90.5070, d: "Bhutan’s largest dzong, dramatic on its ridge above the gorge." },
+  { n: "Jakar Dzong (Bumthang)", lat: 27.5460, lng: 90.7520, d: "The ‘castle of the white bird’ over the Chamkhar valley." },
   { n: "Haa Valley", lat: 27.3870, lng: 89.2820, d: "Quiet alpine valley near the Tibetan border, framed by pine ridges." },
 ];
 
@@ -1855,10 +1874,10 @@ function PostEngagement({ post, eng }) {
   const [note, setNote] = useState(null);
 
   const share = async () => {
-    const line = `${actorName(post.talentId)} on DrukConnect${post.text ? `: \u201c${post.text}\u201d` : ""}`;
+    const line = `${actorName(post.talentId)} on Bhutan Tourism Hub${post.text ? `: “${post.text}”` : ""}`;
     const url = window.location.origin;
     try {
-      if (navigator.share) { await navigator.share({ title: "DrukConnect", text: line, url }); }
+      if (navigator.share) { await navigator.share({ title: "Bhutan Tourism Hub", text: line, url }); }
       else { await navigator.clipboard.writeText(`${line}\n${url}`); setNote("Link copied"); setTimeout(() => setNote(null), 2000); }
     } catch (e) {}
   };
@@ -1902,7 +1921,7 @@ function PostEngagement({ post, eng }) {
           ))}
           <div className="flex items-center gap-2">
             <input value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => e.key === "Enter" && send()} maxLength={240}
-              placeholder={"Reply\u2026"} className="flex-1 h-10 px-3.5 rounded-full text-[13.5px]" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
+              placeholder={"Reply…"} className="flex-1 h-10 px-3.5 rounded-full text-[13.5px]" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
             <button onClick={send} disabled={!text.trim()} className="tap w-9 h-9 rounded-full flex items-center justify-center shrink-0" style={{ background: text.trim() ? C.pine : "#C7CEC7" }} aria-label="Send reply">
               <Send size={15} color="#fff" />
             </button>
@@ -2030,7 +2049,7 @@ const ONB_SPECS = ["Culture & Dzong", "Alpine Trekking & Camping", "Birdwatching
 const ONB_DRIVES = ["Long-distance touring", "Mountain & high passes", "Excursion & day trips", "Airport transfers", "Off-road & trailheads"];
 const ONB_VEHICLES = ["Sedan", "SUV", "Hiace Van", "Coaster Bus", "Large Coach"];
 const ONB_LANGS = ["Dzongkha", "English", "Hindi", "Nepali", "Japanese", "Mandarin", "German", "French", "Spanish", "Korean"];
-const ONB_YEARS = [["0\u20132 yrs", 1], ["3\u20135 yrs", 4], ["6\u201310 yrs", 8], ["10+ yrs", 12]];
+const ONB_YEARS = [["0–2 yrs", 1], ["3–5 yrs", 4], ["6–10 yrs", 8], ["10+ yrs", 12]];
 const LICENSE_LABEL = { guide: "Guide license (Department of Tourism)", driver: "Driving licence (RSTA)", operator: "Tour Operator licence (Department of Tourism)" };
 
 function OLabel({ children }) { return <div className="text-[13px] font-medium mb-1.5" style={{ color: C.ink }}>{children}</div>; }
@@ -2078,13 +2097,16 @@ function Onboard({ mode, session, onBack, onDone }) {
     setBusy(true); setErr(null);
     const { error } = await supabase.auth.signInWithOtp({ email: email.trim(), options: { shouldCreateUser: true } });
     setBusy(false);
-    if (error) setErr(error.message); else setStep("code");
+    if (error) setErr(/sending|smtp|confirmation/i.test(error.message || "")
+        ? "We couldn't send to that address yet. While we're in testing, use the email tied to your Resend account."
+        : error.message);
+      else setStep("code");
   };
   const verify = async () => {
     setBusy(true); setErr(null);
     const { data, error } = await supabase.auth.verifyOtp({ email: email.trim(), token: code.trim(), type: "email" });
     setBusy(false);
-    if (error || !data?.session) { setErr("That code didn't match \u2014 check the newest email and try again."); return; }
+    if (error || !data?.session) { setErr("That code didn't match — check the newest email and try again."); return; }
     setUid(data.session.user.id);
     if (signin) {
       const { data: prof } = await supabase.from("profiles").select("id").eq("id", data.session.user.id).maybeSingle();
@@ -2120,7 +2142,7 @@ function Onboard({ mode, session, onBack, onDone }) {
       const { error } = await supabase.storage.from("licenses").upload(path, blob, { contentType: "image/jpeg", upsert: true });
       if (error) throw error;
       await finish(path);
-    } catch (e) { setBusy(false); setErr(e.message || "Upload failed \u2014 try a smaller photo."); }
+    } catch (e) { setBusy(false); setErr(e.message || "Upload failed — try a smaller photo."); }
   };
 
   const ORDER = signin ? ["email", "code", "role", "about", "details", "license"] : ["role", "about", "details", "email", "code", "license"];
@@ -2146,7 +2168,7 @@ function Onboard({ mode, session, onBack, onDone }) {
       {step === "role" && (
         <div className="fade">
           <h2 className="text-[24px] font-semibold tracking-[-0.01em] mb-1" style={{ color: C.ink }}>How do you work with tours?</h2>
-          <p className="text-[14px] mb-5" style={{ color: C.muted }}>Pick one \u2014 it shapes the rest of your setup.</p>
+          <p className="text-[14px] mb-5" style={{ color: C.muted }}>Pick one — it shapes the rest of your setup.</p>
           {[["guide", "Guide", "Lead trips and share Bhutan", Compass], ["driver", "Driver", "Move guests safely on the road", Car], ["operator", "Tour Operator", "Find and book the crew", Building2]].map(([id, label, subT, Icon]) => (
             <button key={id} onClick={() => { setRole(id); setStep("about"); }} className="tap w-full text-left rounded-2xl p-4 flex items-center gap-3.5 mb-2.5"
               style={{ background: C.card, border: `1px solid ${role === id ? C.pine : C.line}` }}>
@@ -2178,7 +2200,7 @@ function Onboard({ mode, session, onBack, onDone }) {
           <OLabel>Years of experience</OLabel>
           <div className="flex flex-wrap gap-2 mb-5">{ONB_YEARS.map(([l, v]) => <Chip key={l} on={years === v} onClick={() => setYears(v)}>{l}</Chip>)}</div>
           {role === "guide" && (<>
-            <OLabel>Specialities \u2014 pick all that fit</OLabel>
+            <OLabel>Specialities — pick all that fit</OLabel>
             <div className="flex flex-wrap gap-2 mb-5">{ONB_SPECS.map((t) => <Chip key={t} on={tags.includes(t)} onClick={() => toggleTag(t)}>{t}</Chip>)}</div>
           </>)}
           {role === "driver" && (<>
@@ -2188,7 +2210,7 @@ function Onboard({ mode, session, onBack, onDone }) {
             <div className="flex flex-wrap gap-2 mb-5">{ONB_DRIVES.map((t) => <Chip key={t} on={tags.includes(t)} onClick={() => toggleTag(t)}>{t}</Chip>)}</div>
           </>)}
           {role !== "operator" && (<>
-            <OLabel>Languages \u2014 tap once for Fluent, twice for Basic</OLabel>
+            <OLabel>Languages — tap once for Fluent, twice for Basic</OLabel>
             <div className="flex flex-wrap gap-2 mb-5">
               {ONB_LANGS.map((n) => {
                 const cur = langs.find((x) => x.n === n);
@@ -2213,7 +2235,7 @@ function Onboard({ mode, session, onBack, onDone }) {
       {step === "email" && (
         <div className="fade">
           <h2 className="text-[24px] font-semibold tracking-[-0.01em] mb-1" style={{ color: C.ink }}>{signin ? "Welcome back" : "Verify your email"}</h2>
-          <p className="text-[14px] mb-5" style={{ color: C.muted }}>We\u2019ll email you a 6-digit code \u2014 no password needed.</p>
+          <p className="text-[14px] mb-5" style={{ color: C.muted }}>We’ll email you a code — no password needed.</p>
           <OLabel>Email</OLabel>
           <OInput value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@email.com" inputMode="email" autoCapitalize="none" />
           {err && <p className="text-[13px] mb-3" style={{ color: C.maroon }}>{err}</p>}
@@ -2224,11 +2246,11 @@ function Onboard({ mode, session, onBack, onDone }) {
       {step === "code" && (
         <div className="fade">
           <h2 className="text-[24px] font-semibold tracking-[-0.01em] mb-1" style={{ color: C.ink }}>Enter your code</h2>
-          <p className="text-[14px] mb-5" style={{ color: C.muted }}>Sent to <b style={{ color: C.ink }}>{email}</b> \u2014 check spam too.</p>
-          <input value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 6))} inputMode="numeric" placeholder="000000"
+          <p className="text-[14px] mb-5" style={{ color: C.muted }}>Sent to <b style={{ color: C.ink }}>{email}</b> — check spam too.</p>
+          <input value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 8))} inputMode="numeric" placeholder="000000"
             className="w-full h-14 rounded-xl text-center text-[26px] font-semibold mb-4" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink, letterSpacing: "0.4em" }} />
           {err && <p className="text-[13px] mb-3" style={{ color: C.maroon }}>{err}</p>}
-          <OCta disabled={code.length !== 6} busy={busy} onClick={verify}>Verify</OCta>
+          <OCta disabled={code.length < 6} busy={busy} onClick={verify}>Verify</OCta>
           <button onClick={sendCode} className="tap w-full text-[13.5px] font-medium mt-3" style={{ color: C.muted }}>Resend code</button>
         </div>
       )}
@@ -2236,7 +2258,7 @@ function Onboard({ mode, session, onBack, onDone }) {
       {step === "license" && (
         <div className="fade">
           <h2 className="text-[24px] font-semibold tracking-[-0.01em] mb-1" style={{ color: C.ink }}>Verify your license</h2>
-          <p className="text-[14px] mb-5" style={{ color: C.muted }}>{LICENSE_LABEL[role] || "Your license"} \u2014 our team checks it, and your Verified badge appears once it clears.</p>
+          <p className="text-[14px] mb-5" style={{ color: C.muted }}>{LICENSE_LABEL[role] || "Your license"} — our team checks it, and your Verified badge appears once it clears.</p>
           {licPreview ? (
             <div className="relative rounded-xl overflow-hidden mb-4" style={{ border: `1px solid ${C.line}` }}>
               <img src={licPreview} alt="" className="w-full block" style={{ maxHeight: 280, objectFit: "cover" }} />
@@ -2247,19 +2269,77 @@ function Onboard({ mode, session, onBack, onDone }) {
               style={{ background: C.card, border: `1.5px dashed ${C.line}` }}>
               <div className="w-13 h-13 rounded-2xl flex items-center justify-center mb-3" style={{ width: 52, height: 52, background: C.goldSoft }}><Upload size={23} color={C.gold} /></div>
               <div className="text-[15px] font-semibold" style={{ color: C.ink }}>Upload a photo of your license</div>
-              <div className="text-[13px] mt-1" style={{ color: C.muted }}>Front side \u00b7 clear and readable</div>
+              <div className="text-[13px] mt-1" style={{ color: C.muted }}>Front side · clear and readable</div>
             </button>
           )}
           <input ref={licRef} type="file" accept="image/*" onChange={pickLicense} className="hidden" />
           {err && <p className="text-[13px] mb-3" style={{ color: C.maroon }}>{err}</p>}
-          <OCta disabled={!licPreview} busy={busy} onClick={submitLicense}>Submit & enter DrukConnect</OCta>
-          <button onClick={() => finish(null)} disabled={busy} className="tap w-full text-[13.5px] font-medium mt-3" style={{ color: C.muted }}>Skip for now \u2014 I\u2019ll add it later</button>
+          <OCta disabled={!licPreview} busy={busy} onClick={submitLicense}>Submit & enter the hub</OCta>
+          <button onClick={() => finish(null)} disabled={busy} className="tap w-full text-[13.5px] font-medium mt-3" style={{ color: C.muted }}>Skip for now — I’ll add it later</button>
           <div className="rounded-xl p-3 flex gap-2.5 mt-4" style={{ background: C.goldSoft }}>
             <ShieldCheck size={16} color={C.maroon} className="shrink-0 mt-0.5" />
-            <p className="text-[12px] leading-snug" style={{ color: "#5a4a2e" }}>Your license is stored privately and never shown to other users \u2014 only our review team sees it.</p>
+            <p className="text-[12px] leading-snug" style={{ color: "#5a4a2e" }}>Your license is stored privately and never shown to other users — only our review team sees it.</p>
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+/* ===================== Profile tabs (swipeable CV / Gallery) ===================== */
+function ProfileTabs({ cv, gallery, galleryCount }) {
+  const [tab, setTab] = useState(0);           // 0 = CV · 1 = Gallery
+  const startX = useRef(null);
+  const startY = useRef(null);
+  const locked = useRef(false);
+
+  const onStart = (e) => {
+    const t = e.touches ? e.touches[0] : e;
+    startX.current = t.clientX; startY.current = t.clientY; locked.current = false;
+  };
+  const onMove = (e) => {
+    if (startX.current == null) return;
+    const t = e.touches ? e.touches[0] : e;
+    const dx = t.clientX - startX.current, dy = t.clientY - startY.current;
+    if (!locked.current && Math.abs(dx) > 12 && Math.abs(dx) > Math.abs(dy) * 1.4) locked.current = true;
+  };
+  const onEnd = (e) => {
+    if (startX.current == null) return;
+    const t = e.changedTouches ? e.changedTouches[0] : e;
+    const dx = t.clientX - startX.current;
+    if (locked.current && Math.abs(dx) > 55) setTab(dx < 0 ? 1 : 0);
+    startX.current = null; locked.current = false;
+  };
+
+  const TABS = [{ label: "CV", Icon: Award }, { label: "Gallery", Icon: ImagePlus, count: galleryCount }];
+
+  return (
+    <div className="mt-5">
+      {/* tab bar */}
+      <div className="relative flex" style={{ borderBottom: `1px solid ${C.line}` }}>
+        {TABS.map((x, i) => {
+          const on = tab === i;
+          return (
+            <button key={x.label} onClick={() => setTab(i)} className="tap flex-1 pb-2.5 flex items-center justify-center gap-1.5">
+              <x.Icon size={16} color={on ? C.pine : C.muted} strokeWidth={on ? 2.4 : 2} />
+              <span className="text-[14px] font-semibold" style={{ color: on ? C.pine : C.muted }}>{x.label}</span>
+              {x.count > 0 && <span className="text-[11px] font-bold rounded-full px-1.5 py-0.5" style={{ background: on ? C.pine : C.lineSoft, color: on ? "#fff" : C.muted }}>{x.count}</span>}
+            </button>
+          );
+        })}
+        <div className="absolute bottom-0 h-[2.5px] rounded-full"
+          style={{ background: C.pine, width: "50%", left: tab === 0 ? "0%" : "50%", transition: "left .28s cubic-bezier(.22,.61,.36,1)" }} />
+      </div>
+
+      {/* swipeable panes */}
+      <div className="overflow-hidden" onTouchStart={onStart} onTouchMove={onMove} onTouchEnd={onEnd}>
+        <div className="flex" style={{ width: "200%", transform: tab === 0 ? "translateX(0%)" : "translateX(-50%)", transition: "transform .32s cubic-bezier(.22,.61,.36,1)" }}>
+          <div className="pt-5" style={{ width: "50%" }}>{tab === 0 ? cv : <div style={{ height: 1 }} />}</div>
+          <div className="pt-5" style={{ width: "50%" }}>{gallery}</div>
+        </div>
+      </div>
+
+      <p className="text-center text-[11.5px] mt-3" style={{ color: C.muted }}>Swipe to switch</p>
     </div>
   );
 }
