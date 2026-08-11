@@ -4,7 +4,7 @@ import {
   BadgeCheck, MapPin, Inbox, ChevronLeft, Star, Phone, Mail, Briefcase,
   Search, LogOut, Newspaper, User, CalendarCheck, MessageCircle,
   Map, MessageSquare, Users, Download, Mic, Video, Heart, Share2, Trash2, Maximize2, Upload, Loader2, ArrowRight,
-  Award,
+  Award, UserX, RefreshCw, FileCheck2, ExternalLink, UserPlus, Send as SendIcon,
 } from "lucide-react";
 import mapImg from "./map.jpg";
 import { supabase } from "./supabase.js";
@@ -172,6 +172,7 @@ export default function App() {
   const [myProfile, setMyProfile] = useState(null);   // null=loading · false=none · object=exists
   const [profileTick, setProfileTick] = useState(0);
   const [dirTick, setDirTick] = useState(0);
+  const [dms, setDms] = useState([]);
 
   const loadProfiles = async () => {
     if (!CLOUD) return;
@@ -179,6 +180,33 @@ export default function App() {
     if (data) { PROFILE_DIR = {}; data.forEach((p) => { PROFILE_DIR[p.id] = profileToTalent(p); }); setDirTick((t) => t + 1); }
   };
   const reloadMe = () => { setProfileTick((t) => t + 1); loadProfiles(); };
+
+  const fetchDms = async () => {
+    if (!CLOUD) return;
+    const { data } = await supabase.from("direct_messages").select("*").order("created_at", { ascending: true });
+    if (data) setDms(data.map((r) => ({ id: r.id, from: r.sender_id, to: r.recipient_id, body: r.body, ts: new Date(r.created_at).getTime(), read: r.read })));
+  };
+  useEffect(() => {
+    if (!CLOUD) return;
+    fetchDms();
+    const ch = supabase.channel("dm-live")
+      .on("postgres_changes", { event: "*", schema: "public", table: "direct_messages" }, fetchDms)
+      .subscribe();
+    return () => { supabase.removeChannel(ch); };
+  }, []);
+  const sendDm = async (to, body) => {
+    const me = realUserRef.current;
+    if (!me) return;
+    setDms((D) => [...D, { id: uid(), from: me, to, body, ts: Date.now(), read: false }]);
+    if (!CLOUD) return;
+    await supabase.from("direct_messages").insert({ sender_id: me, recipient_id: to, body });
+    fetchDms();
+  };
+  const markRead = async (withId) => {
+    const me = realUserRef.current;
+    if (!CLOUD || !me) return;
+    await supabase.from("direct_messages").update({ read: true }).eq("sender_id", withId).eq("recipient_id", me).eq("read", false);
+  };
 
   useEffect(() => {
     if (!CLOUD) return;
@@ -200,6 +228,8 @@ export default function App() {
     ? { id: session.user.id, kind: myProfile.role, talentId: session.user.id, name: myProfile.full_name, initials: initialsOf(myProfile.full_name || "?") }
     : null;
   const user = realUser || ACCOUNTS.find((a) => a.id === accountId) || null;
+  const realUserRef = useRef(null);
+  realUserRef.current = user ? (user.talentId || user.id) : null;
 
   const fetchPosts = async () => {
     if (!CLOUD) return;
@@ -351,7 +381,7 @@ export default function App() {
           <Login onPick={setAccountId} session={session} myProfile={myProfile} onAuthed={reloadMe} />
         ) : (
           <Shell key={user.id} user={user} posts={posts} jobs={jobs} trips={trips} listings={listings}
-            actions={{ addPost, approve, reject, deletePost, sendJob, setJobStatus, postChat, openChat, postListing, applyToListing, setApplicant, hireApplicant }} engagement={{ likes, comments, toggleLike, addComment, deleteComment }} onLogout={() => { if (session) supabase.auth.signOut(); setAccountId(null); }} />
+            actions={{ addPost, approve, reject, deletePost, reloadDirectory: loadProfiles, sendJob, setJobStatus, postChat, openChat, postListing, applyToListing, setApplicant, hireApplicant }} engagement={{ likes, comments, toggleLike, addComment, deleteComment }} dm={{ dms, sendDm, markRead }} onLogout={() => { if (session) supabase.auth.signOut(); setAccountId(null); }} />
         )}
       </div>
     </div>
@@ -469,19 +499,21 @@ function WelcomeBullet({ Icon, title, body }) {
 
 /* ================================= Shell ================================== */
 const NAV = {
-  guide: [{ id: "post", label: "Feed", Icon: Newspaper }, { id: "jobs", label: "Jobs", Icon: Briefcase }, { id: "trips", label: "Trips", Icon: Map }, { id: "profile", label: "Profile", Icon: User }],
-  driver: [{ id: "post", label: "Feed", Icon: Newspaper }, { id: "jobs", label: "Jobs", Icon: Briefcase }, { id: "trips", label: "Trips", Icon: Map }, { id: "profile", label: "Profile", Icon: User }],
-  operator: [{ id: "discover", label: "Discover", Icon: Search }, { id: "requests", label: "Jobs", Icon: Briefcase }, { id: "trips", label: "Trips", Icon: Map }, { id: "feed", label: "Feed", Icon: Newspaper }],
-  admin: [{ id: "review", label: "Review", Icon: ShieldCheck }, { id: "feed", label: "Feed", Icon: Newspaper }],
+  guide: [{ id: "post", label: "Feed", Icon: Newspaper }, { id: "jobs", label: "Jobs", Icon: Briefcase }, { id: "trips", label: "Trips", Icon: Map }, { id: "chats", label: "Chats", Icon: MessageCircle }, { id: "profile", label: "Profile", Icon: User }],
+  driver: [{ id: "post", label: "Feed", Icon: Newspaper }, { id: "jobs", label: "Jobs", Icon: Briefcase }, { id: "trips", label: "Trips", Icon: Map }, { id: "chats", label: "Chats", Icon: MessageCircle }, { id: "profile", label: "Profile", Icon: User }],
+  operator: [{ id: "discover", label: "Discover", Icon: Search }, { id: "requests", label: "Jobs", Icon: Briefcase }, { id: "trips", label: "Trips", Icon: Map }, { id: "chats", label: "Chats", Icon: MessageCircle }, { id: "feed", label: "Feed", Icon: Newspaper }],
+  admin: [{ id: "review", label: "Review", Icon: ShieldCheck }, { id: "feed", label: "Feed", Icon: Newspaper }, { id: "users", label: "Users", Icon: Users }],
 };
 const DEFAULT_TAB = { guide: "post", driver: "post", operator: "discover", admin: "review" };
 
-function Shell({ user, posts, jobs, trips, listings, actions, engagement, onLogout }) {
+function Shell({ user, posts, jobs, trips, listings, actions, engagement, dm, onLogout }) {
   const [tab, setTab] = useState(DEFAULT_TAB[user.kind]);
   const [overlay, setOverlay] = useState(null); // {type:'profile'|'request', talentId}
+  const [dmWith, setDmWith] = useState(null);
   const nav = NAV[user.kind];
   const actorId = user.talentId || (user.kind === "operator" ? "a_operator" : "a_admin");
   const eng = { ...engagement, me: actorId, isAdmin: user.kind === "admin" };
+  const unreadDm = (dm?.dms || []).filter((m) => m.to === actorId && !m.read).length;
 
   const pendingModCount = posts.filter((p) => p.status === "pending").length;
   const myTalent = user.talentId ? talentById(user.talentId) : null;
@@ -499,7 +531,8 @@ function Shell({ user, posts, jobs, trips, listings, actions, engagement, onLogo
       <div className="flex-1 overflow-y-auto hidescroll" style={{ scrollbarWidth: "none" }}>
         {overlay ? (
           overlay.type === "profile" ? (
-            <TalentProfile talent={talentById(overlay.talentId)} posts={posts}
+            <TalentProfile talent={talentById(overlay.talentId)} posts={posts} eng={eng}
+              onMessage={(id) => { setOverlay(null); setTab("chats"); setDmWith(id); }}
               canRequest={user.kind === "operator"} self={user.talentId === overlay.talentId} contactOnly={user.kind === "admin"}
               onRequest={() => setOverlay({ type: "request", talentId: overlay.talentId })}
               onBack={() => setOverlay(null)} />
@@ -513,18 +546,20 @@ function Shell({ user, posts, jobs, trips, listings, actions, engagement, onLogo
             {tab === "post" && <PostTab user={user} posts={posts} onAdd={actions.addPost} eng={eng} onOpenProfile={openProfile} />}
             {tab === "jobs" && <JobsHub user={user} jobs={jobs} listings={listings} actions={actions} />}
             {tab === "trips" && <TripsTab user={user} trips={trips} actions={actions} />}
-            {tab === "profile" && <TalentProfile talent={talentById(user.talentId)} posts={posts} self onBack={null} />}
+            {tab === "chats" && <ChatsTab me={actorId} dm={dm} openWith={dmWith} onOpened={() => setDmWith(null)} onOpenProfile={openProfile} />}
+            {tab === "profile" && <TalentProfile talent={talentById(user.talentId)} posts={posts} eng={eng} self onBack={null} />}
             {tab === "discover" && <Discover onOpen={openProfile} />}
             {tab === "requests" && <OperatorJobs user={user} jobs={jobs} listings={listings} posts={posts} actions={actions} onOpen={openProfile} />}
             {tab === "feed" && <Feed posts={posts} eng={eng} admin={user.kind === "admin"} onDelete={actions.deletePost} onOpenProfile={openProfile} />}
             {tab === "review" && <Review posts={posts} onApprove={actions.approve} onReject={actions.reject} eng={eng} />}
+            {tab === "users" && <AdminUsers onChanged={actions.reloadDirectory} />}
           </div>
         )}
       </div>
 
       {!overlay && (
         <BottomNav nav={nav} tab={tab} setTab={setTab}
-          badges={{ jobs: jobsBadge, review: pendingModCount }} />
+          badges={{ jobs: jobsBadge, review: pendingModCount, chats: unreadDm }} />
       )}
     </>
   );
@@ -1093,7 +1128,7 @@ function ModCard({ post, onApprove, onReject, eng }) {
 }
 
 /* ============================= Talent profile ============================ */
-function TalentProfile({ talent, posts, canRequest, self, contactOnly, onRequest, onBack }) {
+function TalentProfile({ talent, posts, canRequest, self, contactOnly, eng, onRequest, onMessage, onBack }) {
   const t = talent;
   const live = posts.filter((p) => p.talentId === t.id && p.status === "approved").length;
   const located = posts.filter((p) => p.talentId === t.id && p.status === "approved" && p.location);
@@ -1104,18 +1139,20 @@ function TalentProfile({ talent, posts, canRequest, self, contactOnly, onRequest
         {onBack && (
           <button onClick={onBack} className="tap absolute left-4 top-4 z-10 w-9 h-9 rounded-full flex items-center justify-center" style={{ background: "rgba(255,255,255,.9)", border: `1px solid ${C.line}` }}><ChevronLeft size={19} color={C.ink} /></button>
         )}
-        <div className="h-20" style={{ background: `radial-gradient(120% 140% at 80% 0%, ${C.pine} 0%, ${C.pineDeep} 70%)` }} />
-        <div className="px-5 -mt-8">
-          <div className="flex items-end gap-3.5">
-            <div className="rounded-2xl flex items-center justify-center shrink-0" style={{ width: 68, height: 68, background: C.pine, border: `3px solid ${C.bg}` }}>
-              <span className="text-[22px] font-semibold" style={{ color: C.goldSoft }}>{t.initials}</span>
+        <div className="h-24" style={{ background: `radial-gradient(120% 140% at 80% 0%, ${C.pine} 0%, ${C.pineDeep} 70%)` }} />
+        <div className="px-5">
+          <div className="-mt-9 mb-3">
+            <div className="rounded-2xl flex items-center justify-center" style={{ width: 72, height: 72, background: C.pine, border: `3px solid ${C.bg}` }}>
+              <span className="text-[23px] font-semibold" style={{ color: C.goldSoft }}>{t.initials}</span>
             </div>
-            <div className="pb-1 flex-1">
+          </div>
+          <div>
+            <div>
               <div className="flex items-start gap-1.5">
-                <h1 className="text-[20px] font-semibold leading-tight" style={{ color: C.ink, wordBreak: "break-word" }}>{t.name}</h1>
-                {t.verified && <BadgeCheck size={16} color={C.pine} className="shrink-0 mt-1" />}
+                <h1 className="text-[22px] font-semibold leading-tight tracking-[-0.01em]" style={{ color: C.ink, wordBreak: "break-word" }}>{t.name}</h1>
+                {t.verified && <BadgeCheck size={17} color={C.pine} className="shrink-0 mt-1" />}
               </div>
-              <div className="flex items-center gap-1 text-[13px] mt-0.5" style={{ color: C.muted }}><MapPin size={13} /> {roleLabel(t.role)}{t.base ? ` · ${t.base}` : ""}</div>
+              <div className="flex items-center gap-1 text-[13.5px] mt-1" style={{ color: C.muted }}><MapPin size={13} /> {roleLabel(t.role)}{t.base ? ` · ${t.base}` : ""}</div>
             </div>
           </div>
           <div className="flex items-center gap-4 mt-3.5 text-[13px]" style={{ color: C.muted }}>
@@ -1173,7 +1210,7 @@ function TalentProfile({ talent, posts, canRequest, self, contactOnly, onRequest
           }
           gallery={
             gallery.length > 0
-              ? <PhotoGrid items={gallery} />
+              ? <PhotoGrid items={gallery} author={t} eng={eng} />
               : <Empty Icon={ImagePlus} title="No photos yet" body="Approved trip photos appear here as a gallery." />
           }
           galleryCount={gallery.length}
@@ -1191,7 +1228,7 @@ function TalentProfile({ talent, posts, canRequest, self, contactOnly, onRequest
 
       {canRequest && !contactOnly && (
         <div className="px-5 mt-6 flex gap-3">
-          <button className="tap h-12 px-5 rounded-xl flex items-center justify-center gap-2 text-[14.5px] font-semibold" style={{ background: C.card, border: `1.5px solid ${C.pine}`, color: C.pine }}><MessageCircle size={18} /> Message</button>
+          <button onClick={() => onMessage && onMessage(t.id)} className="tap h-12 px-5 rounded-xl flex items-center justify-center gap-2 text-[14.5px] font-semibold" style={{ background: C.card, border: `1.5px solid ${C.pine}`, color: C.pine }}><MessageCircle size={18} /> Message</button>
           <button onClick={onRequest} className="tap flex-1 h-12 rounded-xl flex items-center justify-center gap-2 text-[15px] font-semibold" style={{ background: C.pine, color: "#fff", boxShadow: `0 6px 16px ${C.pine}33` }}><Briefcase size={18} /> Send job request</button>
         </div>
       )}
@@ -2021,14 +2058,14 @@ function Lightbox({ src, onClose }) {
 }
 
 /* ====================== Profile gallery (Instagram grid) ================== */
-function PhotoGrid({ items }) {
+function PhotoGrid({ items, author, eng }) {
   const [openIdx, setOpenIdx] = useState(null);
   return (
     <>
       <div className="rounded-xl overflow-hidden" style={{ border: `1px solid ${C.line}` }}>
         <div className="grid grid-cols-3 gap-[2px]" style={{ background: C.line }}>
           {items.map((p, i) => (
-            <button key={p.id} onClick={() => setOpenIdx(i)} className="relative overflow-hidden" style={{ aspectRatio: "1 / 1", background: C.bg }} aria-label="View photo">
+            <button key={p.id} onClick={() => setOpenIdx(i)} className="relative overflow-hidden" style={{ aspectRatio: "1 / 1", background: C.bg }} aria-label="Open post">
               <img src={p.media.dataUri} alt="" loading="lazy" className="absolute inset-0 w-full h-full" style={{ objectFit: "cover" }} />
               {p.location && (
                 <span className="absolute left-1 bottom-1 w-5 h-5 rounded-full flex items-center justify-center" style={{ background: "rgba(0,0,0,.45)" }}>
@@ -2039,249 +2076,93 @@ function PhotoGrid({ items }) {
           ))}
         </div>
       </div>
-      {openIdx != null && <Lightbox src={items[openIdx].media.dataUri} onClose={() => setOpenIdx(null)} />}
+      {openIdx != null && (
+        <PostDetail
+          items={items} index={openIdx} author={author} eng={eng}
+          onIndex={setOpenIdx} onClose={() => setOpenIdx(null)}
+        />
+      )}
     </>
   );
 }
 
-/* ================= Onboarding (real signup · role → details → OTP → license) ================= */
-const ONB_SPECS = ["Culture & Dzong", "Alpine Trekking & Camping", "Birdwatching & Wildlife", "Spiritual & Meditation", "Adventure & Outdoors"];
-const ONB_DRIVES = ["Long-distance touring", "Mountain & high passes", "Excursion & day trips", "Airport transfers", "Off-road & trailheads"];
-const ONB_VEHICLES = ["Sedan", "SUV", "Hiace Van", "Coaster Bus", "Large Coach"];
-const ONB_LANGS = ["Dzongkha", "English", "Hindi", "Nepali", "Japanese", "Mandarin", "German", "French", "Spanish", "Korean"];
-const ONB_YEARS = [["0–2 yrs", 1], ["3–5 yrs", 4], ["6–10 yrs", 8], ["10+ yrs", 12]];
-const LICENSE_LABEL = { guide: "Guide license (Department of Tourism)", driver: "Driving licence (RSTA)", operator: "Tour Operator licence (Department of Tourism)" };
+/* ======================= Post detail (Instagram-style) ==================== */
+function PostDetail({ items, index, author, eng, onIndex, onClose }) {
+  const p = items[index];
+  const [showMap, setShowMap] = useState(false);
+  const startX = useRef(null);
 
-function OLabel({ children }) { return <div className="text-[13px] font-medium mb-1.5" style={{ color: C.ink }}>{children}</div>; }
-function OInput(props) { return <input {...props} className="w-full h-12 px-4 rounded-xl text-[15px] mb-4" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }} />; }
-function OCta({ children, onClick, disabled, busy }) {
-  return (
-    <button onClick={onClick} disabled={disabled || busy} className="tap w-full rounded-xl flex items-center justify-center gap-2 text-[15px] font-semibold"
-      style={{ height: 52, background: disabled ? "#C7CEC7" : C.pine, color: "#fff", cursor: disabled ? "not-allowed" : "pointer" }}>
-      {busy ? <Loader2 size={18} className="animate-spin" /> : <>{children} <ArrowRight size={18} strokeWidth={2.4} /></>}
-    </button>
-  );
-}
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
-function Onboard({ mode, session, onBack, onDone }) {
-  const signin = mode === "signin";
-  const [step, setStep] = useState(signin ? "email" : "role");
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState(null);
-  const [uid, setUid] = useState(session?.user?.id || null);
-  const [role, setRole] = useState(null);
-  const [name, setName] = useState("");
-  const [phone, setPhone] = useState("");
-  const [base, setBase] = useState("");
-  const [company, setCompany] = useState("");
-  const [years, setYears] = useState(4);
-  const [pitch, setPitch] = useState("");
-  const [langs, setLangs] = useState([]);
-  const [tags, setTags] = useState([]);
-  const [vehicle, setVehicle] = useState(null);
-  const [email, setEmail] = useState(session?.user?.email || "");
-  const [code, setCode] = useState("");
-  const [licPreview, setLicPreview] = useState(null);
-  const licRef = useRef();
-  const effUid = uid || session?.user?.id || null;
-
-  const toggleTag = (t) => setTags((T) => (T.includes(t) ? T.filter((x) => x !== t) : [...T, t]));
-  const cycleLang = (n) => setLangs((L) => {
-    const cur = L.find((x) => x.n === n);
-    if (!cur) return [...L, { n, l: "Fluent" }];
-    if (cur.l === "Fluent") return L.map((x) => (x.n === n ? { ...x, l: "Basic" } : x));
-    return L.filter((x) => x.n !== n);
-  });
-
-  const sendCode = async () => {
-    setBusy(true); setErr(null);
-    const { error } = await supabase.auth.signInWithOtp({ email: email.trim(), options: { shouldCreateUser: true } });
-    setBusy(false);
-    if (error) setErr(/sending|smtp|confirmation/i.test(error.message || "")
-        ? "We couldn't send to that address yet. While we're in testing, use the email tied to your Resend account."
-        : error.message);
-      else setStep("code");
+  const swipeStart = (e) => { startX.current = (e.touches ? e.touches[0] : e).clientX; };
+  const swipeEnd = (e) => {
+    if (startX.current == null) return;
+    const dx = (e.changedTouches ? e.changedTouches[0] : e).clientX - startX.current;
+    if (dx < -55 && index < items.length - 1) onIndex(index + 1);
+    if (dx > 55 && index > 0) onIndex(index - 1);
+    startX.current = null;
   };
-  const verify = async () => {
-    setBusy(true); setErr(null);
-    const { data, error } = await supabase.auth.verifyOtp({ email: email.trim(), token: code.trim(), type: "email" });
-    setBusy(false);
-    if (error || !data?.session) { setErr("That code didn't match — check the newest email and try again."); return; }
-    setUid(data.session.user.id);
-    if (signin) {
-      const { data: prof } = await supabase.from("profiles").select("id").eq("id", data.session.user.id).maybeSingle();
-      if (prof) onDone(); else setStep("role");
-    } else setStep("license");
-  };
-  const finish = async (licensePath) => {
-    setBusy(true); setErr(null);
-    const { error } = await supabase.from("profiles").upsert({
-      id: effUid, email: (email || session?.user?.email || "").trim() || null, role,
-      full_name: name.trim(), phone: phone.trim() || null, base: base.trim() || null,
-      company_name: role === "operator" ? (company.trim() || name.trim()) : null,
-      years, pitch: pitch.trim() || null, languages: langs, tags,
-      vehicle: role === "driver" ? vehicle : null,
-      license_path: licensePath || null, license_status: licensePath ? "submitted" : "none",
-    });
-    setBusy(false);
-    if (error) { setErr(error.message); return; }
-    onDone();
-  };
-  const pickLicense = (e) => {
-    const f = e.target.files?.[0]; e.target.value = "";
-    if (!f || !f.type.startsWith("image/")) { setErr("Please choose a photo of your license."); return; }
-    setErr(null);
-    const r = new FileReader(); r.onload = () => setLicPreview(r.result); r.readAsDataURL(f);
-  };
-  const submitLicense = async () => {
-    setBusy(true); setErr(null);
-    try {
-      const small = await shrinkImage(licPreview, 1600, 0.85);
-      const blob = await (await fetch(small)).blob();
-      const path = `${effUid}/license.jpg`;
-      const { error } = await supabase.storage.from("licenses").upload(path, blob, { contentType: "image/jpeg", upsert: true });
-      if (error) throw error;
-      await finish(path);
-    } catch (e) { setBusy(false); setErr(e.message || "Upload failed — try a smaller photo."); }
-  };
-
-  const ORDER = signin ? ["email", "code", "role", "about", "details", "license"] : ["role", "about", "details", "email", "code", "license"];
-  const backStep = () => {
-    const i = ORDER.indexOf(step);
-    if (i <= 0 || step === "code") { if (step === "code") setStep("email"); else onBack(); return; }
-    setStep(ORDER[i - 1]);
-  };
-  const detailsNext = () => { if (effUid) setStep("license"); else setStep("email"); };
-  const detailsOk = role === "operator" ? true : (tags.length > 0 && langs.length > 0 && (role !== "driver" || vehicle));
 
   return (
-    <div className="px-6 pt-5 pb-8">
-      <div className="flex items-center gap-3 mb-6">
-        <button onClick={backStep} className="tap w-9 h-9 rounded-full flex items-center justify-center" style={{ border: `1px solid ${C.line}`, background: C.card }} aria-label="Back">
+    <div className="fixed inset-0 flex flex-col" style={{ background: C.bg, zIndex: 70 }}>
+      {/* header */}
+      <div className="shrink-0 h-14 px-3 flex items-center gap-3" style={{ background: C.card, borderBottom: `1px solid ${C.line}` }}>
+        <button onClick={onClose} className="tap w-9 h-9 rounded-full flex items-center justify-center" style={{ border: `1px solid ${C.line}` }} aria-label="Close">
           <ChevronLeft size={19} color={C.ink} />
         </button>
-        <div className="flex gap-1.5">
-          {ORDER.map((k) => <span key={k} className="rounded-full" style={{ width: k === step ? 18 : 7, height: 7, background: ORDER.indexOf(k) <= ORDER.indexOf(step) ? C.pine : C.lineSoft, transition: "width .25s" }} />)}
+        <Avatar initials={author?.initials || "?"} size={34} />
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-1.5">
+            <span className="text-[14px] font-semibold" style={{ color: C.ink }}>{author?.name || "Member"}</span>
+            {author?.verified && <BadgeCheck size={14} color={C.pine} />}
+          </div>
+          <div className="text-[11.5px]" style={{ color: C.muted }}>{relTime(p.createdAt)}</div>
         </div>
+        <span className="text-[12px] font-medium" style={{ color: C.muted }}>{index + 1}/{items.length}</span>
       </div>
 
-      {step === "role" && (
-        <div className="fade">
-          <h2 className="text-[24px] font-semibold tracking-[-0.01em] mb-1" style={{ color: C.ink }}>How do you work with tours?</h2>
-          <p className="text-[14px] mb-5" style={{ color: C.muted }}>Pick one — it shapes the rest of your setup.</p>
-          {[["guide", "Guide", "Lead trips and share Bhutan", Compass], ["driver", "Driver", "Move guests safely on the road", Car], ["operator", "Tour Operator", "Find and book the crew", Building2]].map(([id, label, subT, Icon]) => (
-            <button key={id} onClick={() => { setRole(id); setStep("about"); }} className="tap w-full text-left rounded-2xl p-4 flex items-center gap-3.5 mb-2.5"
-              style={{ background: C.card, border: `1px solid ${role === id ? C.pine : C.line}` }}>
-              <div className="w-11 h-11 rounded-xl flex items-center justify-center shrink-0" style={{ background: C.pine }}><Icon size={20} color={C.goldSoft} /></div>
-              <div className="flex-1"><div className="text-[15.5px] font-semibold" style={{ color: C.ink }}>{label}</div>
-                <div className="text-[13px]" style={{ color: C.muted }}>{subT}</div></div>
-              <ArrowRight size={17} color={C.muted} />
-            </button>
-          ))}
-        </div>
-      )}
-
-      {step === "about" && (
-        <div className="fade">
-          <h2 className="text-[24px] font-semibold tracking-[-0.01em] mb-5" style={{ color: C.ink }}>Tell us who you are</h2>
-          <OLabel>{role === "operator" ? "Your name" : "Full name"}</OLabel>
-          <OInput value={name} onChange={(e) => setName(e.target.value)} placeholder="Karma Wangchuk" />
-          {role === "operator" && (<><OLabel>Agency name</OLabel><OInput value={company} onChange={(e) => setCompany(e.target.value)} placeholder="Druk Journeys" /></>)}
-          <OLabel>Phone</OLabel>
-          <OInput value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="+975 17 00 00 00" inputMode="tel" />
-          {role !== "operator" && (<><OLabel>Home base</OLabel><OInput value={base} onChange={(e) => setBase(e.target.value)} placeholder="Paro" /></>)}
-          <OCta disabled={name.trim().length < 2} onClick={() => setStep("details")}>Continue</OCta>
-        </div>
-      )}
-
-      {step === "details" && (
-        <div className="fade">
-          <h2 className="text-[24px] font-semibold tracking-[-0.01em] mb-5" style={{ color: C.ink }}>{role === "guide" ? "Your specialities" : role === "driver" ? "What you drive" : "About your agency"}</h2>
-          <OLabel>Years of experience</OLabel>
-          <div className="flex flex-wrap gap-2 mb-5">{ONB_YEARS.map(([l, v]) => <Chip key={l} on={years === v} onClick={() => setYears(v)}>{l}</Chip>)}</div>
-          {role === "guide" && (<>
-            <OLabel>Specialities — pick all that fit</OLabel>
-            <div className="flex flex-wrap gap-2 mb-5">{ONB_SPECS.map((t) => <Chip key={t} on={tags.includes(t)} onClick={() => toggleTag(t)}>{t}</Chip>)}</div>
-          </>)}
-          {role === "driver" && (<>
-            <OLabel>Your vehicle</OLabel>
-            <div className="flex flex-wrap gap-2 mb-5">{ONB_VEHICLES.map((v) => <Chip key={v} on={vehicle === v} onClick={() => setVehicle(v)}>{v}</Chip>)}</div>
-            <OLabel>Comfortable with</OLabel>
-            <div className="flex flex-wrap gap-2 mb-5">{ONB_DRIVES.map((t) => <Chip key={t} on={tags.includes(t)} onClick={() => toggleTag(t)}>{t}</Chip>)}</div>
-          </>)}
-          {role !== "operator" && (<>
-            <OLabel>Languages — tap once for Fluent, twice for Basic</OLabel>
-            <div className="flex flex-wrap gap-2 mb-5">
-              {ONB_LANGS.map((n) => {
-                const cur = langs.find((x) => x.n === n);
-                return (
-                  <button key={n} onClick={() => cycleLang(n)} className="tap rounded-full pl-3 pr-2.5 py-1.5 text-[13px] font-medium inline-flex items-center gap-1.5"
-                    style={{ background: cur ? C.pine : C.card, border: `1px solid ${cur ? C.pine : C.line}`, color: cur ? "#fff" : C.ink }}>
-                    {n}{cur && <span className="text-[10px] px-1.5 py-0.5 rounded-full" style={{ background: C.gold, color: "#fff" }}>{cur.l}</span>}
-                  </button>
-                );
-              })}
-            </div>
-          </>)}
-          {role === "operator" && (<>
-            <OLabel>What should the crew know about you?</OLabel>
-            <textarea value={pitch} onChange={(e) => setPitch(e.target.value)} rows={3} maxLength={220} placeholder="Routes you run, group sizes, what you value."
-              className="w-full px-3.5 py-3 rounded-xl text-[15px] resize-none mb-5" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }} />
-          </>)}
-          <OCta disabled={!detailsOk} onClick={detailsNext}>Continue</OCta>
-        </div>
-      )}
-
-      {step === "email" && (
-        <div className="fade">
-          <h2 className="text-[24px] font-semibold tracking-[-0.01em] mb-1" style={{ color: C.ink }}>{signin ? "Welcome back" : "Verify your email"}</h2>
-          <p className="text-[14px] mb-5" style={{ color: C.muted }}>We’ll email you a code — no password needed.</p>
-          <OLabel>Email</OLabel>
-          <OInput value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@email.com" inputMode="email" autoCapitalize="none" />
-          {err && <p className="text-[13px] mb-3" style={{ color: C.maroon }}>{err}</p>}
-          <OCta disabled={!/\S+@\S+\.\S+/.test(email)} busy={busy} onClick={sendCode}>Send code</OCta>
-        </div>
-      )}
-
-      {step === "code" && (
-        <div className="fade">
-          <h2 className="text-[24px] font-semibold tracking-[-0.01em] mb-1" style={{ color: C.ink }}>Enter your code</h2>
-          <p className="text-[14px] mb-5" style={{ color: C.muted }}>Sent to <b style={{ color: C.ink }}>{email}</b> — check spam too.</p>
-          <input value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 8))} inputMode="numeric" placeholder="000000"
-            className="w-full h-14 rounded-xl text-center text-[26px] font-semibold mb-4" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink, letterSpacing: "0.4em" }} />
-          {err && <p className="text-[13px] mb-3" style={{ color: C.maroon }}>{err}</p>}
-          <OCta disabled={code.length < 6} busy={busy} onClick={verify}>Verify</OCta>
-          <button onClick={sendCode} className="tap w-full text-[13.5px] font-medium mt-3" style={{ color: C.muted }}>Resend code</button>
-        </div>
-      )}
-
-      {step === "license" && (
-        <div className="fade">
-          <h2 className="text-[24px] font-semibold tracking-[-0.01em] mb-1" style={{ color: C.ink }}>Verify your license</h2>
-          <p className="text-[14px] mb-5" style={{ color: C.muted }}>{LICENSE_LABEL[role] || "Your license"} — our team checks it, and your Verified badge appears once it clears.</p>
-          {licPreview ? (
-            <div className="relative rounded-xl overflow-hidden mb-4" style={{ border: `1px solid ${C.line}` }}>
-              <img src={licPreview} alt="" className="w-full block" style={{ maxHeight: 280, objectFit: "cover" }} />
-              <button onClick={() => setLicPreview(null)} className="tap absolute top-2 right-2 w-8 h-8 rounded-full flex items-center justify-center" style={{ background: "rgba(0,0,0,.55)" }}><X size={16} color="#fff" /></button>
-            </div>
-          ) : (
-            <button onClick={() => licRef.current?.click()} className="tap w-full rounded-2xl p-8 flex flex-col items-center justify-center text-center mb-4"
-              style={{ background: C.card, border: `1.5px dashed ${C.line}` }}>
-              <div className="w-13 h-13 rounded-2xl flex items-center justify-center mb-3" style={{ width: 52, height: 52, background: C.goldSoft }}><Upload size={23} color={C.gold} /></div>
-              <div className="text-[15px] font-semibold" style={{ color: C.ink }}>Upload a photo of your license</div>
-              <div className="text-[13px] mt-1" style={{ color: C.muted }}>Front side · clear and readable</div>
-            </button>
+      {/* scrollable body */}
+      <div className="flex-1 overflow-y-auto hidescroll" style={{ scrollbarWidth: "none" }}>
+        {/* image at its true proportions */}
+        <div onTouchStart={swipeStart} onTouchEnd={swipeEnd} className="relative flex items-center justify-center" style={{ background: "#0d100d", minHeight: 240 }}>
+          <img src={p.media.dataUri} alt="" className="block" style={{ width: "100%", maxHeight: "62vh", objectFit: "contain" }} />
+          {items.length > 1 && (
+            <>
+              {index > 0 && (
+                <button onClick={() => onIndex(index - 1)} className="tap absolute left-2 top-1/2 -translate-y-1/2 w-9 h-9 rounded-full flex items-center justify-center" style={{ background: "rgba(0,0,0,.45)" }} aria-label="Previous">
+                  <ChevronLeft size={18} color="#fff" />
+                </button>
+              )}
+              {index < items.length - 1 && (
+                <button onClick={() => onIndex(index + 1)} className="tap absolute right-2 top-1/2 -translate-y-1/2 w-9 h-9 rounded-full flex items-center justify-center" style={{ background: "rgba(0,0,0,.45)" }} aria-label="Next">
+                  <ChevronLeft size={18} color="#fff" style={{ transform: "rotate(180deg)" }} />
+                </button>
+              )}
+            </>
           )}
-          <input ref={licRef} type="file" accept="image/*" onChange={pickLicense} className="hidden" />
-          {err && <p className="text-[13px] mb-3" style={{ color: C.maroon }}>{err}</p>}
-          <OCta disabled={!licPreview} busy={busy} onClick={submitLicense}>Submit & enter the hub</OCta>
-          <button onClick={() => finish(null)} disabled={busy} className="tap w-full text-[13.5px] font-medium mt-3" style={{ color: C.muted }}>Skip for now — I’ll add it later</button>
-          <div className="rounded-xl p-3 flex gap-2.5 mt-4" style={{ background: C.goldSoft }}>
-            <ShieldCheck size={16} color={C.maroon} className="shrink-0 mt-0.5" />
-            <p className="text-[12px] leading-snug" style={{ color: "#5a4a2e" }}>Your license is stored privately and never shown to other users — only our review team sees it.</p>
-          </div>
         </div>
-      )}
+
+        <div className="px-5 py-4">
+          {p.text && <p className="text-[15px] leading-relaxed" style={{ color: C.ink }}>{p.text}</p>}
+
+          {p.location && (
+            <div className="mt-3">
+              <button onClick={() => setShowMap((v) => !v)} className="tap inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[13px] font-semibold" style={{ background: C.goldSoft, color: "#7a5a1e" }}>
+                <MapPin size={14} color={C.gold} />
+                {p.location.place ? (p.location.source === "viewpoint" ? p.location.place : `Near ${p.location.place}`) : "Pinned in Bhutan"}
+              </button>
+              {p.location.description && <p className="text-[12.5px] leading-snug mt-2" style={{ color: C.muted }}>{p.location.description}</p>}
+              {showMap && <div className="mt-3"><BhutanMap readOnly value={p.location} /></div>}
+            </div>
+          )}
+
+          {eng && <PostEngagement post={p} eng={eng} />}
+        </div>
+      </div>
     </div>
   );
 }
@@ -2340,6 +2221,615 @@ function ProfileTabs({ cv, gallery, galleryCount }) {
       </div>
 
       <p className="text-center text-[11.5px] mt-3" style={{ color: C.muted }}>Swipe to switch</p>
+    </div>
+  );
+}
+
+/* ============================ Admin · Users console ============================ */
+const SUPA_PROJECT_URL = "https://supabase.com/dashboard/project/nxnsdnayzimzfiwjrkvv";
+
+function AdminUsers({ onChanged }) {
+  const [rows, setRows] = useState(null);      // null = loading
+  const [q, setQ] = useState("");
+  const [filter, setFilter] = useState("all"); // all | submitted | verified | guide | driver | operator
+  const [busyId, setBusyId] = useState(null);
+  const [note, setNote] = useState(null);
+  const [openId, setOpenId] = useState(null);
+
+  const flash = (m) => { setNote(m); setTimeout(() => setNote(null), 2600); };
+
+  const load = async () => {
+    if (!CLOUD) { setRows([]); return; }
+    const { data, error } = await supabase.from("profiles").select("*").order("created_at", { ascending: false });
+    if (error) { flash("Couldn't load users."); setRows([]); return; }
+    setRows(data || []);
+  };
+  useEffect(() => { load(); }, []);
+
+  const setStatus = async (id, status) => {
+    setBusyId(id);
+    const { error } = await supabase.from("profiles").update({ license_status: status }).eq("id", id);
+    setBusyId(null);
+    if (error) { flash("Update failed — check the admin policy is applied."); return; }
+    setRows((R) => R.map((r) => (r.id === id ? { ...r, license_status: status } : r)));
+    flash(status === "verified" ? "Verified." : status === "rejected" ? "Rejected." : "Updated.");
+    onChanged && onChanged();
+  };
+
+  const removeUser = async (u) => {
+    setBusyId(u.id);
+    // remove their content first so nothing is orphaned, then the profile
+    await supabase.from("post_comments").delete().eq("author_id", u.id);
+    await supabase.from("post_likes").delete().eq("liker_id", u.id);
+    await supabase.from("posts").delete().eq("talent_id", u.id);
+    if (u.license_path) await supabase.storage.from("licenses").remove([u.license_path]);
+    const { error } = await supabase.from("profiles").delete().eq("id", u.id);
+    setBusyId(null);
+    if (error) { flash("Delete failed — check the admin policy is applied."); return; }
+    setRows((R) => R.filter((r) => r.id !== u.id));
+    setOpenId(null);
+    flash("Profile and content removed.");
+    onChanged && onChanged();
+  };
+
+  const viewLicense = async (u) => {
+    if (!u.license_path) { flash("No license uploaded."); return; }
+    const { data, error } = await supabase.storage.from("licenses").createSignedUrl(u.license_path, 300);
+    if (error || !data) { flash("Couldn't open the document."); return; }
+    window.open(data.signedUrl, "_blank");
+  };
+
+  const list = (rows || []).filter((r) => {
+    if (filter === "submitted" && r.license_status !== "submitted") return false;
+    if (filter === "verified" && r.license_status !== "verified") return false;
+    if (["guide", "driver", "operator"].includes(filter) && r.role !== filter) return false;
+    const hay = `${r.full_name || ""} ${r.email || ""} ${r.base || ""}`.toLowerCase();
+    return hay.includes(q.toLowerCase());
+  });
+
+  const pending = (rows || []).filter((r) => r.license_status === "submitted").length;
+
+  return (
+    <div className="px-5 py-4">
+      <SectionLabel trailing={rows ? `${rows.length} total` : ""}>Users</SectionLabel>
+
+      <div className="relative mb-3">
+        <Search size={16} color={C.muted} className="absolute left-3.5 top-1/2 -translate-y-1/2" />
+        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search name, email or base"
+          className="w-full h-11 pl-10 pr-4 rounded-xl text-[14px]" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }} />
+      </div>
+
+      <div className="flex gap-2 overflow-x-auto hidescroll pb-1 mb-4" style={{ scrollbarWidth: "none" }}>
+        <Chip on={filter === "all"} onClick={() => setFilter("all")}>All</Chip>
+        <Chip on={filter === "submitted"} onClick={() => setFilter("submitted")}>Pending{pending ? ` · ${pending}` : ""}</Chip>
+        <Chip on={filter === "verified"} onClick={() => setFilter("verified")}>Verified</Chip>
+        <Chip on={filter === "guide"} onClick={() => setFilter("guide")}>Guides</Chip>
+        <Chip on={filter === "driver"} onClick={() => setFilter("driver")}>Drivers</Chip>
+        <Chip on={filter === "operator"} onClick={() => setFilter("operator")}>Operators</Chip>
+      </div>
+
+      {note && <div className="rounded-xl px-3 py-2 text-[12.5px] mb-3" style={{ background: C.pineSoft, color: C.pine }}>{note}</div>}
+
+      {rows === null ? (
+        <div className="flex items-center gap-2 text-[14px] py-6 justify-center" style={{ color: C.muted }}><Loader2 size={17} className="animate-spin" /> Loading…</div>
+      ) : list.length === 0 ? (
+        <Empty Icon={Users} title="No users" body="Signed-up guides, drivers and operators appear here." />
+      ) : (
+        <div className="space-y-3">
+          {list.map((u) => {
+            const open = openId === u.id;
+            const st = u.license_status || "none";
+            const stMap = {
+              verified: { bg: C.pineSoft, fg: C.pine, label: "Verified" },
+              submitted: { bg: C.goldSoft, fg: "#7a5a1e", label: "Pending review" },
+              rejected: { bg: C.maroonSoft, fg: C.maroon, label: "Rejected" },
+              none: { bg: C.bg, fg: C.muted, label: "No license" },
+            }[st];
+            return (
+              <div key={u.id} className="rounded-2xl p-4" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+                <div className="flex items-center gap-3">
+                  <Avatar initials={initialsOf(u.full_name)} size={42} />
+                  <div className="flex-1 min-w-0">
+                    <div className="text-[15px] font-semibold" style={{ color: C.ink }}>{u.full_name || "Unnamed"}</div>
+                    <div className="text-[12.5px]" style={{ color: C.muted }}>{roleLabel(u.role)}{u.base ? ` · ${u.base}` : ""}</div>
+                  </div>
+                  <span className="text-[11.5px] font-semibold rounded-full px-2.5 py-1 shrink-0" style={{ background: stMap.bg, color: stMap.fg }}>{stMap.label}</span>
+                </div>
+
+                <div className="text-[12.5px] mt-2 break-all" style={{ color: C.muted }}>{u.email}</div>
+
+                <div className="flex gap-2 mt-3">
+                  <button onClick={() => viewLicense(u)} className="tap flex-1 h-10 rounded-xl text-[13px] font-semibold inline-flex items-center justify-center gap-1.5"
+                    style={{ background: C.bg, border: `1px solid ${C.line}`, color: u.license_path ? C.ink : C.muted }}>
+                    <FileCheck2 size={15} /> License
+                  </button>
+                  {st !== "verified" && (
+                    <button onClick={() => setStatus(u.id, "verified")} disabled={busyId === u.id}
+                      className="tap flex-1 h-10 rounded-xl text-[13px] font-semibold inline-flex items-center justify-center gap-1.5" style={{ background: C.pine, color: "#fff" }}>
+                      {busyId === u.id ? <Loader2 size={15} className="animate-spin" /> : <><Check size={15} /> Verify</>}
+                    </button>
+                  )}
+                  {st === "verified" && (
+                    <button onClick={() => setStatus(u.id, "submitted")} disabled={busyId === u.id}
+                      className="tap flex-1 h-10 rounded-xl text-[13px] font-semibold inline-flex items-center justify-center gap-1.5" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.muted }}>
+                      <RefreshCw size={14} /> Un-verify
+                    </button>
+                  )}
+                  <button onClick={() => setOpenId(open ? null : u.id)} className="tap w-10 h-10 rounded-xl flex items-center justify-center shrink-0"
+                    style={{ background: C.card, border: `1px solid ${C.line}` }} aria-label="More">
+                    <span className="text-[16px] leading-none" style={{ color: C.muted }}>⋯</span>
+                  </button>
+                </div>
+
+                {open && (
+                  <div className="mt-3 pt-3 fade" style={{ borderTop: `1px solid ${C.lineSoft}` }}>
+                    {st !== "rejected" && (
+                      <button onClick={() => setStatus(u.id, "rejected")} className="tap w-full h-10 rounded-xl text-[13.5px] font-semibold mb-2" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.maroon }}>
+                        Reject license
+                      </button>
+                    )}
+                    <ConfirmDelete onConfirm={() => removeUser(u)} busy={busyId === u.id} />
+                    <a href={`${SUPA_PROJECT_URL}/auth/users`} target="_blank" rel="noreferrer"
+                      className="tap w-full h-10 rounded-xl text-[12.5px] font-medium inline-flex items-center justify-center gap-1.5 mt-2" style={{ background: C.bg, color: C.muted }}>
+                      <ExternalLink size={13} /> Remove login in Supabase
+                    </a>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      <div className="mt-6 rounded-2xl p-4" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+        <div className="text-[13px] font-semibold mb-2" style={{ color: C.ink }}>Database</div>
+        <div className="space-y-2">
+          {[["Table editor", "/editor"], ["SQL editor", "/sql/new"], ["Auth users", "/auth/users"], ["Storage", "/storage/buckets"]].map(([label, path]) => (
+            <a key={label} href={`${SUPA_PROJECT_URL}${path}`} target="_blank" rel="noreferrer"
+              className="tap flex items-center justify-between rounded-xl px-3.5 py-2.5" style={{ background: C.bg }}>
+              <span className="text-[13.5px] font-medium" style={{ color: C.ink }}>{label}</span>
+              <ExternalLink size={14} color={C.muted} />
+            </a>
+          ))}
+        </div>
+        <p className="text-[11.5px] mt-3" style={{ color: C.muted }}>Deleting here removes the profile, posts, likes, comments and license file. The login itself is removed in Supabase → Auth users.</p>
+      </div>
+    </div>
+  );
+}
+
+function ConfirmDelete({ onConfirm, busy }) {
+  const [arm, setArm] = useState(false);
+  if (!arm) return (
+    <button onClick={() => setArm(true)} className="tap w-full h-10 rounded-xl text-[13.5px] font-semibold inline-flex items-center justify-center gap-1.5"
+      style={{ background: C.maroonSoft, color: C.maroon }}>
+      <UserX size={15} /> Delete user & content
+    </button>
+  );
+  return (
+    <div className="rounded-xl p-3" style={{ background: C.maroonSoft }}>
+      <p className="text-[12.5px] mb-2.5" style={{ color: "#6b4a46" }}>This removes their profile, posts, likes, comments and license file. It can't be undone.</p>
+      <div className="flex gap-2">
+        <button onClick={() => setArm(false)} className="tap flex-1 h-9 rounded-lg text-[13px] font-semibold" style={{ background: C.card, color: C.muted }}>Cancel</button>
+        <button onClick={onConfirm} disabled={busy} className="tap flex-1 h-9 rounded-lg text-[13px] font-bold inline-flex items-center justify-center gap-1.5" style={{ background: C.maroon, color: "#fff" }}>
+          {busy ? <Loader2 size={14} className="animate-spin" /> : "Delete"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* ============ Onboarding (real signup · role → details → OTP → license) ============ */
+const ONB_SPECS = ["Culture & Dzong", "Alpine Trekking & Camping", "Birdwatching & Wildlife", "Spiritual & Meditation", "Adventure & Outdoors"];
+const ONB_DRIVES = ["Long-distance touring", "Mountain & high passes", "Excursion & day trips", "Airport transfers", "Off-road & trailheads"];
+const ONB_VEHICLES = ["Sedan", "SUV", "Hiace Van", "Coaster Bus", "Large Coach"];
+const ONB_LANGS = ["Dzongkha", "English", "Hindi", "Nepali", "Japanese", "Mandarin", "German", "French", "Spanish", "Korean"];
+const ONB_YEARS = [["0\u20132 yrs", 1], ["3\u20135 yrs", 4], ["6\u201310 yrs", 8], ["10+ yrs", 12]];
+const LICENSE_LABEL = { guide: "Guide license (Department of Tourism)", driver: "Driving licence (RSTA)", operator: "Tour Operator licence (Department of Tourism)" };
+
+function OLabel({ children }) { return <div className="text-[13px] font-medium mb-1.5" style={{ color: C.ink }}>{children}</div>; }
+function OInput(props) { return <input {...props} className="w-full h-12 px-4 rounded-xl text-[15px] mb-4" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }} />; }
+function OCta({ children, onClick, disabled, busy }) {
+  return (
+    <button onClick={onClick} disabled={disabled || busy} className="tap w-full rounded-xl flex items-center justify-center gap-2 text-[15px] font-semibold"
+      style={{ height: 52, background: disabled ? "#C7CEC7" : C.pine, color: "#fff", cursor: disabled ? "not-allowed" : "pointer" }}>
+      {busy ? <Loader2 size={18} className="animate-spin" /> : <>{children} <ArrowRight size={18} strokeWidth={2.4} /></>}
+    </button>
+  );
+}
+
+function Onboard({ mode, session, onBack, onDone }) {
+  const signin = mode === "signin";
+  const [step, setStep] = useState(signin ? "email" : "role");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const [uid, setUid] = useState(session?.user?.id || null);
+  const [role, setRole] = useState(null);
+  const [name, setName] = useState("");
+  const [phone, setPhone] = useState("");
+  const [base, setBase] = useState("");
+  const [company, setCompany] = useState("");
+  const [years, setYears] = useState(4);
+  const [pitch, setPitch] = useState("");
+  const [langs, setLangs] = useState([]);
+  const [tags, setTags] = useState([]);
+  const [vehicle, setVehicle] = useState(null);
+  const [email, setEmail] = useState(session?.user?.email || "");
+  const [code, setCode] = useState("");
+  const [licPreview, setLicPreview] = useState(null);
+  const licRef = useRef();
+  const effUid = uid || session?.user?.id || null;
+
+  const toggleTag = (t) => setTags((T) => (T.includes(t) ? T.filter((x) => x !== t) : [...T, t]));
+  const cycleLang = (n) => setLangs((L) => {
+    const cur = L.find((x) => x.n === n);
+    if (!cur) return [...L, { n, l: "Fluent" }];
+    if (cur.l === "Fluent") return L.map((x) => (x.n === n ? { ...x, l: "Basic" } : x));
+    return L.filter((x) => x.n !== n);
+  });
+
+  const sendCode = async () => {
+    setBusy(true); setErr(null);
+    const { error } = await supabase.auth.signInWithOtp({ email: email.trim(), options: { shouldCreateUser: true } });
+    setBusy(false);
+    if (error) setErr(/sending|smtp|confirmation/i.test(error.message || "")
+      ? "We couldn't send to that address. Check it's spelled correctly and try again."
+      : error.message);
+    else setStep("code");
+  };
+  const verify = async () => {
+    setBusy(true); setErr(null);
+    const { data, error } = await supabase.auth.verifyOtp({ email: email.trim(), token: code.trim(), type: "email" });
+    setBusy(false);
+    if (error || !data?.session) { setErr("That code didn't match \u2014 check the newest email and try again."); return; }
+    setUid(data.session.user.id);
+    if (signin) {
+      const { data: prof } = await supabase.from("profiles").select("id").eq("id", data.session.user.id).maybeSingle();
+      if (prof) onDone(); else setStep("role");
+    } else setStep("license");
+  };
+  const finish = async (licensePath) => {
+    setBusy(true); setErr(null);
+    const { error } = await supabase.from("profiles").upsert({
+      id: effUid, email: (email || session?.user?.email || "").trim() || null, role,
+      full_name: name.trim(), phone: phone.trim() || null, base: base.trim() || null,
+      company_name: role === "operator" ? (company.trim() || name.trim()) : null,
+      years, pitch: pitch.trim() || null, languages: langs, tags,
+      vehicle: role === "driver" ? vehicle : null,
+      license_path: licensePath || null, license_status: licensePath ? "submitted" : "none",
+    });
+    setBusy(false);
+    if (error) { setErr(error.message); return; }
+    onDone();
+  };
+  const pickLicense = (e) => {
+    const f = e.target.files?.[0]; e.target.value = "";
+    if (!f || !f.type.startsWith("image/")) { setErr("Please choose a photo of your license."); return; }
+    setErr(null);
+    const r = new FileReader(); r.onload = () => setLicPreview(r.result); r.readAsDataURL(f);
+  };
+  const submitLicense = async () => {
+    setBusy(true); setErr(null);
+    try {
+      const small = await shrinkImage(licPreview, 1600, 0.85);
+      const blob = await (await fetch(small)).blob();
+      const path = `${effUid}/license.jpg`;
+      const { error } = await supabase.storage.from("licenses").upload(path, blob, { contentType: "image/jpeg", upsert: true });
+      if (error) throw error;
+      await finish(path);
+    } catch (e) { setBusy(false); setErr(e.message || "Upload failed \u2014 try a smaller photo."); }
+  };
+
+  const ORDER = signin ? ["email", "code", "role", "about", "details", "license"] : ["role", "about", "details", "email", "code", "license"];
+  const backStep = () => {
+    const i = ORDER.indexOf(step);
+    if (i <= 0 || step === "code") { if (step === "code") setStep("email"); else onBack(); return; }
+    setStep(ORDER[i - 1]);
+  };
+  const detailsNext = () => { if (effUid) setStep("license"); else setStep("email"); };
+  const detailsOk = role === "operator" ? true : (tags.length > 0 && langs.length > 0 && (role !== "driver" || vehicle));
+
+  return (
+    <div className="px-6 pt-5 pb-8">
+      <div className="flex items-center gap-3 mb-6">
+        <button onClick={backStep} className="tap w-9 h-9 rounded-full flex items-center justify-center" style={{ border: `1px solid ${C.line}`, background: C.card }} aria-label="Back">
+          <ChevronLeft size={19} color={C.ink} />
+        </button>
+        <div className="flex gap-1.5">
+          {ORDER.map((k) => <span key={k} className="rounded-full" style={{ width: k === step ? 18 : 7, height: 7, background: ORDER.indexOf(k) <= ORDER.indexOf(step) ? C.pine : C.lineSoft, transition: "width .25s" }} />)}
+        </div>
+      </div>
+
+      {step === "role" && (
+        <div className="fade">
+          <h2 className="text-[24px] font-semibold tracking-[-0.01em] mb-1" style={{ color: C.ink }}>How do you work with tours?</h2>
+          <p className="text-[14px] mb-5" style={{ color: C.muted }}>Pick one \u2014 it shapes the rest of your setup.</p>
+          {[["guide", "Guide", "Lead trips and share Bhutan", Compass], ["driver", "Driver", "Move guests safely on the road", Car], ["operator", "Tour Operator", "Find and book the crew", Building2]].map(([id, label, subT, Icon]) => (
+            <button key={id} onClick={() => { setRole(id); setStep("about"); }} className="tap w-full text-left rounded-2xl p-4 flex items-center gap-3.5 mb-2.5"
+              style={{ background: C.card, border: `1px solid ${role === id ? C.pine : C.line}` }}>
+              <div className="w-11 h-11 rounded-xl flex items-center justify-center shrink-0" style={{ background: C.pine }}><Icon size={20} color={C.goldSoft} /></div>
+              <div className="flex-1"><div className="text-[15.5px] font-semibold" style={{ color: C.ink }}>{label}</div>
+                <div className="text-[13px]" style={{ color: C.muted }}>{subT}</div></div>
+              <ArrowRight size={17} color={C.muted} />
+            </button>
+          ))}
+        </div>
+      )}
+
+      {step === "about" && (
+        <div className="fade">
+          <h2 className="text-[24px] font-semibold tracking-[-0.01em] mb-5" style={{ color: C.ink }}>Tell us who you are</h2>
+          <OLabel>{role === "operator" ? "Your name" : "Full name"}</OLabel>
+          <OInput value={name} onChange={(e) => setName(e.target.value)} placeholder="Karma Wangchuk" />
+          {role === "operator" && (<><OLabel>Agency name</OLabel><OInput value={company} onChange={(e) => setCompany(e.target.value)} placeholder="Druk Journeys" /></>)}
+          <OLabel>Phone</OLabel>
+          <OInput value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="+975 17 00 00 00" inputMode="tel" />
+          {role !== "operator" && (<><OLabel>Home base</OLabel><OInput value={base} onChange={(e) => setBase(e.target.value)} placeholder="Paro" /></>)}
+          <OCta disabled={name.trim().length < 2} onClick={() => setStep("details")}>Continue</OCta>
+        </div>
+      )}
+
+      {step === "details" && (
+        <div className="fade">
+          <h2 className="text-[24px] font-semibold tracking-[-0.01em] mb-5" style={{ color: C.ink }}>{role === "guide" ? "Your specialities" : role === "driver" ? "What you drive" : "About your agency"}</h2>
+          <OLabel>Years of experience</OLabel>
+          <div className="flex flex-wrap gap-2 mb-5">{ONB_YEARS.map(([l, v]) => <Chip key={l} on={years === v} onClick={() => setYears(v)}>{l}</Chip>)}</div>
+          {role === "guide" && (<>
+            <OLabel>Specialities \u2014 pick all that fit</OLabel>
+            <div className="flex flex-wrap gap-2 mb-5">{ONB_SPECS.map((t) => <Chip key={t} on={tags.includes(t)} onClick={() => toggleTag(t)}>{t}</Chip>)}</div>
+          </>)}
+          {role === "driver" && (<>
+            <OLabel>Your vehicle</OLabel>
+            <div className="flex flex-wrap gap-2 mb-5">{ONB_VEHICLES.map((v) => <Chip key={v} on={vehicle === v} onClick={() => setVehicle(v)}>{v}</Chip>)}</div>
+            <OLabel>Comfortable with</OLabel>
+            <div className="flex flex-wrap gap-2 mb-5">{ONB_DRIVES.map((t) => <Chip key={t} on={tags.includes(t)} onClick={() => toggleTag(t)}>{t}</Chip>)}</div>
+          </>)}
+          {role !== "operator" && (<>
+            <OLabel>Languages \u2014 tap once for Fluent, twice for Basic</OLabel>
+            <div className="flex flex-wrap gap-2 mb-5">
+              {ONB_LANGS.map((n) => {
+                const cur = langs.find((x) => x.n === n);
+                return (
+                  <button key={n} onClick={() => cycleLang(n)} className="tap rounded-full pl-3 pr-2.5 py-1.5 text-[13px] font-medium inline-flex items-center gap-1.5"
+                    style={{ background: cur ? C.pine : C.card, border: `1px solid ${cur ? C.pine : C.line}`, color: cur ? "#fff" : C.ink }}>
+                    {n}{cur && <span className="text-[10px] px-1.5 py-0.5 rounded-full" style={{ background: C.gold, color: "#fff" }}>{cur.l}</span>}
+                  </button>
+                );
+              })}
+            </div>
+          </>)}
+          {role === "operator" && (<>
+            <OLabel>What should the crew know about you?</OLabel>
+            <textarea value={pitch} onChange={(e) => setPitch(e.target.value)} rows={3} maxLength={220} placeholder="Routes you run, group sizes, what you value."
+              className="w-full px-3.5 py-3 rounded-xl text-[15px] resize-none mb-5" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }} />
+          </>)}
+          <OCta disabled={!detailsOk} onClick={detailsNext}>Continue</OCta>
+        </div>
+      )}
+
+      {step === "email" && (
+        <div className="fade">
+          <h2 className="text-[24px] font-semibold tracking-[-0.01em] mb-1" style={{ color: C.ink }}>{signin ? "Welcome back" : "Verify your email"}</h2>
+          <p className="text-[14px] mb-5" style={{ color: C.muted }}>We\u2019ll email you a code \u2014 no password needed.</p>
+          <OLabel>Email</OLabel>
+          <OInput value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@email.com" inputMode="email" autoCapitalize="none" />
+          {err && <p className="text-[13px] mb-3" style={{ color: C.maroon }}>{err}</p>}
+          <OCta disabled={!/\S+@\S+\.\S+/.test(email)} busy={busy} onClick={sendCode}>Send code</OCta>
+        </div>
+      )}
+
+      {step === "code" && (
+        <div className="fade">
+          <h2 className="text-[24px] font-semibold tracking-[-0.01em] mb-1" style={{ color: C.ink }}>Enter your code</h2>
+          <p className="text-[14px] mb-5" style={{ color: C.muted }}>Sent to <b style={{ color: C.ink }}>{email}</b> \u2014 check spam too.</p>
+          <input value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 8))} inputMode="numeric" placeholder="000000"
+            className="w-full h-14 rounded-xl text-center text-[26px] font-semibold mb-4" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink, letterSpacing: "0.4em" }} />
+          {err && <p className="text-[13px] mb-3" style={{ color: C.maroon }}>{err}</p>}
+          <OCta disabled={code.length < 6} busy={busy} onClick={verify}>Verify</OCta>
+          <button onClick={sendCode} className="tap w-full text-[13.5px] font-medium mt-3" style={{ color: C.muted }}>Resend code</button>
+        </div>
+      )}
+
+      {step === "license" && (
+        <div className="fade">
+          <h2 className="text-[24px] font-semibold tracking-[-0.01em] mb-1" style={{ color: C.ink }}>Verify your license</h2>
+          <p className="text-[14px] mb-5" style={{ color: C.muted }}>{LICENSE_LABEL[role] || "Your license"} \u2014 our team checks it, and your Verified badge appears once it clears.</p>
+          {licPreview ? (
+            <div className="relative rounded-xl overflow-hidden mb-4" style={{ border: `1px solid ${C.line}` }}>
+              <img src={licPreview} alt="" className="w-full block" style={{ maxHeight: 280, objectFit: "cover" }} />
+              <button onClick={() => setLicPreview(null)} className="tap absolute top-2 right-2 w-8 h-8 rounded-full flex items-center justify-center" style={{ background: "rgba(0,0,0,.55)" }}><X size={16} color="#fff" /></button>
+            </div>
+          ) : (
+            <button onClick={() => licRef.current?.click()} className="tap w-full rounded-2xl p-8 flex flex-col items-center justify-center text-center mb-4"
+              style={{ background: C.card, border: `1.5px dashed ${C.line}` }}>
+              <div className="rounded-2xl flex items-center justify-center mb-3" style={{ width: 52, height: 52, background: C.goldSoft }}><Upload size={23} color={C.gold} /></div>
+              <div className="text-[15px] font-semibold" style={{ color: C.ink }}>Upload a photo of your license</div>
+              <div className="text-[13px] mt-1" style={{ color: C.muted }}>Front side \u00b7 clear and readable</div>
+            </button>
+          )}
+          <input ref={licRef} type="file" accept="image/*" onChange={pickLicense} className="hidden" />
+          {err && <p className="text-[13px] mb-3" style={{ color: C.maroon }}>{err}</p>}
+          <OCta disabled={!licPreview} busy={busy} onClick={submitLicense}>Submit & enter the hub</OCta>
+          <button onClick={() => finish(null)} disabled={busy} className="tap w-full text-[13.5px] font-medium mt-3" style={{ color: C.muted }}>Skip for now \u2014 I\u2019ll add it later</button>
+          <div className="rounded-xl p-3 flex gap-2.5 mt-4" style={{ background: C.goldSoft }}>
+            <ShieldCheck size={16} color={C.maroon} className="shrink-0 mt-0.5" />
+            <p className="text-[12px] leading-snug" style={{ color: "#5a4a2e" }}>Your license is stored privately and never shown to other users \u2014 only our review team sees it.</p>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ============================= Chats (direct messages) ============================ */
+function ChatsTab({ me, dm, openWith, onOpened, onOpenProfile }) {
+  const [withId, setWithId] = useState(openWith || null);
+  const [find, setFind] = useState(false);
+  const msgs = dm?.dms || [];
+
+  useEffect(() => { if (openWith) { setWithId(openWith); onOpened && onOpened(); } }, [openWith]);
+
+  // people you've talked to, newest first
+  const threads = useMemo(() => {
+    const map = new Map();
+    msgs.forEach((m) => {
+      if (m.from !== me && m.to !== me) return;
+      const other = m.from === me ? m.to : m.from;
+      const cur = map.get(other);
+      if (!cur || m.ts > cur.ts) map.set(other, { other, ts: m.ts, body: m.body, fromMe: m.from === me });
+      const unread = msgs.filter((x) => x.from === other && x.to === me && !x.read).length;
+      map.get(other).unread = unread;
+    });
+    return [...map.values()].sort((a, b) => b.ts - a.ts);
+  }, [msgs, me]);
+
+  if (withId) return <DmThread me={me} otherId={withId} dm={dm} onBack={() => setWithId(null)} onOpenProfile={onOpenProfile} />;
+  if (find) return <PickContact me={me} onPick={(id) => { setFind(false); setWithId(id); }} onBack={() => setFind(false)} />;
+
+  return (
+    <div className="px-5 py-4">
+      <SectionLabel trailing={threads.length ? `${threads.length}` : ""}>Chats</SectionLabel>
+
+      <button onClick={() => setFind(true)} className="tap w-full h-12 rounded-xl inline-flex items-center justify-center gap-2 text-[14.5px] font-semibold mb-4"
+        style={{ background: C.pine, color: "#fff", boxShadow: `0 6px 16px ${C.pine}33` }}>
+        <UserPlus size={18} /> New message
+      </button>
+
+      {threads.length === 0 ? (
+        <Empty Icon={MessageCircle} title="No chats yet" body="Start a conversation with a guide, driver or operator." />
+      ) : (
+        <div className="space-y-2.5">
+          {threads.map((t) => {
+            const p = talentById(t.other);
+            return (
+              <button key={t.other} onClick={() => setWithId(t.other)} className="tap w-full text-left rounded-2xl p-3.5 flex items-center gap-3"
+                style={{ background: C.card, border: `1px solid ${t.unread ? C.pine : C.line}` }}>
+                <Avatar initials={p?.initials || "?"} size={44} />
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[14.5px] font-semibold" style={{ color: C.ink }}>{p?.name || "Member"}</span>
+                    {p?.verified && <BadgeCheck size={14} color={C.pine} />}
+                  </div>
+                  <div className="text-[12.5px] truncate" style={{ color: t.unread ? C.ink : C.muted }}>
+                    {t.fromMe ? "You: " : ""}{t.body}
+                  </div>
+                </div>
+                <div className="text-right shrink-0">
+                  <div className="text-[11px]" style={{ color: C.muted }}>{relTime(t.ts)}</div>
+                  {t.unread > 0 && <span className="inline-block mt-1 min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-bold text-white leading-[18px]" style={{ background: C.maroon }}>{t.unread}</span>}
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PickContact({ me, onPick, onBack }) {
+  const [q, setQ] = useState("");
+  const pool = [...TALENT, ...Object.values(PROFILE_DIR)].filter((p) => p.id !== me);
+  const seen = new Set();
+  const list = pool.filter((p) => {
+    if (seen.has(p.id)) return false;
+    seen.add(p.id);
+    return `${p.name} ${p.base || ""} ${roleLabel(p.role)}`.toLowerCase().includes(q.toLowerCase());
+  });
+  return (
+    <div className="fade">
+      <div className="h-14 px-4 flex items-center gap-3" style={{ borderBottom: `1px solid ${C.lineSoft}` }}>
+        <button onClick={onBack} className="tap w-9 h-9 rounded-full flex items-center justify-center" style={{ border: `1px solid ${C.line}`, background: C.card }}><ChevronLeft size={19} color={C.ink} /></button>
+        <span className="text-[15px] font-semibold" style={{ color: C.ink }}>New message</span>
+      </div>
+      <div className="px-5 py-4">
+        <div className="relative mb-3">
+          <Search size={16} color={C.muted} className="absolute left-3.5 top-1/2 -translate-y-1/2" />
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search people"
+            className="w-full h-11 pl-10 pr-4 rounded-xl text-[14px]" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }} />
+        </div>
+        {list.length === 0 ? (
+          <Empty Icon={Users} title="Nobody found" body="Guides, drivers and operators appear here once they've signed up." />
+        ) : (
+          <div className="space-y-2.5">
+            {list.map((p) => (
+              <button key={p.id} onClick={() => onPick(p.id)} className="tap w-full text-left rounded-2xl p-3.5 flex items-center gap-3" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+                <Avatar initials={p.initials} size={42} />
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[14.5px] font-semibold" style={{ color: C.ink }}>{p.name}</span>
+                    {p.verified && <BadgeCheck size={14} color={C.pine} />}
+                  </div>
+                  <div className="text-[12.5px]" style={{ color: C.muted }}>{roleLabel(p.role)}{p.base ? ` · ${p.base}` : ""}</div>
+                </div>
+                <MessageCircle size={17} color={C.muted} />
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function DmThread({ me, otherId, dm, onBack, onOpenProfile }) {
+  const [text, setText] = useState("");
+  const scrollRef = useRef();
+  const p = talentById(otherId);
+  const thread = (dm?.dms || []).filter((m) => (m.from === me && m.to === otherId) || (m.from === otherId && m.to === me)).sort((a, b) => a.ts - b.ts);
+
+  useEffect(() => { dm?.markRead && dm.markRead(otherId); }, [otherId, thread.length]);
+  useEffect(() => { if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight; }, [thread.length]);
+
+  const send = () => {
+    const t = text.trim();
+    if (!t) return;
+    dm.sendDm(otherId, t);
+    setText("");
+  };
+
+  return (
+    <div className="fade flex flex-col" style={{ height: "100%" }}>
+      <div className="shrink-0 h-14 px-3 flex items-center gap-3" style={{ borderBottom: `1px solid ${C.lineSoft}`, background: C.card }}>
+        <button onClick={onBack} className="tap w-9 h-9 rounded-full flex items-center justify-center" style={{ border: `1px solid ${C.line}` }}><ChevronLeft size={19} color={C.ink} /></button>
+        <button onClick={() => onOpenProfile && onOpenProfile(otherId)} className="tap flex items-center gap-2.5 flex-1 min-w-0 text-left">
+          <Avatar initials={p?.initials || "?"} size={36} />
+          <div className="min-w-0">
+            <div className="flex items-center gap-1.5">
+              <span className="text-[14.5px] font-semibold" style={{ color: C.ink }}>{p?.name || "Member"}</span>
+              {p?.verified && <BadgeCheck size={14} color={C.pine} />}
+            </div>
+            <div className="text-[11.5px]" style={{ color: C.muted }}>{p ? roleLabel(p.role) : ""}</div>
+          </div>
+        </button>
+      </div>
+
+      <div ref={scrollRef} className="flex-1 overflow-y-auto hidescroll px-4 py-4 space-y-2.5" style={{ background: C.bg, scrollbarWidth: "none" }}>
+        {thread.length === 0 && (
+          <p className="text-[13px] text-center py-6" style={{ color: C.muted }}>Say hello — messages are private between you two.</p>
+        )}
+        {thread.map((m) => {
+          const mine = m.from === me;
+          return (
+            <div key={m.id} className={`flex ${mine ? "justify-end" : "justify-start"}`}>
+              <div style={{ maxWidth: "80%" }}>
+                <div className="rounded-2xl px-3.5 py-2.5" style={{ background: mine ? C.pine : C.card, border: mine ? "none" : `1px solid ${C.line}`, borderBottomRightRadius: mine ? 5 : 16, borderBottomLeftRadius: mine ? 16 : 5 }}>
+                  <span className="text-[14.5px] leading-snug" style={{ color: mine ? "#fff" : C.ink }}>{m.body}</span>
+                </div>
+                <div className={`text-[10.5px] mt-0.5 ${mine ? "text-right mr-1" : "ml-1"}`} style={{ color: C.muted }}>{relTime(m.ts)}</div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="shrink-0 px-3 py-2.5 flex items-center gap-2" style={{ background: C.card, borderTop: `1px solid ${C.line}` }}>
+        <input value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => e.key === "Enter" && send()}
+          placeholder="Message…" className="flex-1 h-11 px-4 rounded-full text-[14.5px]" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
+        <button onClick={send} disabled={!text.trim()} className="tap w-11 h-11 rounded-full flex items-center justify-center shrink-0" style={{ background: text.trim() ? C.pine : "#C7CEC7" }} aria-label="Send">
+          <SendIcon size={18} color="#fff" />
+        </button>
+      </div>
     </div>
   );
 }
