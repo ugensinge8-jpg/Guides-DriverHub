@@ -606,8 +606,12 @@ function PostTab({ user, posts, onAdd, eng, onOpenProfile }) {
                   {mine && p.status !== "approved" && <StatusBadge status={p.status} reason={p.reason} />}
                 </div>
                 {p.text && <p className="text-[15px] leading-relaxed mt-3" style={{ color: C.ink }}>{p.text}</p>}
-                <PostMedia media={p.media} />
-                <PostLocation location={p.location} />
+                {p.location && p.media && p.media.kind === "photo" ? (
+                  <div className="mt-3"><MapCinema location={p.location} photo={p.media.dataUri} /></div>
+                ) : (<>
+                  <PostMedia media={p.media} />
+                  <PostLocation location={p.location} />
+                </>)}
                 <PostEngagement post={p} eng={eng} />
               </div>
             );
@@ -623,6 +627,7 @@ function Composer({ talent, onAdd }) {
   const [media, setMedia] = useState(null);       // { kind:'photo'|'video', dataUri }
   const [location, setLocation] = useState(null); // { lat, lng, place, description?, source? }
   const [picking, setPicking] = useState(false);
+  const [manual, setManual] = useState(false);
   const [error, setError] = useState(null);
   const [note, setNote] = useState(null);
   const inputRef = useRef();
@@ -654,7 +659,7 @@ function Composer({ talent, onAdd }) {
   const post = () => {
     if (!text.trim() && !media) return;
     onAdd({ talentId: talent.id, text: text.trim(), media, location });
-    setText(""); setMedia(null); setLocation(null); setPicking(false);
+    setText(""); setMedia(null); setLocation(null); setPicking(false); setManual(false);
   };
   const canPost = text.trim() || media;
   const chipLabel = location ? (location.source === "viewpoint" ? location.place : (location.place ? `Near ${location.place}` : "Pinned")) : "";
@@ -696,13 +701,22 @@ function Composer({ talent, onAdd }) {
 
       {picking && (
         <div className="mt-3 fade">
-          <select value="" onChange={(e) => { const v = VIEWPOINTS[e.target.value]; if (v) setLocation({ lat: v.lat, lng: v.lng, place: v.n, description: v.d, source: "viewpoint" }); }}
+          <select value="" onChange={(e) => { const v = VIEWPOINTS[e.target.value]; if (v) { setLocation({ lat: v.lat, lng: v.lng, place: v.n, description: v.d, source: "viewpoint" }); setManual(false); } }}
             className="w-full h-11 px-3 rounded-xl text-[14px] mb-2" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }}>
             <option value="">Choose an iconic viewpoint…</option>
             {VIEWPOINTS.map((v, i) => <option key={i} value={i}>{v.n}</option>)}
           </select>
-          <div className="text-[12.5px] mb-2" style={{ color: C.muted }}>…or tap the map for a custom spot.</div>
-          <BhutanMap value={location} onPick={(loc) => setLocation({ ...loc, source: "map" })} />
+          {location && location.source === "viewpoint" && !manual ? (
+            <>
+              <MapCinema key={location.place} location={location} />
+              <button onClick={() => setManual(true)} className="tap text-[12.5px] font-semibold mt-2" style={{ color: C.pine }}>Adjust on the map</button>
+            </>
+          ) : (
+            <>
+              <div className="text-[12.5px] mb-2" style={{ color: C.muted }}>…or tap the map for a custom spot.</div>
+              <BhutanMap value={location} onPick={(loc) => setLocation({ ...loc, source: "map" })} />
+            </>
+          )}
           {location && location.description && <p className="text-[12.5px] leading-snug mt-2" style={{ color: C.ink }}>{location.description}</p>}
           <div className="flex items-center justify-between mt-2">
             <span className="text-[12.5px]" style={{ color: C.muted }}>{location ? `${location.lat}, ${location.lng}${location.source === "map" ? " · approx." : ""}` : "No pin yet"}</span>
@@ -910,8 +924,12 @@ function Feed({ posts, eng, admin, onDelete, onOpenProfile }) {
                   {admin && <DeletePost onConfirm={() => onDelete(p.id)} />}
                 </div>
                 {p.text && <p className="text-[15px] leading-relaxed mt-3" style={{ color: C.ink }}>{p.text}</p>}
-                <PostMedia media={p.media} />
-                <PostLocation location={p.location} showMap />
+                {p.location && p.media && p.media.kind === "photo" ? (
+                  <div className="mt-3"><MapCinema location={p.location} photo={p.media.dataUri} /></div>
+                ) : (<>
+                  <PostMedia media={p.media} />
+                  <PostLocation location={p.location} showMap />
+                </>)}
                 <PostEngagement post={p} eng={eng} />
               </div>
             );
@@ -1807,6 +1825,69 @@ function PostEngagement({ post, eng }) {
               <Send size={15} color="#fff" />
             </button>
           </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ====================== Map cinema (zoom → reveal) ====================== */
+function MapCinema({ location, photo }) {
+  const S = 2.6;
+  const px = btPctX(location.lng), py = btPctY(location.lat);
+  const [phase, setPhase] = useState(0); // 0 full map · 1 zoomed · 2 photo
+  const ref = useRef(); const started = useRef(false); const timer = useRef();
+
+  const start = () => {
+    if (started.current) return;
+    started.current = true;
+    setPhase(1);
+    if (photo) timer.current = setTimeout(() => setPhase(2), 1500);
+  };
+
+  useEffect(() => {
+    let io;
+    const el = ref.current;
+    if (!el || !("IntersectionObserver" in window)) start();
+    else {
+      io = new IntersectionObserver((es) => { if (es[0].isIntersecting) { start(); io.disconnect(); } }, { threshold: 0.35 });
+      io.observe(el);
+    }
+    return () => { if (io) io.disconnect(); clearTimeout(timer.current); };
+  }, []);
+
+  const zoomed = phase >= 1;
+  const showPhoto = phase === 2;
+  const toggle = () => { if (photo && started.current) setPhase(showPhoto ? 1 : 2); };
+
+  return (
+    <div ref={ref} onClick={toggle} className="relative rounded-xl overflow-hidden select-none"
+      style={{ aspectRatio: BT_MAP_AR, background: "#e7ebe6", cursor: photo ? "pointer" : "default", border: `1px solid ${C.line}` }}>
+      <div className="absolute inset-0"
+        style={{ transform: zoomed ? `translate(${50 - px}%, ${50 - py}%) scale(${S})` : "none", transformOrigin: `${px}% ${py}%`, transition: "transform 1.4s cubic-bezier(.22,.61,.36,1)" }}>
+        <img src={mapImg} alt="" draggable="false" className="absolute inset-0 w-full h-full" style={{ objectFit: "cover" }} />
+      </div>
+
+      <div className="absolute pointer-events-none"
+        style={{ left: zoomed ? "50%" : `${px}%`, top: zoomed ? "50%" : `${py}%`, transform: "translate(-50%, -100%)",
+          transition: "left 1.4s cubic-bezier(.22,.61,.36,1), top 1.4s cubic-bezier(.22,.61,.36,1), opacity .4s", opacity: showPhoto ? 0 : 1 }}>
+        <MapPin size={26} color={C.maroon} fill={C.maroon} strokeWidth={1.4} style={{ filter: "drop-shadow(0 2px 3px rgba(0,0,0,.35))" }} />
+      </div>
+
+      {photo && (
+        <img src={photo} alt="" className="absolute inset-0 w-full h-full"
+          style={{ objectFit: "cover", opacity: showPhoto ? 1 : 0, transform: showPhoto ? "scale(1)" : "scale(1.06)", transition: "opacity .7s ease, transform .9s ease", pointerEvents: "none" }} />
+      )}
+
+      <div className="absolute left-2.5 bottom-2.5 flex items-center gap-1.5 rounded-full px-2.5 py-1"
+        style={{ background: "rgba(0,0,0,.45)", backdropFilter: "blur(4px)", opacity: zoomed ? 1 : 0, transition: "opacity .6s .5s" }}>
+        <MapPin size={12} color="#fff" />
+        <span className="text-[11.5px] font-semibold text-white">{location.place ? (location.source === "viewpoint" ? location.place : `Near ${location.place}`) : "Bhutan"}</span>
+      </div>
+
+      {photo && showPhoto && (
+        <div className="absolute right-2.5 top-2.5 w-7 h-7 rounded-full flex items-center justify-center" style={{ background: "rgba(0,0,0,.45)" }}>
+          <Map size={14} color="#fff" />
         </div>
       )}
     </div>
