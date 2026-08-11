@@ -1627,7 +1627,7 @@ function ListingForm({ operator, onBack, onPost }) {
 }
 
 /* ============================== Bhutan map =============================== */
-const BT = { W: 88.75, E: 92.12, N: 28.36, S: 26.70 };
+const BT = { W: 88.6994, E: 92.1706, N: 28.385, S: 26.645 };
 const BT_VBW = (BT.E - BT.W) * 100;
 const BT_VBH = (BT.N - BT.S) * 100;
 const btX = (lng) => (lng - BT.W) * 100;
@@ -1652,7 +1652,7 @@ const BT_PLACES = [
 const BT_LABELS = ["Paro", "Thimphu", "Punakha", "Bumthang", "Trashigang", "Phuentsholing"];
 const btBorderPath = BT_BORDER.map(([lng, lat]) => `${btX(lng).toFixed(1)},${btY(lat).toFixed(1)}`).join(" ");
 
-const BT_MAP_AR = 2.0367;
+const BT_MAP_AR = 2.1722;
 
 // Iconic photography viewpoints — selecting one fills exact coordinates + a description.
 const VIEWPOINTS = [
@@ -1662,8 +1662,8 @@ const VIEWPOINTS = [
   { n: "Punakha Suspension Bridge", lat: 27.5980, lng: 89.8880, d: "One of Bhutan\u2019s longest footbridges, strung with prayer flags over the Po Chhu." },
   { n: "Chele La Pass", lat: 27.3670, lng: 89.3450, d: "Bhutan\u2019s highest motorable pass (~3,988 m); prayer flags and views toward Jomolhari." },
   { n: "Rinpung Dzong (Paro)", lat: 27.4256, lng: 89.4200, d: "Classic whitewashed fortress above Paro town and its valley." },
-  { n: "Buddha Dordenma (Thimphu)", lat: 27.4417, lng: 89.6447, d: "51 m gilded Buddha above Thimphu \u2014 glows at golden hour." },
-  { n: "Tashichho Dzong (Thimphu)", lat: 27.4750, lng: 89.6339, d: "Riverside seat of government, beautifully floodlit at dusk." },
+  { n: "Buddha Dordenma (Thimphu)", lat: 27.4442, lng: 89.6375, d: "51 m gilded Buddha above Thimphu \u2014 glows at golden hour." },
+  { n: "Tashichho Dzong (Thimphu)", lat: 27.4894, lng: 89.6353, d: "Riverside seat of government, beautifully floodlit at dusk." },
   { n: "Gangtey / Phobjikha Valley", lat: 27.4600, lng: 90.1800, d: "Glacial valley and winter home of black-necked cranes; sweeping meadows." },
   { n: "Trongsa Dzong", lat: 27.5030, lng: 90.5070, d: "Bhutan\u2019s largest dzong, dramatic on its ridge above the gorge." },
   { n: "Jakar Dzong (Bumthang)", lat: 27.5460, lng: 90.7520, d: "The \u2018castle of the white bird\u2019 over the Chamkhar valley." },
