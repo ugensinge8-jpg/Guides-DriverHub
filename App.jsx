@@ -5,6 +5,7 @@ import {
   Search, LogOut, Newspaper, User, CalendarCheck, MessageCircle,
   Map, MessageSquare, Users, Download, Mic, Video, Heart, Share2, Trash2, Maximize2, Upload, Loader2, ArrowRight,
   Award, UserX, RefreshCw, FileCheck2, ExternalLink, UserPlus, Send as SendIcon, Lock, Eye, EyeOff,
+  ShieldAlert,
 } from "lucide-react";
 import mapImg from "./map.jpg";
 import { supabase } from "./supabase.js";
@@ -173,6 +174,7 @@ export default function App() {
   const [profileTick, setProfileTick] = useState(0);
   const [dirTick, setDirTick] = useState(0);
   const [dms, setDms] = useState([]);
+  const [authBusy, setAuthBusy] = useState(false);   // true while the signup/reset wizard is running
 
   const loadProfiles = async () => {
     if (!CLOUD) return;
@@ -224,8 +226,9 @@ export default function App() {
     return () => { on = false; };
   }, [session, profileTick]);
 
-  const realUser = CLOUD && session && myProfile && typeof myProfile === "object"
-    ? { id: session.user.id, kind: myProfile.role, talentId: session.user.id, name: myProfile.full_name, initials: initialsOf(myProfile.full_name || "?") }
+  const realUser = CLOUD && !authBusy && session && myProfile && typeof myProfile === "object"
+    ? { id: session.user.id, kind: myProfile.role, talentId: session.user.id, name: myProfile.full_name,
+        initials: initialsOf(myProfile.full_name || "?"), licenseStatus: myProfile.license_status || "none" }
     : null;
   const user = realUser || ACCOUNTS.find((a) => a.id === accountId) || null;
   const realUserRef = useRef(null);
@@ -446,7 +449,7 @@ export default function App() {
 
       <div className="w-full max-w-md flex flex-col" style={{ height: "100vh", color: C.ink }}>
         {!user ? (
-          <Login onPick={setAccountId} session={session} myProfile={myProfile} onAuthed={reloadMe} />
+          <Login onPick={setAccountId} session={session} myProfile={myProfile} onAuthed={reloadMe} onBusy={setAuthBusy} />
         ) : (
           <Shell key={user.id} user={user} posts={posts} jobs={jobs} trips={trips} listings={listings}
             actions={{ addPost, approve, reject, deletePost, reloadDirectory: loadProfiles, sendJob, setJobStatus, postChat, openChat, postListing, applyToListing, setApplicant, hireApplicant }} engagement={{ likes, comments, toggleLike, addComment, deleteComment }} dm={{ dms, sendDm, markRead }} onLogout={() => { if (session) supabase.auth.signOut(); setAccountId(null); }} />
@@ -457,15 +460,16 @@ export default function App() {
 }
 
 /* ================================ Welcome ================================= */
-function Login({ onPick, session, myProfile, onAuthed }) {
+function Login({ onPick, session, myProfile, onAuthed, onBusy }) {
   const [authView, setAuthView] = useState(null); // 'signup' | 'signin' | 'complete'
+  useEffect(() => { onBusy && onBusy(!!authView); return () => onBusy && onBusy(false); }, [authView]);
   useEffect(() => {
     if (session && myProfile === false && !authView) setAuthView("complete");
   }, [session, myProfile]);
   if (authView) {
     return (
       <div className="flex-1 overflow-y-auto hidescroll fade" style={{ scrollbarWidth: "none" }}>
-        <Onboard mode={authView} session={session} onBack={() => setAuthView(null)} onDone={onAuthed} />
+        <Onboard mode={authView} session={session} onBack={() => { setAuthView(null); onBusy && onBusy(false); }} onDone={() => { onBusy && onBusy(false); setAuthView(null); onAuthed(); }} />
       </div>
     );
   }
@@ -591,6 +595,7 @@ function Shell({ user, posts, jobs, trips, listings, actions, engagement, dm, on
   return (
     <>
       <TopBar user={user} onLogout={onLogout} />
+      <VerifyBanner user={user} />
 
       <div className="flex-1 overflow-y-auto hidescroll" style={{ scrollbarWidth: "none" }}>
         {overlay ? (
@@ -3144,6 +3149,33 @@ function DmThread({ me, otherId, dm, onBack, onOpenProfile }) {
         <button onClick={send} disabled={!text.trim()} className="tap w-11 h-11 rounded-full flex items-center justify-center shrink-0" style={{ background: text.trim() ? C.pine : "#C7CEC7" }} aria-label="Send">
           <SendIcon size={18} color="#fff" />
         </button>
+      </div>
+    </div>
+  );
+}
+
+/* ===================== Verification status banner ===================== */
+function VerifyBanner({ user }) {
+  const st = user.licenseStatus;
+  if (!st || st === "verified") return null;
+  const map = {
+    submitted: { bg: C.goldSoft, fg: "#7a5a1e", Icon: Clock,
+      title: "Verification pending",
+      body: "Our team is checking your licence. You can use the app meanwhile — your Verified badge appears once it clears." },
+    rejected: { bg: C.maroonSoft, fg: C.maroon, Icon: ShieldAlert,
+      title: "Licence not approved",
+      body: "We couldn't verify the document. Upload a clearer photo of a current licence from your profile." },
+    none: { bg: C.goldSoft, fg: "#7a5a1e", Icon: Upload,
+      title: "Licence needed",
+      body: "Add your licence to get verified — operators prioritise verified guides and drivers." },
+  }[st];
+  if (!map) return null;
+  return (
+    <div className="shrink-0 px-4 py-2.5 flex items-start gap-2.5" style={{ background: map.bg }}>
+      <map.Icon size={16} color={map.fg} className="shrink-0 mt-0.5" />
+      <div>
+        <div className="text-[12.5px] font-semibold" style={{ color: map.fg }}>{map.title}</div>
+        <div className="text-[12px] leading-snug" style={{ color: map.fg, opacity: .85 }}>{map.body}</div>
       </div>
     </div>
   );
