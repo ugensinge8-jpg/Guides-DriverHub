@@ -366,7 +366,7 @@ export default function App() {
   return (
     <div className="min-h-screen w-full flex justify-center" style={{ background: C.bg }}>
       <style>{`
-        *{ font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+        *{ font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Helvetica Neue", ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
         .tap{ transition: transform .12s ease, background .15s ease, box-shadow .15s ease, border-color .15s ease; }
         .tap:active{ transform: scale(.985); }
         .hidescroll::-webkit-scrollbar{ display:none; }
@@ -443,15 +443,11 @@ function Login({ onPick, session, myProfile, onAuthed }) {
 
       {CLOUD && (
         <div className="px-6 mt-8">
-          <div className="text-[12px] font-semibold tracking-[.14em] uppercase mb-3" style={{ color: C.gold }}>Join the hub</div>
-          <button onClick={() => setAuthView("signup")} className="tap w-full rounded-xl flex items-center justify-center gap-2 text-[15px] font-semibold"
-            style={{ height: 52, background: C.pine, color: "#fff", boxShadow: `0 6px 16px ${C.pine}33` }}>
-            Create your account <ArrowRight size={18} strokeWidth={2.4} />
+          <button onClick={() => setAuthView("signin")} className="tap w-full rounded-2xl flex items-center justify-center gap-2 text-[16px] font-semibold"
+            style={{ height: 54, background: C.pine, color: "#fff", boxShadow: `0 8px 20px ${C.pine}38` }}>
+            Sign in or create account <ArrowRight size={18} strokeWidth={2.4} />
           </button>
-          <button onClick={() => setAuthView("signin")} className="tap w-full rounded-xl text-[14.5px] font-semibold mt-2.5"
-            style={{ height: 48, background: C.card, border: `1.5px solid ${C.pine}`, color: C.pine }}>
-            I already have an account
-          </button>
+          <p className="text-center text-[12.5px] mt-2.5" style={{ color: C.muted }}>Free for guides, drivers and operators in Bhutan.</p>
         </div>
       )}
 
@@ -2441,9 +2437,10 @@ function OCta({ children, onClick, disabled, busy }) {
   );
 }
 
-function Onboard({ mode, session, onBack, onDone }) {
+function Onboard({ mode: initialMode, session, onBack, onDone }) {
+  const [mode, setMode] = useState(initialMode);
   const signin = mode === "signin";
-  const [step, setStep] = useState(signin ? "email" : "role");
+  const [step, setStep] = useState(signin ? "auth" : "role");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
   const [uid, setUid] = useState(session?.user?.id || null);
@@ -2457,7 +2454,8 @@ function Onboard({ mode, session, onBack, onDone }) {
   const [langs, setLangs] = useState([]);
   const [tags, setTags] = useState([]);
   const [vehicle, setVehicle] = useState(null);
-  const [email, setEmail] = useState(session?.user?.email || "");
+  const [email, setEmail] = useState(session?.user?.email || (typeof localStorage !== "undefined" ? localStorage.getItem("bth_email") || "" : ""));
+  const [remember, setRemember] = useState(true);
   const [code, setCode] = useState("");
   const [pw, setPw] = useState("");
   const [showPw, setShowPw] = useState(false);
@@ -2493,6 +2491,7 @@ function Onboard({ mode, session, onBack, onDone }) {
         : error.message);
       return;
     }
+    try { if (remember) localStorage.setItem("bth_email", email.trim()); else localStorage.removeItem("bth_email"); } catch (e) {}
     const { data: prof } = await supabase.from("profiles").select("id").eq("id", data.session.user.id).maybeSingle();
     if (prof) onDone(); else { setUid(data.session.user.id); setStep("role"); }
   };
@@ -2502,6 +2501,7 @@ function Onboard({ mode, session, onBack, onDone }) {
     const { error } = await supabase.auth.updateUser({ password: pw });
     setBusy(false);
     if (error) { setErr(error.message); return; }
+    try { localStorage.setItem("bth_email", email.trim()); } catch (e) {}
     if (reset) { onDone(); return; }
     setStep("license");
   };
@@ -2516,6 +2516,13 @@ function Onboard({ mode, session, onBack, onDone }) {
   };
   const finish = async (licensePath) => {
     setBusy(true); setErr(null);
+    // make sure the session is live before writing (avoids row-level security rejection)
+    const { data: sess } = await supabase.auth.getSession();
+    if (!sess?.session) {
+      setBusy(false);
+      setErr("Your session expired. Tap Resend code and verify again.");
+      return;
+    }
     const { error } = await supabase.from("profiles").upsert({
       id: effUid, email: (email || session?.user?.email || "").trim() || null, role,
       full_name: name.trim(), phone: phone.trim() || null, base: base.trim() || null,
@@ -2525,7 +2532,12 @@ function Onboard({ mode, session, onBack, onDone }) {
       license_path: licensePath || null, license_status: licensePath ? "submitted" : "none",
     });
     setBusy(false);
-    if (error) { setErr(error.message); return; }
+    if (error) {
+      setErr(/row-level security/i.test(error.message || "")
+        ? "Couldn't save your profile — the database is blocking it. Run the profiles policy SQL, then tap again."
+        : error.message);
+      return;
+    }
     onDone();
   };
   const pickLicense = (e) => {
@@ -2546,7 +2558,7 @@ function Onboard({ mode, session, onBack, onDone }) {
     } catch (e) { setBusy(false); setErr(e.message || "Upload failed — try a smaller photo."); }
   };
 
-  const ORDER = signin ? ["email", "code", "password"] : ["role", "about", "details", "email", "code", "password", "license"];
+  const ORDER = signin ? ["auth", "code", "password"] : ["role", "about", "details", "email", "code", "password", "license"];
   const backStep = () => {
     const i = ORDER.indexOf(step);
     if (i <= 0 || step === "code") { if (step === "code") setStep("email"); else onBack(); return; }
@@ -2568,8 +2580,13 @@ function Onboard({ mode, session, onBack, onDone }) {
 
       {step === "role" && (
         <div className="fade">
-          <h2 className="text-[24px] font-semibold tracking-[-0.01em] mb-1" style={{ color: C.ink }}>How do you work with tours?</h2>
-          <p className="text-[14px] mb-5" style={{ color: C.muted }}>Pick one — it shapes the rest of your setup.</p>
+          <div className="relative flex rounded-2xl p-1 mb-6" style={{ background: C.lineSoft }}>
+            <div className="absolute top-1 bottom-1 rounded-xl" style={{ width: "calc(50% - 4px)", left: "50%", background: C.card, boxShadow: "0 1px 3px rgba(0,0,0,.08)" }} />
+            <button onClick={() => { setMode("signin"); setStep("auth"); setErr(null); }} className="relative flex-1 py-2.5 text-[14.5px] font-semibold" style={{ color: C.muted }}>Sign in</button>
+            <button className="relative flex-1 py-2.5 text-[14.5px] font-semibold" style={{ color: C.ink }}>Create account</button>
+          </div>
+          <h2 className="text-[26px] font-semibold tracking-[-0.02em] mb-1" style={{ color: C.ink }}>How do you work with tours?</h2>
+          <p className="text-[14.5px] mb-5" style={{ color: C.muted }}>Pick one — it shapes the rest of your setup.</p>
           {[["guide", "Guide", "Lead trips and share Bhutan", Compass], ["driver", "Driver", "Move guests safely on the road", Car], ["operator", "Tour Operator", "Find and book the crew", Building2]].map(([id, label, subT, Icon]) => (
             <button key={id} onClick={() => { setRole(id); setStep("about"); }} className="tap w-full text-left rounded-2xl p-4 flex items-center gap-3.5 mb-2.5"
               style={{ background: C.card, border: `1px solid ${role === id ? C.pine : C.line}` }}>
@@ -2633,42 +2650,69 @@ function Onboard({ mode, session, onBack, onDone }) {
         </div>
       )}
 
-      {step === "email" && (
+      {step === "auth" && (
         <div className="fade">
-          <h2 className="text-[24px] font-semibold tracking-[-0.01em] mb-1" style={{ color: C.ink }}>{signin ? "Welcome back" : "Verify your email"}</h2>
-          <p className="text-[14px] mb-5" style={{ color: C.muted }}>{signin ? "Sign in with your email and password." : "We’ll email you a code to confirm it’s you."}</p>
-          <OLabel>Email</OLabel>
-          <OInput value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@email.com" inputMode="email" autoCapitalize="none" />
+          {/* segmented toggle */}
+          <div className="relative flex rounded-2xl p-1 mb-6" style={{ background: C.lineSoft }}>
+            <div className="absolute top-1 bottom-1 rounded-xl" style={{ width: "calc(50% - 4px)", left: signin ? 4 : "50%", background: C.card, boxShadow: "0 1px 3px rgba(0,0,0,.08)", transition: "left .26s cubic-bezier(.22,.61,.36,1)" }} />
+            <button onClick={() => { setMode("signin"); setStep("auth"); setErr(null); }} className="relative flex-1 py-2.5 text-[14.5px] font-semibold" style={{ color: signin ? C.ink : C.muted }}>Sign in</button>
+            <button onClick={() => { setMode("signup"); setStep("role"); setErr(null); }} className="relative flex-1 py-2.5 text-[14.5px] font-semibold" style={{ color: signin ? C.muted : C.ink }}>Create account</button>
+          </div>
 
-          {signin && (
-            <>
-              <OLabel>Password</OLabel>
-              <div className="relative mb-4">
-                <Lock size={16} color={C.muted} className="absolute left-4 top-1/2 -translate-y-1/2" />
-                <input value={pw} onChange={(e) => setPw(e.target.value)} type={showPw ? "text" : "password"}
-                  onKeyDown={(e) => e.key === "Enter" && pw.length >= 6 && signInWithPassword()}
-                  placeholder="Your password" className="w-full h-12 pl-11 pr-12 rounded-xl text-[15px]"
-                  style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }} />
-                <button onClick={() => setShowPw((v) => !v)} className="tap absolute right-3 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full flex items-center justify-center" aria-label="Show password">
-                  {showPw ? <EyeOff size={16} color={C.muted} /> : <Eye size={16} color={C.muted} />}
-                </button>
-              </div>
-            </>
-          )}
+          <h2 className="text-[26px] font-semibold tracking-[-0.02em] mb-1" style={{ color: C.ink }}>Welcome back</h2>
+          <p className="text-[14.5px] mb-6" style={{ color: C.muted }}>Sign in to your account.</p>
+
+          <OLabel>Email</OLabel>
+          <div className="relative mb-4">
+            <Mail size={16} color={C.muted} className="absolute left-4 top-1/2 -translate-y-1/2" />
+            <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@email.com" inputMode="email" autoCapitalize="none" autoComplete="email"
+              className="w-full h-13 pl-11 pr-4 rounded-2xl text-[16px]" style={{ height: 52, background: C.card, border: `1px solid ${C.line}`, color: C.ink }} />
+          </div>
+
+          <OLabel>Password</OLabel>
+          <div className="relative mb-3">
+            <Lock size={16} color={C.muted} className="absolute left-4 top-1/2 -translate-y-1/2" />
+            <input value={pw} onChange={(e) => setPw(e.target.value)} type={showPw ? "text" : "password"} autoComplete="current-password"
+              onKeyDown={(e) => e.key === "Enter" && /\S+@\S+\.\S+/.test(email) && pw.length >= 6 && signInWithPassword()}
+              placeholder="Your password" className="w-full pl-11 pr-12 rounded-2xl text-[16px]"
+              style={{ height: 52, background: C.card, border: `1px solid ${C.line}`, color: C.ink }} />
+            <button onClick={() => setShowPw((v) => !v)} className="tap absolute right-3 top-1/2 -translate-y-1/2 w-9 h-9 rounded-full flex items-center justify-center" aria-label="Show password">
+              {showPw ? <EyeOff size={17} color={C.muted} /> : <Eye size={17} color={C.muted} />}
+            </button>
+          </div>
+
+          <div className="flex items-center justify-between mb-5">
+            <button onClick={() => setRemember((v) => !v)} className="tap inline-flex items-center gap-2">
+              <span className="w-5 h-5 rounded-md flex items-center justify-center" style={{ background: remember ? C.pine : C.card, border: `1.5px solid ${remember ? C.pine : C.line}` }}>
+                {remember && <Check size={12} color="#fff" strokeWidth={3.2} />}
+              </span>
+              <span className="text-[13.5px]" style={{ color: C.ink }}>Remember me</span>
+            </button>
+            <button onClick={() => { if (!/\S+@\S+\.\S+/.test(email)) { setErr("Enter your email first."); return; } setReset(true); setErr(null); sendCode(); }}
+              className="tap text-[13.5px] font-semibold" style={{ color: C.pine }}>Forgot password?</button>
+          </div>
 
           {err && <p className="text-[13px] mb-3" style={{ color: C.maroon }}>{err}</p>}
+          <OCta disabled={!/\S+@\S+\.\S+/.test(email) || pw.length < 6} busy={busy} onClick={signInWithPassword}>Sign in</OCta>
 
-          {signin ? (
-            <>
-              <OCta disabled={!/\S+@\S+\.\S+/.test(email) || pw.length < 6} busy={busy} onClick={signInWithPassword}>Sign in</OCta>
-              <button onClick={() => { if (!/\S+@\S+\.\S+/.test(email)) { setErr("Enter your email first, then tap this."); return; } setReset(true); setErr(null); sendCode(); }}
-                className="tap w-full text-[13.5px] font-medium mt-3" style={{ color: C.muted }}>
-                Forgot password? Email me a code
-              </button>
-            </>
-          ) : (
-            <OCta disabled={!/\S+@\S+\.\S+/.test(email)} busy={busy} onClick={sendCode}>Send code</OCta>
-          )}
+          <p className="text-center text-[13px] mt-5" style={{ color: C.muted }}>
+            New here? <button onClick={() => { setMode("signup"); setStep("role"); }} className="tap font-semibold" style={{ color: C.pine }}>Create an account</button>
+          </p>
+        </div>
+      )}
+
+      {step === "email" && (
+        <div className="fade">
+          <h2 className="text-[26px] font-semibold tracking-[-0.02em] mb-1" style={{ color: C.ink }}>Verify your email</h2>
+          <p className="text-[14.5px] mb-6" style={{ color: C.muted }}>We'll send a code to confirm it's you.</p>
+          <OLabel>Email</OLabel>
+          <div className="relative mb-4">
+            <Mail size={16} color={C.muted} className="absolute left-4 top-1/2 -translate-y-1/2" />
+            <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@email.com" inputMode="email" autoCapitalize="none" autoComplete="email"
+              className="w-full pl-11 pr-4 rounded-2xl text-[16px]" style={{ height: 52, background: C.card, border: `1px solid ${C.line}`, color: C.ink }} />
+          </div>
+          {err && <p className="text-[13px] mb-3" style={{ color: C.maroon }}>{err}</p>}
+          <OCta disabled={!/\S+@\S+\.\S+/.test(email)} busy={busy} onClick={sendCode}>Send code</OCta>
         </div>
       )}
 
