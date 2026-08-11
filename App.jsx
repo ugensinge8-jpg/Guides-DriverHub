@@ -4,7 +4,7 @@ import {
   BadgeCheck, MapPin, Inbox, ChevronLeft, Star, Phone, Mail, Briefcase,
   Search, LogOut, Newspaper, User, CalendarCheck, MessageCircle,
   Map, MessageSquare, Users, Download, Mic, Video, Heart, Share2, Trash2, Maximize2, Upload, Loader2, ArrowRight,
-  Award, UserX, RefreshCw, FileCheck2, ExternalLink, UserPlus, Send as SendIcon,
+  Award, UserX, RefreshCw, FileCheck2, ExternalLink, UserPlus, Send as SendIcon, Lock, Eye, EyeOff,
 } from "lucide-react";
 import mapImg from "./map.jpg";
 import { supabase } from "./supabase.js";
@@ -499,9 +499,9 @@ function WelcomeBullet({ Icon, title, body }) {
 
 /* ================================= Shell ================================== */
 const NAV = {
-  guide: [{ id: "post", label: "Feed", Icon: Newspaper }, { id: "jobs", label: "Jobs", Icon: Briefcase }, { id: "trips", label: "Trips", Icon: Map }, { id: "chats", label: "Chats", Icon: MessageCircle }, { id: "profile", label: "Profile", Icon: User }],
-  driver: [{ id: "post", label: "Feed", Icon: Newspaper }, { id: "jobs", label: "Jobs", Icon: Briefcase }, { id: "trips", label: "Trips", Icon: Map }, { id: "chats", label: "Chats", Icon: MessageCircle }, { id: "profile", label: "Profile", Icon: User }],
-  operator: [{ id: "discover", label: "Discover", Icon: Search }, { id: "requests", label: "Jobs", Icon: Briefcase }, { id: "trips", label: "Trips", Icon: Map }, { id: "chats", label: "Chats", Icon: MessageCircle }, { id: "feed", label: "Feed", Icon: Newspaper }],
+  guide: [{ id: "post", label: "Feed", Icon: Newspaper }, { id: "jobs", label: "Jobs", Icon: Briefcase }, { id: "trips", label: "Trips", Icon: Map }, { id: "chats", label: "Messages", Icon: MessageSquare }, { id: "profile", label: "Profile", Icon: User }],
+  driver: [{ id: "post", label: "Feed", Icon: Newspaper }, { id: "jobs", label: "Jobs", Icon: Briefcase }, { id: "trips", label: "Trips", Icon: Map }, { id: "chats", label: "Messages", Icon: MessageSquare }, { id: "profile", label: "Profile", Icon: User }],
+  operator: [{ id: "discover", label: "Discover", Icon: Search }, { id: "requests", label: "Jobs", Icon: Briefcase }, { id: "trips", label: "Trips", Icon: Map }, { id: "chats", label: "Messages", Icon: MessageSquare }, { id: "feed", label: "Feed", Icon: Newspaper }],
   admin: [{ id: "review", label: "Review", Icon: ShieldCheck }, { id: "feed", label: "Feed", Icon: Newspaper }, { id: "users", label: "Users", Icon: Users }],
 };
 const DEFAULT_TAB = { guide: "post", driver: "post", operator: "discover", admin: "review" };
@@ -546,7 +546,7 @@ function Shell({ user, posts, jobs, trips, listings, actions, engagement, dm, on
             {tab === "post" && <PostTab user={user} posts={posts} onAdd={actions.addPost} eng={eng} onOpenProfile={openProfile} />}
             {tab === "jobs" && <JobsHub user={user} jobs={jobs} listings={listings} actions={actions} />}
             {tab === "trips" && <TripsTab user={user} trips={trips} actions={actions} />}
-            {tab === "chats" && <ChatsTab me={actorId} dm={dm} openWith={dmWith} onOpened={() => setDmWith(null)} onOpenProfile={openProfile} />}
+            {tab === "chats" && <ChatsTab user={user} me={actorId} dm={dm} trips={trips} actions={actions} openWith={dmWith} onOpened={() => setDmWith(null)} onOpenProfile={openProfile} />}
             {tab === "profile" && <TalentProfile talent={talentById(user.talentId)} posts={posts} eng={eng} self onBack={null} />}
             {tab === "discover" && <Discover onOpen={openProfile} />}
             {tab === "requests" && <OperatorJobs user={user} jobs={jobs} listings={listings} posts={posts} actions={actions} onOpen={openProfile} />}
@@ -1392,7 +1392,10 @@ function TripHub({ user, meId, trip, actions, onBack }) {
         )}
 
         <SectionLabel>Group chat</SectionLabel>
-        <Chat user={user} meId={meId} trip={trip} state={state} actions={actions} />
+        <div className="rounded-xl px-4 py-3.5 flex items-center gap-3" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+          <div className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0" style={{ background: C.pine }}><MessageSquare size={17} color={C.goldSoft} /></div>
+          <div className="flex-1 text-[13.5px]" style={{ color: C.muted }}>Crew chat for this trip lives in <b style={{ color: C.ink }}>Messages</b>.</div>
+        </div>
       </div>
     </div>
   );
@@ -2424,7 +2427,7 @@ const ONB_SPECS = ["Culture & Dzong", "Alpine Trekking & Camping", "Birdwatching
 const ONB_DRIVES = ["Long-distance touring", "Mountain & high passes", "Excursion & day trips", "Airport transfers", "Off-road & trailheads"];
 const ONB_VEHICLES = ["Sedan", "SUV", "Hiace Van", "Coaster Bus", "Large Coach"];
 const ONB_LANGS = ["Dzongkha", "English", "Hindi", "Nepali", "Japanese", "Mandarin", "German", "French", "Spanish", "Korean"];
-const ONB_YEARS = [["0\u20132 yrs", 1], ["3\u20135 yrs", 4], ["6\u201310 yrs", 8], ["10+ yrs", 12]];
+const ONB_YEARS = [["0–2 yrs", 1], ["3–5 yrs", 4], ["6–10 yrs", 8], ["10+ yrs", 12]];
 const LICENSE_LABEL = { guide: "Guide license (Department of Tourism)", driver: "Driving licence (RSTA)", operator: "Tour Operator licence (Department of Tourism)" };
 
 function OLabel({ children }) { return <div className="text-[13px] font-medium mb-1.5" style={{ color: C.ink }}>{children}</div>; }
@@ -2456,6 +2459,9 @@ function Onboard({ mode, session, onBack, onDone }) {
   const [vehicle, setVehicle] = useState(null);
   const [email, setEmail] = useState(session?.user?.email || "");
   const [code, setCode] = useState("");
+  const [pw, setPw] = useState("");
+  const [showPw, setShowPw] = useState(false);
+  const [reset, setReset] = useState(false);
   const [licPreview, setLicPreview] = useState(null);
   const licRef = useRef();
   const effUid = uid || session?.user?.id || null;
@@ -2470,23 +2476,43 @@ function Onboard({ mode, session, onBack, onDone }) {
 
   const sendCode = async () => {
     setBusy(true); setErr(null);
-    const { error } = await supabase.auth.signInWithOtp({ email: email.trim(), options: { shouldCreateUser: true } });
+    const { error } = await supabase.auth.signInWithOtp({ email: email.trim(), options: { shouldCreateUser: !signin } });
     setBusy(false);
     if (error) setErr(/sending|smtp|confirmation/i.test(error.message || "")
       ? "We couldn't send to that address. Check it's spelled correctly and try again."
       : error.message);
     else setStep("code");
   };
+  const signInWithPassword = async () => {
+    setBusy(true); setErr(null);
+    const { data, error } = await supabase.auth.signInWithPassword({ email: email.trim(), password: pw });
+    setBusy(false);
+    if (error) {
+      setErr(/invalid login/i.test(error.message || "")
+        ? "That email and password don't match. Try again, or use 'Forgot password'."
+        : error.message);
+      return;
+    }
+    const { data: prof } = await supabase.from("profiles").select("id").eq("id", data.session.user.id).maybeSingle();
+    if (prof) onDone(); else { setUid(data.session.user.id); setStep("role"); }
+  };
+
+  const savePassword = async () => {
+    setBusy(true); setErr(null);
+    const { error } = await supabase.auth.updateUser({ password: pw });
+    setBusy(false);
+    if (error) { setErr(error.message); return; }
+    if (reset) { onDone(); return; }
+    setStep("license");
+  };
+
   const verify = async () => {
     setBusy(true); setErr(null);
     const { data, error } = await supabase.auth.verifyOtp({ email: email.trim(), token: code.trim(), type: "email" });
     setBusy(false);
-    if (error || !data?.session) { setErr("That code didn't match \u2014 check the newest email and try again."); return; }
+    if (error || !data?.session) { setErr("That code didn't match — check the newest email and try again."); return; }
     setUid(data.session.user.id);
-    if (signin) {
-      const { data: prof } = await supabase.from("profiles").select("id").eq("id", data.session.user.id).maybeSingle();
-      if (prof) onDone(); else setStep("role");
-    } else setStep("license");
+    setStep("password");
   };
   const finish = async (licensePath) => {
     setBusy(true); setErr(null);
@@ -2517,10 +2543,10 @@ function Onboard({ mode, session, onBack, onDone }) {
       const { error } = await supabase.storage.from("licenses").upload(path, blob, { contentType: "image/jpeg", upsert: true });
       if (error) throw error;
       await finish(path);
-    } catch (e) { setBusy(false); setErr(e.message || "Upload failed \u2014 try a smaller photo."); }
+    } catch (e) { setBusy(false); setErr(e.message || "Upload failed — try a smaller photo."); }
   };
 
-  const ORDER = signin ? ["email", "code", "role", "about", "details", "license"] : ["role", "about", "details", "email", "code", "license"];
+  const ORDER = signin ? ["email", "code", "password"] : ["role", "about", "details", "email", "code", "password", "license"];
   const backStep = () => {
     const i = ORDER.indexOf(step);
     if (i <= 0 || step === "code") { if (step === "code") setStep("email"); else onBack(); return; }
@@ -2543,7 +2569,7 @@ function Onboard({ mode, session, onBack, onDone }) {
       {step === "role" && (
         <div className="fade">
           <h2 className="text-[24px] font-semibold tracking-[-0.01em] mb-1" style={{ color: C.ink }}>How do you work with tours?</h2>
-          <p className="text-[14px] mb-5" style={{ color: C.muted }}>Pick one \u2014 it shapes the rest of your setup.</p>
+          <p className="text-[14px] mb-5" style={{ color: C.muted }}>Pick one — it shapes the rest of your setup.</p>
           {[["guide", "Guide", "Lead trips and share Bhutan", Compass], ["driver", "Driver", "Move guests safely on the road", Car], ["operator", "Tour Operator", "Find and book the crew", Building2]].map(([id, label, subT, Icon]) => (
             <button key={id} onClick={() => { setRole(id); setStep("about"); }} className="tap w-full text-left rounded-2xl p-4 flex items-center gap-3.5 mb-2.5"
               style={{ background: C.card, border: `1px solid ${role === id ? C.pine : C.line}` }}>
@@ -2575,7 +2601,7 @@ function Onboard({ mode, session, onBack, onDone }) {
           <OLabel>Years of experience</OLabel>
           <div className="flex flex-wrap gap-2 mb-5">{ONB_YEARS.map(([l, v]) => <Chip key={l} on={years === v} onClick={() => setYears(v)}>{l}</Chip>)}</div>
           {role === "guide" && (<>
-            <OLabel>Specialities \u2014 pick all that fit</OLabel>
+            <OLabel>Specialities — pick all that fit</OLabel>
             <div className="flex flex-wrap gap-2 mb-5">{ONB_SPECS.map((t) => <Chip key={t} on={tags.includes(t)} onClick={() => toggleTag(t)}>{t}</Chip>)}</div>
           </>)}
           {role === "driver" && (<>
@@ -2585,7 +2611,7 @@ function Onboard({ mode, session, onBack, onDone }) {
             <div className="flex flex-wrap gap-2 mb-5">{ONB_DRIVES.map((t) => <Chip key={t} on={tags.includes(t)} onClick={() => toggleTag(t)}>{t}</Chip>)}</div>
           </>)}
           {role !== "operator" && (<>
-            <OLabel>Languages \u2014 tap once for Fluent, twice for Basic</OLabel>
+            <OLabel>Languages — tap once for Fluent, twice for Basic</OLabel>
             <div className="flex flex-wrap gap-2 mb-5">
               {ONB_LANGS.map((n) => {
                 const cur = langs.find((x) => x.n === n);
@@ -2610,18 +2636,46 @@ function Onboard({ mode, session, onBack, onDone }) {
       {step === "email" && (
         <div className="fade">
           <h2 className="text-[24px] font-semibold tracking-[-0.01em] mb-1" style={{ color: C.ink }}>{signin ? "Welcome back" : "Verify your email"}</h2>
-          <p className="text-[14px] mb-5" style={{ color: C.muted }}>We\u2019ll email you a code \u2014 no password needed.</p>
+          <p className="text-[14px] mb-5" style={{ color: C.muted }}>{signin ? "Sign in with your email and password." : "We’ll email you a code to confirm it’s you."}</p>
           <OLabel>Email</OLabel>
           <OInput value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@email.com" inputMode="email" autoCapitalize="none" />
+
+          {signin && (
+            <>
+              <OLabel>Password</OLabel>
+              <div className="relative mb-4">
+                <Lock size={16} color={C.muted} className="absolute left-4 top-1/2 -translate-y-1/2" />
+                <input value={pw} onChange={(e) => setPw(e.target.value)} type={showPw ? "text" : "password"}
+                  onKeyDown={(e) => e.key === "Enter" && pw.length >= 6 && signInWithPassword()}
+                  placeholder="Your password" className="w-full h-12 pl-11 pr-12 rounded-xl text-[15px]"
+                  style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }} />
+                <button onClick={() => setShowPw((v) => !v)} className="tap absolute right-3 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full flex items-center justify-center" aria-label="Show password">
+                  {showPw ? <EyeOff size={16} color={C.muted} /> : <Eye size={16} color={C.muted} />}
+                </button>
+              </div>
+            </>
+          )}
+
           {err && <p className="text-[13px] mb-3" style={{ color: C.maroon }}>{err}</p>}
-          <OCta disabled={!/\S+@\S+\.\S+/.test(email)} busy={busy} onClick={sendCode}>Send code</OCta>
+
+          {signin ? (
+            <>
+              <OCta disabled={!/\S+@\S+\.\S+/.test(email) || pw.length < 6} busy={busy} onClick={signInWithPassword}>Sign in</OCta>
+              <button onClick={() => { if (!/\S+@\S+\.\S+/.test(email)) { setErr("Enter your email first, then tap this."); return; } setReset(true); setErr(null); sendCode(); }}
+                className="tap w-full text-[13.5px] font-medium mt-3" style={{ color: C.muted }}>
+                Forgot password? Email me a code
+              </button>
+            </>
+          ) : (
+            <OCta disabled={!/\S+@\S+\.\S+/.test(email)} busy={busy} onClick={sendCode}>Send code</OCta>
+          )}
         </div>
       )}
 
       {step === "code" && (
         <div className="fade">
           <h2 className="text-[24px] font-semibold tracking-[-0.01em] mb-1" style={{ color: C.ink }}>Enter your code</h2>
-          <p className="text-[14px] mb-5" style={{ color: C.muted }}>Sent to <b style={{ color: C.ink }}>{email}</b> \u2014 check spam too.</p>
+          <p className="text-[14px] mb-5" style={{ color: C.muted }}>Sent to <b style={{ color: C.ink }}>{email}</b> — check spam too.</p>
           <input value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 8))} inputMode="numeric" placeholder="000000"
             className="w-full h-14 rounded-xl text-center text-[26px] font-semibold mb-4" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink, letterSpacing: "0.4em" }} />
           {err && <p className="text-[13px] mb-3" style={{ color: C.maroon }}>{err}</p>}
@@ -2630,10 +2684,30 @@ function Onboard({ mode, session, onBack, onDone }) {
         </div>
       )}
 
+      {step === "password" && (
+        <div className="fade">
+          <h2 className="text-[24px] font-semibold tracking-[-0.01em] mb-1" style={{ color: C.ink }}>{reset ? "Choose a new password" : "Create a password"}</h2>
+          <p className="text-[14px] mb-5" style={{ color: C.muted }}>So you can sign in quickly next time — no code needed.</p>
+          <OLabel>Password</OLabel>
+          <div className="relative mb-2">
+            <Lock size={16} color={C.muted} className="absolute left-4 top-1/2 -translate-y-1/2" />
+            <input value={pw} onChange={(e) => setPw(e.target.value)} type={showPw ? "text" : "password"}
+              placeholder="At least 6 characters" className="w-full h-12 pl-11 pr-12 rounded-xl text-[15px]"
+              style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }} />
+            <button onClick={() => setShowPw((v) => !v)} className="tap absolute right-3 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full flex items-center justify-center" aria-label="Show password">
+              {showPw ? <EyeOff size={16} color={C.muted} /> : <Eye size={16} color={C.muted} />}
+            </button>
+          </div>
+          <p className="text-[12px] mb-4" style={{ color: pw.length >= 6 ? C.pine : C.muted }}>{pw.length >= 6 ? "Good to go." : "6 characters or more."}</p>
+          {err && <p className="text-[13px] mb-3" style={{ color: C.maroon }}>{err}</p>}
+          <OCta disabled={pw.length < 6} busy={busy} onClick={savePassword}>{reset ? "Save & continue" : "Continue"}</OCta>
+        </div>
+      )}
+
       {step === "license" && (
         <div className="fade">
           <h2 className="text-[24px] font-semibold tracking-[-0.01em] mb-1" style={{ color: C.ink }}>Verify your license</h2>
-          <p className="text-[14px] mb-5" style={{ color: C.muted }}>{LICENSE_LABEL[role] || "Your license"} \u2014 our team checks it, and your Verified badge appears once it clears.</p>
+          <p className="text-[14px] mb-5" style={{ color: C.muted }}>{LICENSE_LABEL[role] || "Your license"} — our team checks it, and your Verified badge appears once it clears.</p>
           {licPreview ? (
             <div className="relative rounded-xl overflow-hidden mb-4" style={{ border: `1px solid ${C.line}` }}>
               <img src={licPreview} alt="" className="w-full block" style={{ maxHeight: 280, objectFit: "cover" }} />
@@ -2644,16 +2718,16 @@ function Onboard({ mode, session, onBack, onDone }) {
               style={{ background: C.card, border: `1.5px dashed ${C.line}` }}>
               <div className="rounded-2xl flex items-center justify-center mb-3" style={{ width: 52, height: 52, background: C.goldSoft }}><Upload size={23} color={C.gold} /></div>
               <div className="text-[15px] font-semibold" style={{ color: C.ink }}>Upload a photo of your license</div>
-              <div className="text-[13px] mt-1" style={{ color: C.muted }}>Front side \u00b7 clear and readable</div>
+              <div className="text-[13px] mt-1" style={{ color: C.muted }}>Front side · clear and readable</div>
             </button>
           )}
           <input ref={licRef} type="file" accept="image/*" onChange={pickLicense} className="hidden" />
           {err && <p className="text-[13px] mb-3" style={{ color: C.maroon }}>{err}</p>}
           <OCta disabled={!licPreview} busy={busy} onClick={submitLicense}>Submit & enter the hub</OCta>
-          <button onClick={() => finish(null)} disabled={busy} className="tap w-full text-[13.5px] font-medium mt-3" style={{ color: C.muted }}>Skip for now \u2014 I\u2019ll add it later</button>
+          <button onClick={() => finish(null)} disabled={busy} className="tap w-full text-[13.5px] font-medium mt-3" style={{ color: C.muted }}>Skip for now — I’ll add it later</button>
           <div className="rounded-xl p-3 flex gap-2.5 mt-4" style={{ background: C.goldSoft }}>
             <ShieldCheck size={16} color={C.maroon} className="shrink-0 mt-0.5" />
-            <p className="text-[12px] leading-snug" style={{ color: "#5a4a2e" }}>Your license is stored privately and never shown to other users \u2014 only our review team sees it.</p>
+            <p className="text-[12px] leading-snug" style={{ color: "#5a4a2e" }}>Your license is stored privately and never shown to other users — only our review team sees it.</p>
           </div>
         </div>
       )}
@@ -2661,58 +2735,101 @@ function Onboard({ mode, session, onBack, onDone }) {
   );
 }
 
-/* ============================= Chats (direct messages) ============================ */
-function ChatsTab({ me, dm, openWith, onOpened, onOpenProfile }) {
+/* ===================== Messages · unified inbox (trips + DMs) ==================== */
+function ChatsTab({ user, me, dm, trips, actions, openWith, onOpened, onOpenProfile }) {
   const [withId, setWithId] = useState(openWith || null);
+  const [tripId, setTripId] = useState(null);
   const [find, setFind] = useState(false);
   const msgs = dm?.dms || [];
 
   useEffect(() => { if (openWith) { setWithId(openWith); onOpened && onOpened(); } }, [openWith]);
 
-  // people you've talked to, newest first
+  const myTrips = (trips || []).filter((tr) =>
+    user.kind === "operator" ? tr.operator === user.name : tr.members.some((m) => m.id === user.talentId)
+  );
+
   const threads = useMemo(() => {
     const map = new Map();
     msgs.forEach((m) => {
       if (m.from !== me && m.to !== me) return;
       const other = m.from === me ? m.to : m.from;
-      const cur = map.get(other);
-      if (!cur || m.ts > cur.ts) map.set(other, { other, ts: m.ts, body: m.body, fromMe: m.from === me });
-      const unread = msgs.filter((x) => x.from === other && x.to === me && !x.read).length;
-      map.get(other).unread = unread;
+      const prev = map.get(other);
+      if (!prev || m.ts > prev.ts) map.set(other, { other, ts: m.ts, body: m.body, fromMe: m.from === me, unread: 0 });
     });
+    map.forEach((v, k) => { v.unread = msgs.filter((x) => x.from === k && x.to === me && !x.read).length; });
     return [...map.values()].sort((a, b) => b.ts - a.ts);
   }, [msgs, me]);
 
+  const openTrip = myTrips.find((t) => t.id === tripId);
+  if (openTrip) return <TripChatView user={user} meId={me} trip={openTrip} actions={actions} onBack={() => setTripId(null)} />;
   if (withId) return <DmThread me={me} otherId={withId} dm={dm} onBack={() => setWithId(null)} onOpenProfile={onOpenProfile} />;
   if (find) return <PickContact me={me} onPick={(id) => { setFind(false); setWithId(id); }} onBack={() => setFind(false)} />;
 
   return (
     <div className="px-5 py-4">
-      <SectionLabel trailing={threads.length ? `${threads.length}` : ""}>Chats</SectionLabel>
+      {/* TRIP CHANNELS */}
+      <div className="flex items-center justify-between mb-2.5">
+        <div className="text-[11.5px] font-semibold tracking-[.14em] uppercase" style={{ color: C.gold }}>Trip channels</div>
+        <span className="text-[11.5px]" style={{ color: C.muted }}>{myTrips.length}</span>
+      </div>
+      {myTrips.length === 0 ? (
+        <div className="rounded-xl px-4 py-3 mb-6 text-[13px]" style={{ background: C.card, border: `1px dashed ${C.line}`, color: C.muted }}>
+          No trips yet — a channel opens automatically when a booking is confirmed.
+        </div>
+      ) : (
+        <div className="rounded-2xl overflow-hidden mb-6" style={{ border: `1px solid ${C.line}` }}>
+          {myTrips.map((tr, idx) => {
+            const state = tripStateNow(tr);
+            const last = [...tr.chat.messages].reverse().find((m) => m.kind !== "system");
+            const live = state === "active";
+            return (
+              <button key={tr.id} onClick={() => setTripId(tr.id)} className="tap w-full text-left px-4 py-3.5 flex items-center gap-3"
+                style={{ background: C.card, borderTop: idx ? `1px solid ${C.lineSoft}` : "none" }}>
+                <div className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0" style={{ background: live ? C.pine : C.bg }}>
+                  <span className="text-[15px] font-bold" style={{ color: live ? C.goldSoft : C.muted }}>#</span>
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="text-[14.5px] font-semibold truncate" style={{ color: C.ink }}>{tr.title}</div>
+                  <div className="text-[12px] truncate" style={{ color: C.muted }}>
+                    {last ? `${last.senderId === me ? "You: " : ""}${last.kind === "photo" ? "Photo" : last.body}` : `${fmtDate(tr.start)} – ${fmtDate(tr.end)}`}
+                  </div>
+                </div>
+                <div className="shrink-0 flex items-center gap-2">
+                  <CrewAvatars members={tr.members} size={22} />
+                  <TripStateBadge state={state} />
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      )}
 
-      <button onClick={() => setFind(true)} className="tap w-full h-12 rounded-xl inline-flex items-center justify-center gap-2 text-[14.5px] font-semibold mb-4"
-        style={{ background: C.pine, color: "#fff", boxShadow: `0 6px 16px ${C.pine}33` }}>
-        <UserPlus size={18} /> New message
-      </button>
+      {/* DIRECT MESSAGES */}
+      <div className="flex items-center justify-between mb-2.5">
+        <div className="text-[11.5px] font-semibold tracking-[.14em] uppercase" style={{ color: C.gold }}>Direct messages</div>
+        <button onClick={() => setFind(true)} className="tap inline-flex items-center gap-1.5 text-[12.5px] font-semibold" style={{ color: C.pine }}>
+          <UserPlus size={14} /> New
+        </button>
+      </div>
 
       {threads.length === 0 ? (
-        <Empty Icon={MessageCircle} title="No chats yet" body="Start a conversation with a guide, driver or operator." />
+        <div className="rounded-xl px-4 py-3 text-[13px]" style={{ background: C.card, border: `1px dashed ${C.line}`, color: C.muted }}>
+          No direct messages yet — tap New to start one.
+        </div>
       ) : (
-        <div className="space-y-2.5">
-          {threads.map((t) => {
+        <div className="rounded-2xl overflow-hidden" style={{ border: `1px solid ${C.line}` }}>
+          {threads.map((t, idx) => {
             const p = talentById(t.other);
             return (
-              <button key={t.other} onClick={() => setWithId(t.other)} className="tap w-full text-left rounded-2xl p-3.5 flex items-center gap-3"
-                style={{ background: C.card, border: `1px solid ${t.unread ? C.pine : C.line}` }}>
-                <Avatar initials={p?.initials || "?"} size={44} />
+              <button key={t.other} onClick={() => setWithId(t.other)} className="tap w-full text-left px-4 py-3 flex items-center gap-3"
+                style={{ background: C.card, borderTop: idx ? `1px solid ${C.lineSoft}` : "none" }}>
+                <Avatar initials={p?.initials || "?"} size={40} />
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-1.5">
                     <span className="text-[14.5px] font-semibold" style={{ color: C.ink }}>{p?.name || "Member"}</span>
                     {p?.verified && <BadgeCheck size={14} color={C.pine} />}
                   </div>
-                  <div className="text-[12.5px] truncate" style={{ color: t.unread ? C.ink : C.muted }}>
-                    {t.fromMe ? "You: " : ""}{t.body}
-                  </div>
+                  <div className="text-[12.5px] truncate" style={{ color: t.unread ? C.ink : C.muted }}>{t.fromMe ? "You: " : ""}{t.body}</div>
                 </div>
                 <div className="text-right shrink-0">
                   <div className="text-[11px]" style={{ color: C.muted }}>{relTime(t.ts)}</div>
@@ -2723,6 +2840,60 @@ function ChatsTab({ me, dm, openWith, onOpened, onOpenProfile }) {
           })}
         </div>
       )}
+    </div>
+  );
+}
+
+/* trip channel opened from the inbox — chat first, details behind the ⋯ menu */
+function TripChatView({ user, meId, trip, actions, onBack }) {
+  const [showDetails, setShowDetails] = useState(false);
+  const state = tripStateNow(trip);
+  return (
+    <div className="fade">
+      <div className="h-14 px-3 flex items-center gap-2.5" style={{ borderBottom: `1px solid ${C.lineSoft}`, background: C.card }}>
+        <button onClick={onBack} className="tap w-9 h-9 rounded-full flex items-center justify-center" style={{ border: `1px solid ${C.line}` }}><ChevronLeft size={19} color={C.ink} /></button>
+        <div className="flex-1 min-w-0">
+          <div className="text-[15px] font-semibold truncate" style={{ color: C.ink }}># {trip.title}</div>
+          <div className="text-[11.5px]" style={{ color: C.muted }}>{trip.members.length} in crew · {fmtDate(trip.start)} – {fmtDate(trip.end)}</div>
+        </div>
+        <TripStateBadge state={state} />
+        <button onClick={() => setShowDetails((v) => !v)} className="tap w-9 h-9 rounded-full flex items-center justify-center" style={{ border: `1px solid ${C.line}` }} aria-label="Trip details">
+          <span className="text-[16px] leading-none" style={{ color: C.muted }}>⋯</span>
+        </button>
+      </div>
+
+      {showDetails && (
+        <div className="px-5 py-4 fade" style={{ borderBottom: `1px solid ${C.lineSoft}` }}>
+          <div className="rounded-xl p-3.5 mb-3" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+            <div className="flex items-center gap-2 text-[13px] font-medium" style={{ color: C.ink }}><MapPin size={14} color={C.gold} /> Meeting point</div>
+            <div className="text-[13px] mt-1" style={{ color: C.muted }}>{trip.meetingPoint}</div>
+          </div>
+          <div className="rounded-xl divide-y mb-3" style={{ background: C.card, border: `1px solid ${C.line}`, borderColor: C.line }}>
+            {trip.members.map((m) => (
+              <div key={m.id} className="flex items-center gap-3 px-3.5 py-2.5">
+                <Avatar initials={m.initials} size={32} />
+                <div className="flex-1"><div className="text-[13.5px] font-semibold" style={{ color: C.ink }}>{m.name}</div>
+                  <div className="text-[11.5px] capitalize" style={{ color: C.muted }}>{m.roleInTrip.replace("_", " ")}</div></div>
+                {m.id === meId && <span className="text-[10.5px] font-semibold rounded-full px-2 py-0.5" style={{ background: C.goldSoft, color: "#7a5a1e" }}>You</span>}
+              </div>
+            ))}
+          </div>
+          {trip.itinerary.length > 0 && (
+            <div className="space-y-2">
+              {trip.itinerary.map((it) => (
+                <div key={it.day} className="flex items-center gap-3 rounded-xl px-3.5 py-2.5" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+                  <div className="w-6 h-6 rounded-md flex items-center justify-center shrink-0" style={{ background: C.pine }}><span className="text-[11px] font-bold" style={{ color: C.goldSoft }}>{it.day}</span></div>
+                  <span className="text-[13.5px] font-medium" style={{ color: C.ink }}>{it.title}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className="px-5 py-4">
+        <Chat user={user} meId={meId} trip={trip} state={state} actions={actions} />
+      </div>
     </div>
   );
 }
