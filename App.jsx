@@ -432,7 +432,7 @@ function Shell({ user, posts, jobs, trips, listings, actions, engagement, onLogo
         {overlay ? (
           overlay.type === "profile" ? (
             <TalentProfile talent={talentById(overlay.talentId)} posts={posts}
-              canRequest={user.kind === "operator"} self={user.talentId === overlay.talentId}
+              canRequest={user.kind === "operator"} self={user.talentId === overlay.talentId} contactOnly={user.kind === "admin"}
               onRequest={() => setOverlay({ type: "request", talentId: overlay.talentId })}
               onBack={() => setOverlay(null)} />
           ) : (
@@ -442,13 +442,13 @@ function Shell({ user, posts, jobs, trips, listings, actions, engagement, onLogo
           )
         ) : (
           <div key={tab} className="fade">
-            {tab === "post" && <PostTab user={user} posts={posts} onAdd={actions.addPost} eng={eng} />}
+            {tab === "post" && <PostTab user={user} posts={posts} onAdd={actions.addPost} eng={eng} onOpenProfile={openProfile} />}
             {tab === "jobs" && <JobsHub user={user} jobs={jobs} listings={listings} actions={actions} />}
             {tab === "trips" && <TripsTab user={user} trips={trips} actions={actions} />}
             {tab === "profile" && <TalentProfile talent={talentById(user.talentId)} posts={posts} self onBack={null} />}
             {tab === "discover" && <Discover onOpen={openProfile} />}
             {tab === "requests" && <OperatorJobs user={user} jobs={jobs} listings={listings} posts={posts} actions={actions} onOpen={openProfile} />}
-            {tab === "feed" && <Feed posts={posts} eng={eng} admin={user.kind === "admin"} onDelete={actions.deletePost} />}
+            {tab === "feed" && <Feed posts={posts} eng={eng} admin={user.kind === "admin"} onDelete={actions.deletePost} onOpenProfile={openProfile} />}
             {tab === "review" && <Review posts={posts} onApprove={actions.approve} onReject={actions.reject} eng={eng} />}
           </div>
         )}
@@ -573,7 +573,7 @@ function Empty({ Icon, title, body }) {
 const roleLabel = (r) => (r === "guide" ? "Guide" : "Driver");
 
 /* ======================== Feed tab (guides & drivers) ===================== */
-function PostTab({ user, posts, onAdd, eng }) {
+function PostTab({ user, posts, onAdd, eng, onOpenProfile }) {
   const me = user.talentId;
   const t = talentById(me);
   const visible = posts.filter((p) => p.status === "approved" || p.talentId === me);
@@ -591,6 +591,7 @@ function PostTab({ user, posts, onAdd, eng }) {
             return (
               <div key={p.id} className="rounded-2xl p-4" style={{ background: C.card, border: `1px solid ${C.line}` }}>
                 <div className="flex items-center gap-3">
+                  <button onClick={() => onOpenProfile(p.talentId)} className="tap flex items-center gap-3 flex-1 min-w-0 text-left">
                   <Avatar initials={author?.initials || "?"} size={40} />
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-1.5">
@@ -601,6 +602,7 @@ function PostTab({ user, posts, onAdd, eng }) {
                       <MapPin size={11} /> {author?.base || ""} · {relTime(p.createdAt)}
                     </div>
                   </div>
+                  </button>
                   {mine && p.status !== "approved" && <StatusBadge status={p.status} reason={p.reason} />}
                 </div>
                 {p.text && <p className="text-[15px] leading-relaxed mt-3" style={{ color: C.ink }}>{p.text}</p>}
@@ -883,7 +885,7 @@ function SentRequests({ operator, jobs, onOpen }) {
 }
 
 /* ========================= Feed (operator & admin) ======================== */
-function Feed({ posts, eng, admin, onDelete }) {
+function Feed({ posts, eng, admin, onDelete, onOpenProfile }) {
   const live = admin ? posts : posts.filter((p) => p.status === "approved");
   return (
     <div className="px-5 py-4">
@@ -897,11 +899,13 @@ function Feed({ posts, eng, admin, onDelete }) {
             return (
               <div key={p.id} className="rounded-2xl p-4" style={{ background: C.card, border: `1px solid ${C.line}` }}>
                 <div className="flex items-center gap-3">
+                  <button onClick={() => onOpenProfile(p.talentId)} className="tap flex items-center gap-3 flex-1 min-w-0 text-left">
                   <Avatar initials={t?.initials || "?"} size={40} />
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-1.5"><span className="text-[14.5px] font-semibold truncate" style={{ color: C.ink }}>{t?.name || "Member"}</span>{t?.verified && <BadgeCheck size={15} color={C.pine} />}</div>
                     <div className="flex items-center gap-1 text-[12px]" style={{ color: C.muted }}><MapPin size={11} /> {t?.base || ""} · {relTime(p.createdAt)}</div>
                   </div>
+                  </button>
                   {admin && p.status !== "approved" && <StatusBadge status={p.status} reason={p.reason} />}
                   {admin && <DeletePost onConfirm={() => onDelete(p.id)} />}
                 </div>
