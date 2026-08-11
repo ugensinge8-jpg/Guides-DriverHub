@@ -163,9 +163,9 @@ const LANG_OPTIONS = ["English", "Hindi", "Japanese", "Mandarin", "German", "Fre
 export default function App() {
   const [accountId, setAccountId] = useState(null);
   const [posts, setPosts] = useState(CLOUD ? [] : SEED_POSTS);
-  const [jobs, setJobs] = useState(SEED_JOBS);
+  const [jobs, setJobs] = useState(CLOUD ? [] : SEED_JOBS);
   const [trips, setTrips] = useState(SEED_TRIPS);
-  const [listings, setListings] = useState(SEED_LISTINGS);
+  const [listings, setListings] = useState(CLOUD ? [] : SEED_LISTINGS);
   const [likes, setLikes] = useState([]);
   const [comments, setComments] = useState([]);
   const [session, setSession] = useState(null);
@@ -318,7 +318,53 @@ export default function App() {
     fetchPosts();
   };
 
-  const sendJob = (job) => setJobs((j) => [{ id: uid(), status: "pending", createdAt: Date.now(), ...job }, ...j]);
+  /* ---- Jobs in the database (listings + applicants + direct requests) ---- */
+  const rowToListing = (l, apps) => ({
+    id: l.id, operatorId: l.operator_id, operator: l.operator_name, title: l.title, role: l.role,
+    start: l.start_date, end: l.end_date, languages: l.languages || [], notes: l.notes || "",
+    urgent: !!l.urgent, status: l.status, createdAt: new Date(l.created_at).getTime(),
+    applicants: (apps || []).filter((a) => a.listing_id === l.id).map((a) => {
+      const t = talentById(a.talent_id);
+      return { talentId: a.talent_id, name: t?.name || "Member", initials: t?.initials || "?", rating: t?.rating || null,
+        message: a.message || "", status: a.status, appliedAt: new Date(a.created_at).getTime() };
+    }),
+  });
+  const rowToRequest = (j) => ({
+    id: j.id, operatorId: j.operator_id, operator: j.operator_name, toTalentId: j.talent_id,
+    title: j.title, role: j.role_needed, start: j.start_date, end: j.end_date,
+    languages: j.languages || [], notes: j.notes || "", status: j.status, createdAt: new Date(j.created_at).getTime(),
+  });
+
+  const fetchJobs = async () => {
+    if (!CLOUD) return;
+    const [{ data: L }, { data: A }, { data: R }] = await Promise.all([
+      supabase.from("job_listings").select("*").order("created_at", { ascending: false }),
+      supabase.from("job_applicants").select("*"),
+      supabase.from("job_requests").select("*").order("created_at", { ascending: false }),
+    ]);
+    if (L) setListings(L.map((l) => rowToListing(l, A || [])));
+    if (R) setJobs(R.map(rowToRequest));
+  };
+  useEffect(() => {
+    if (!CLOUD) return;
+    fetchJobs();
+    const ch = supabase.channel("jobs-live")
+      .on("postgres_changes", { event: "*", schema: "public", table: "job_listings" }, fetchJobs)
+      .on("postgres_changes", { event: "*", schema: "public", table: "job_applicants" }, fetchJobs)
+      .on("postgres_changes", { event: "*", schema: "public", table: "job_requests" }, fetchJobs)
+      .subscribe();
+    return () => { supabase.removeChannel(ch); };
+  }, [dirTick]);
+
+  const sendJob = async (job) => {
+    if (!CLOUD) { setJobs((j) => [{ id: uid(), status: "pending", createdAt: Date.now(), ...job }, ...j]); return; }
+    await supabase.from("job_requests").insert({
+      operator_id: realUserRef.current, operator_name: job.operator, talent_id: job.toTalentId,
+      title: job.title, role_needed: job.role, start_date: job.start, end_date: job.end,
+      languages: job.languages || [], notes: job.notes || null,
+    });
+    fetchJobs();
+  };
 
   const createTripFromJob = (job) => {
     const t = talentById(job.toTalentId);
@@ -346,20 +392,42 @@ export default function App() {
     });
   };
 
-  const setJobStatus = (id, status) => {
+  const setJobStatus = async (id, status) => {
     setJobs((j) => j.map((x) => (x.id === id ? { ...x, status } : x)));
-    if (status === "accepted") { const job = jobs.find((x) => x.id === id); if (job) createTripFromJob(job); }
+    const job = jobs.find((x) => x.id === id);
+    if (CLOUD) { await supabase.from("job_requests").update({ status }).eq("id", id); fetchJobs(); }
+    if (status === "accepted" && job) createTripFromJob(job);
   };
 
   const postChat = (tripId, msg) => setTrips((prev) => prev.map((tr) => (tr.id === tripId ? { ...tr, chat: { ...tr.chat, messages: [...tr.chat.messages, msg] } } : tr)));
   const openChat = (tripId) => setTrips((prev) => prev.map((tr) => (tr.id === tripId ? { ...tr, chat: { ...tr.chat, state: "active" } } : tr)));
 
-  const postListing = (l) => setListings((L) => [{ id: uid(), status: "open", createdAt: Date.now(), applicants: [], ...l }, ...L]);
-  const applyToListing = (listingId, applicant) => setListings((L) => L.map((l) => (l.id === listingId ? (l.applicants.some((a) => a.talentId === applicant.talentId) ? l : { ...l, applicants: [...l.applicants, { status: "applied", appliedAt: Date.now(), ...applicant }] }) : l)));
-  const setApplicant = (listingId, talentId, status) => setListings((L) => L.map((l) => (l.id === listingId ? { ...l, applicants: l.applicants.map((a) => (a.talentId === talentId ? { ...a, status } : a)) } : l)));
-  const hireApplicant = (listing, applicant) => {
-    setApplicant(listing.id, applicant.talentId, "hired");
+  const postListing = async (l) => {
+    if (!CLOUD) { setListings((L) => [{ id: uid(), status: "open", createdAt: Date.now(), applicants: [], ...l }, ...L]); return; }
+    await supabase.from("job_listings").insert({
+      operator_id: realUserRef.current, operator_name: l.operator, title: l.title, role: l.role,
+      start_date: l.start, end_date: l.end, languages: l.languages || [], notes: l.notes || null, urgent: !!l.urgent,
+    });
+    fetchJobs();
+  };
+  const applyToListing = async (listingId, applicant) => {
+    if (!CLOUD) {
+      setListings((L) => L.map((l) => (l.id === listingId ? (l.applicants.some((a) => a.talentId === applicant.talentId) ? l : { ...l, applicants: [...l.applicants, { status: "applied", appliedAt: Date.now(), ...applicant }] }) : l)));
+      return;
+    }
+    await supabase.from("job_applicants").upsert({ listing_id: listingId, talent_id: applicant.talentId, message: applicant.message || null, status: "applied" });
+    fetchJobs();
+  };
+  const setApplicant = async (listingId, talentId, status) => {
+    setListings((L) => L.map((l) => (l.id === listingId ? { ...l, applicants: l.applicants.map((a) => (a.talentId === talentId ? { ...a, status } : a)) } : l)));
+    if (!CLOUD) return;
+    await supabase.from("job_applicants").update({ status }).eq("listing_id", listingId).eq("talent_id", talentId);
+    fetchJobs();
+  };
+  const hireApplicant = async (listing, applicant) => {
+    await setApplicant(listing.id, applicant.talentId, "hired");
     setListings((L) => L.map((l) => (l.id === listing.id ? { ...l, status: "filled" } : l)));
+    if (CLOUD) { await supabase.from("job_listings").update({ status: "filled" }).eq("id", listing.id); fetchJobs(); }
     createTripFromJob({ id: `${listing.id}_${applicant.talentId}`, toTalentId: applicant.talentId, operator: listing.operator, title: listing.title, start: listing.start, end: listing.end });
   };
 
@@ -974,8 +1042,8 @@ function TalentCard({ t, onOpen }) {
 }
 
 /* ======================= Sent requests (operator) ======================== */
-function SentRequests({ operator, jobs, onOpen }) {
-  const mine = jobs.filter((j) => j.operator === operator);
+function SentRequests({ operator, operatorId, jobs, onOpen }) {
+  const mine = jobs.filter((j) => (j.operatorId ? j.operatorId === operatorId : j.operator === operator));
   return (
     <div className="px-5 py-4">
       <SectionLabel trailing={`${mine.length} sent`}>Job requests</SectionLabel>
@@ -1616,11 +1684,12 @@ function MyApplications({ talent, listings }) {
 
 /* ---- Operator: jobs hub ---- */
 function OperatorJobs({ user, jobs, listings, posts, actions, onOpen }) {
+  const myId = user.talentId || user.id;
   const [sub, setSub] = useState("open");
   const [posting, setPosting] = useState(false);
   const [manageId, setManageId] = useState(null);
   const [profileId, setProfileId] = useState(null);
-  const mine = listings.filter((l) => l.operator === user.name);
+  const mine = listings.filter((l) => (l.operatorId ? l.operatorId === myId : l.operator === user.name));
   const manage = mine.find((l) => l.id === manageId);
   const openCount = mine.filter((l) => l.status === "open").length;
 
@@ -1634,7 +1703,7 @@ function OperatorJobs({ user, jobs, listings, posts, actions, onOpen }) {
         <Segmented value={sub} onChange={setSub} options={[["open", `Open jobs${openCount ? ` · ${openCount}` : ""}`], ["direct", "Direct requests"]]} />
       </div>
       {sub === "open" && <OperatorListings listings={mine} onPost={() => setPosting(true)} onManage={setManageId} />}
-      {sub === "direct" && <SentRequests operator={user.name} jobs={jobs} onOpen={onOpen} />}
+      {sub === "direct" && <SentRequests operator={user.name} operatorId={myId} jobs={jobs} onOpen={onOpen} />}
     </div>
   );
 }
