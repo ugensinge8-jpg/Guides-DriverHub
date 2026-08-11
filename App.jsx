@@ -2611,9 +2611,8 @@ function Onboard({ mode: initialMode, session, onBack, onDone }) {
     });
     setBusy(false);
     if (error) {
-      setErr(/row-level security/i.test(error.message || "")
-        ? "Couldn't save your profile — the database is blocking it. Run the profiles policy SQL, then tap again."
-        : error.message);
+      console.error("PROFILE SAVE FAILED", error, "uid:", effUid, "session uid:", sess.session.user.id);
+      setErr("Profile step: " + (error.message || "database rejected the profile"));
       return;
     }
     onDone();
@@ -2631,9 +2630,19 @@ function Onboard({ mode: initialMode, session, onBack, onDone }) {
       const blob = await (await fetch(small)).blob();
       const path = `${effUid}/license.jpg`;
       const { error } = await supabase.storage.from("licenses").upload(path, blob, { contentType: "image/jpeg", upsert: true });
-      if (error) throw error;
+      if (error) {
+        console.error("LICENSE UPLOAD FAILED", error);
+        setBusy(false);
+        setErr("Upload step: " + (error.message || "storage rejected the file"));
+        return;
+      }
+      setBusy(false);
       await finish(path);
-    } catch (e) { setBusy(false); setErr(e.message || "Upload failed — try a smaller photo."); }
+    } catch (e) {
+      console.error("LICENSE UPLOAD EXCEPTION", e);
+      setBusy(false);
+      setErr("Upload step: " + (e.message || "something went wrong"));
+    }
   };
 
   const ORDER = signin ? ["auth", "code", "password"] : ["role", "about", "details", "email", "code", "password", "license"];
