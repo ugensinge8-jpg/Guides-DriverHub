@@ -3,7 +3,7 @@ import {
   Compass, Car, Building2, ShieldCheck, ImagePlus, X, Check, Clock, Send,
   BadgeCheck, MapPin, Inbox, ChevronLeft, Star, Phone, Mail, Briefcase,
   Search, LogOut, Newspaper, User, CalendarCheck, MessageCircle,
-  Map, MessageSquare, Users, Download, Mic, Video, Heart, Share2, Trash2,
+  Map, MessageSquare, Users, Download, Mic, Video, Heart, Share2, Trash2, Maximize2, Upload, Loader2, ArrowRight,
 } from "lucide-react";
 import mapImg from "./map.jpg";
 import { supabase } from "./supabase.js";
@@ -58,7 +58,16 @@ const ACCOUNTS = [
 
 const HOUR = 3600e3;
 const uid = () => (crypto?.randomUUID ? crypto.randomUUID() : String(Date.now() + Math.random()));
-const talentById = (id) => TALENT.find((t) => t.id === id);
+let PROFILE_DIR = {};
+const profileToTalent = (p) => ({
+  id: p.id, role: p.role, name: p.full_name || "Member", base: p.base || "",
+  initials: initialsOf(p.full_name || "?"), years: p.years || 0, trips: 0, rating: null,
+  verified: p.license_status === "verified", licenseStatus: p.license_status || "none",
+  grades: {}, tags: Array.isArray(p.tags) ? p.tags : [],
+  languages: Array.isArray(p.languages) ? p.languages : [],
+  phone: p.phone || "", email: p.email || "", pitch: p.pitch || "", vehicle: p.vehicle || null,
+});
+const talentById = (id) => TALENT.find((t) => t.id === id) || PROFILE_DIR[id] || null;
 const initialsOf = (name) => name.split(" ").map((w) => w[0]).slice(0, 2).join("").toUpperCase();
 const isoDay = (offset = 0) => new Date(Date.now() + offset * 86400e3).toISOString().slice(0, 10);
 const sysMsg = (text) => ({ id: uid(), senderId: null, kind: "system", body: text, photo: null, ts: Date.now() });
@@ -158,8 +167,38 @@ export default function App() {
   const [listings, setListings] = useState(SEED_LISTINGS);
   const [likes, setLikes] = useState([]);
   const [comments, setComments] = useState([]);
+  const [session, setSession] = useState(null);
+  const [myProfile, setMyProfile] = useState(null);   // null=loading · false=none · object=exists
+  const [profileTick, setProfileTick] = useState(0);
+  const [dirTick, setDirTick] = useState(0);
 
-  const user = ACCOUNTS.find((a) => a.id === accountId) || null;
+  const loadProfiles = async () => {
+    if (!CLOUD) return;
+    const { data } = await supabase.from("profiles").select("*");
+    if (data) { PROFILE_DIR = {}; data.forEach((p) => { PROFILE_DIR[p.id] = profileToTalent(p); }); setDirTick((t) => t + 1); }
+  };
+  const reloadMe = () => { setProfileTick((t) => t + 1); loadProfiles(); };
+
+  useEffect(() => {
+    if (!CLOUD) return;
+    loadProfiles();
+    supabase.auth.getSession().then(({ data }) => setSession(data.session || null));
+    const { data: sub } = supabase.auth.onAuthStateChange((_e, sn) => setSession(sn));
+    return () => sub.subscription.unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    if (!CLOUD || !session) { setMyProfile(null); return; }
+    let on = true;
+    supabase.from("profiles").select("*").eq("id", session.user.id).maybeSingle()
+      .then(({ data }) => { if (on) setMyProfile(data || false); });
+    return () => { on = false; };
+  }, [session, profileTick]);
+
+  const realUser = CLOUD && session && myProfile && typeof myProfile === "object"
+    ? { id: session.user.id, kind: myProfile.role, talentId: session.user.id, name: myProfile.full_name, initials: initialsOf(myProfile.full_name || "?") }
+    : null;
+  const user = realUser || ACCOUNTS.find((a) => a.id === accountId) || null;
 
   const fetchPosts = async () => {
     if (!CLOUD) return;
@@ -308,10 +347,10 @@ export default function App() {
 
       <div className="w-full max-w-md flex flex-col" style={{ height: "100vh", color: C.ink }}>
         {!user ? (
-          <Login onPick={setAccountId} />
+          <Login onPick={setAccountId} session={session} myProfile={myProfile} onAuthed={reloadMe} />
         ) : (
           <Shell key={user.id} user={user} posts={posts} jobs={jobs} trips={trips} listings={listings}
-            actions={{ addPost, approve, reject, deletePost, sendJob, setJobStatus, postChat, openChat, postListing, applyToListing, setApplicant, hireApplicant }} engagement={{ likes, comments, toggleLike, addComment, deleteComment }} onLogout={() => setAccountId(null)} />
+            actions={{ addPost, approve, reject, deletePost, sendJob, setJobStatus, postChat, openChat, postListing, applyToListing, setApplicant, hireApplicant }} engagement={{ likes, comments, toggleLike, addComment, deleteComment }} onLogout={() => { if (session) supabase.auth.signOut(); setAccountId(null); }} />
         )}
       </div>
     </div>
@@ -319,7 +358,18 @@ export default function App() {
 }
 
 /* ================================ Welcome ================================= */
-function Login({ onPick }) {
+function Login({ onPick, session, myProfile, onAuthed }) {
+  const [authView, setAuthView] = useState(null); // 'signup' | 'signin' | 'complete'
+  useEffect(() => {
+    if (session && myProfile === false && !authView) setAuthView("complete");
+  }, [session, myProfile]);
+  if (authView) {
+    return (
+      <div className="flex-1 overflow-y-auto hidescroll fade" style={{ scrollbarWidth: "none" }}>
+        <Onboard mode={authView} session={session} onBack={() => setAuthView(null)} onDone={onAuthed} />
+      </div>
+    );
+  }
   return (
     <div className="flex-1 overflow-y-auto hidescroll fade" style={{ scrollbarWidth: "none" }}>
       {/* brand row */}
@@ -356,6 +406,20 @@ function Login({ onPick }) {
           <WelcomeBullet Icon={MessageSquare} title="One hub per trip" body="Crew chat that opens before departure and clears itself after." />
         </div>
       </div>
+
+      {CLOUD && (
+        <div className="px-6 mt-8">
+          <div className="text-[12px] font-semibold tracking-[.14em] uppercase mb-3" style={{ color: C.gold }}>Join DrukConnect</div>
+          <button onClick={() => setAuthView("signup")} className="tap w-full rounded-xl flex items-center justify-center gap-2 text-[15px] font-semibold"
+            style={{ height: 52, background: C.pine, color: "#fff", boxShadow: `0 6px 16px ${C.pine}33` }}>
+            Create your account <ArrowRight size={18} strokeWidth={2.4} />
+          </button>
+          <button onClick={() => setAuthView("signin")} className="tap w-full rounded-xl text-[14.5px] font-semibold mt-2.5"
+            style={{ height: 48, background: C.card, border: `1.5px solid ${C.pine}`, color: C.pine }}>
+            I already have an account
+          </button>
+        </div>
+      )}
 
       {/* demo accounts */}
       <div className="px-6 mt-8 pb-8">
@@ -552,15 +616,27 @@ function StatusBadge({ status, reason }) {
   );
 }
 function PostMedia({ media }) {
+  const [full, setFull] = useState(false);
   if (!media) return null;
   return (
-    <div className="rounded-xl overflow-hidden mt-3" style={{ border: `1px solid ${C.line}` }}>
-      {media.kind === "video"
-        ? <video src={media.dataUri} controls className="w-full block" style={{ maxHeight: 300 }} />
-        : <img src={media.dataUri} alt="" className="w-full block" style={{ maxHeight: 300, objectFit: "cover" }} />}
-    </div>
+    <>
+      <div className="relative rounded-xl overflow-hidden mt-3" style={{ border: `1px solid ${C.line}`, aspectRatio: "1 / 1", background: media.kind === "video" ? "#0c0e0c" : C.bg }}>
+        {media.kind === "video" ? (
+          <video src={media.dataUri} controls className="absolute inset-0 w-full h-full" style={{ objectFit: "contain" }} />
+        ) : (
+          <button onClick={() => setFull(true)} className="absolute inset-0 w-full h-full" aria-label="View photo full size">
+            <img src={media.dataUri} alt="" className="absolute inset-0 w-full h-full" style={{ objectFit: "cover" }} />
+            <span className="absolute right-2.5 bottom-2.5 w-7 h-7 rounded-full flex items-center justify-center" style={{ background: "rgba(0,0,0,.45)" }}>
+              <Maximize2 size={13} color="#fff" />
+            </span>
+          </button>
+        )}
+      </div>
+      {full && media.kind !== "video" && <Lightbox src={media.dataUri} onClose={() => setFull(false)} />}
+    </>
   );
 }
+
 function Empty({ Icon, title, body }) {
   return (
     <div className="rounded-2xl px-6 py-10 flex flex-col items-center text-center" style={{ background: C.card, border: `1px dashed ${C.line}` }}>
@@ -575,7 +651,7 @@ const roleLabel = (r) => (r === "guide" ? "Guide" : "Driver");
 /* ======================== Feed tab (guides & drivers) ===================== */
 function PostTab({ user, posts, onAdd, eng, onOpenProfile }) {
   const me = user.talentId;
-  const t = talentById(me);
+  const t = talentById(me) || { id: me, name: user.name || "You", initials: user.initials || "?" };
   const visible = posts.filter((p) => p.status === "approved" || p.talentId === me);
   return (
     <div className="px-5 py-4">
@@ -794,12 +870,11 @@ function Discover({ onOpen }) {
   const [role, setRole] = useState("all");
   const [lang, setLang] = useState(null);
 
-  const list = useMemo(() => {
-    return TALENT.filter((t) => (role === "all" || t.role === role))
-      .filter((t) => (!lang || t.languages.some((l) => l.n === lang)))
-      .filter((t) => t.name.toLowerCase().includes(q.toLowerCase()) || t.base.toLowerCase().includes(q.toLowerCase()) || t.tags.join(" ").toLowerCase().includes(q.toLowerCase()))
-      .sort((a, b) => b.rating - a.rating);
-  }, [q, role, lang]);
+  const POOL = [...TALENT, ...Object.values(PROFILE_DIR).filter((p) => p.role === "guide" || p.role === "driver")];
+  const list = POOL.filter((t) => (role === "all" || t.role === role))
+    .filter((t) => (!lang || t.languages.some((l) => l.n === lang)))
+    .filter((t) => t.name.toLowerCase().includes(q.toLowerCase()) || t.base.toLowerCase().includes(q.toLowerCase()) || t.tags.join(" ").toLowerCase().includes(q.toLowerCase()))
+    .sort((a, b) => (b.rating || 0) - (a.rating || 0));
 
   return (
     <div className="px-5 py-4">
@@ -849,7 +924,7 @@ function TalentCard({ t, onOpen }) {
         </div>
         <div className="text-right shrink-0">
           <div className="inline-flex items-center gap-1 rounded-full px-2 py-1" style={{ background: C.goldSoft }}>
-            <Star size={12} color={C.gold} fill={C.gold} /><span className="text-[12.5px] font-semibold" style={{ color: "#7a5a1e" }}>{t.rating.toFixed(1)}</span>
+            <Star size={12} color={C.gold} fill={C.gold} /><span className="text-[12.5px] font-semibold" style={{ color: "#7a5a1e" }}>{t.rating ? t.rating.toFixed(1) : "New"}</span>
           </div>
           <div className="text-[11.5px] mt-1" style={{ color: C.muted }}>{t.years} yrs · {t.trips} trips</div>
         </div>
@@ -1018,6 +1093,7 @@ function TalentProfile({ talent, posts, canRequest, self, contactOnly, onRequest
   const t = talent;
   const live = posts.filter((p) => p.talentId === t.id && p.status === "approved").length;
   const located = posts.filter((p) => p.talentId === t.id && p.status === "approved" && p.location);
+  const gallery = posts.filter((p) => p.talentId === t.id && p.status === "approved" && p.media && p.media.kind === "photo");
   return (
     <div className="pb-6">
       <div className="relative">
@@ -1049,7 +1125,7 @@ function TalentProfile({ talent, posts, canRequest, self, contactOnly, onRequest
           <div className="px-4 py-3.5 flex items-center justify-between" style={{ background: C.pine }}>
             <div><div className="text-[11px] font-semibold tracking-[.14em] uppercase" style={{ color: C.goldSoft }}>Trip record</div>
               <div className="text-[12.5px] mt-0.5" style={{ color: "#ffffffcc" }}>Graded by operators</div></div>
-            <div className="text-right"><div className="text-[26px] font-semibold leading-none text-white">{t.rating.toFixed(1)}</div><div className="mt-1 flex justify-end"><Stars score={t.rating} light /></div></div>
+            <div className="text-right"><div className="text-[26px] font-semibold leading-none text-white">{t.rating ? t.rating.toFixed(1) : "New"}</div><div className="mt-1 flex justify-end"><Stars score={t.rating || 0} light /></div></div>
           </div>
           <div className="px-4 py-4 space-y-3.5" style={{ background: C.card }}>
             {Object.entries(t.grades).map(([k, v]) => (
@@ -1071,6 +1147,12 @@ function TalentProfile({ talent, posts, canRequest, self, contactOnly, onRequest
             <span key={l.n} className="inline-flex items-center gap-2 rounded-full pl-3.5 pr-2 py-1.5 text-[13.5px] font-medium" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }}>{l.n}<span className="text-[11px] px-1.5 py-0.5 rounded-full" style={{ background: C.goldSoft, color: "#7a5a1e" }}>{l.l}</span></span>
           ))}</div>
         </div>
+
+        {gallery.length > 0 && (
+          <div className="mt-6"><SectionLabel trailing={`${gallery.length} photos`}>Gallery</SectionLabel>
+            <PhotoGrid items={gallery} />
+          </div>
+        )}
 
         {located.length > 0 && (
           <div className="mt-6"><SectionLabel trailing={`${located.length} pins`}>Where they've worked</SectionLabel>
@@ -1831,11 +1913,15 @@ function PostEngagement({ post, eng }) {
   );
 }
 
-/* ====================== Map cinema (zoom → reveal) ====================== */
+/* ============== Map cinema (square · zoom → reveal → fullscreen) ============== */
 function MapCinema({ location, photo }) {
-  const S = 2.6;
-  const px = btPctX(location.lng), py = btPctY(location.lat);
-  const [phase, setPhase] = useState(0); // 0 full map · 1 zoomed · 2 photo
+  const S = 3;
+  const fH = 1 / BT_MAP_AR;                    // map height inside the square (letterboxed)
+  const padY = (1 - fH) / 2;
+  const px = btPctX(location.lng);
+  const py = (padY + (btPctY(location.lat) / 100) * fH) * 100;
+  const [phase, setPhase] = useState(0);        // 0 full map · 1 zoomed · 2 photo
+  const [full, setFull] = useState(false);
   const ref = useRef(); const started = useRef(false); const timer = useRef();
 
   const start = () => {
@@ -1844,13 +1930,11 @@ function MapCinema({ location, photo }) {
     setPhase(1);
     if (photo) timer.current = setTimeout(() => setPhase(2), 1500);
   };
-
   useEffect(() => {
-    let io;
-    const el = ref.current;
+    let io; const el = ref.current;
     if (!el || !("IntersectionObserver" in window)) start();
     else {
-      io = new IntersectionObserver((es) => { if (es[0].isIntersecting) { start(); io.disconnect(); } }, { threshold: 0.35 });
+      io = new IntersectionObserver((es) => { if (es[0].isIntersecting) { start(); io.disconnect(); } }, { threshold: 0.3 });
       io.observe(el);
     }
     return () => { if (io) io.disconnect(); clearTimeout(timer.current); };
@@ -1858,36 +1942,322 @@ function MapCinema({ location, photo }) {
 
   const zoomed = phase >= 1;
   const showPhoto = phase === 2;
-  const toggle = () => { if (photo && started.current) setPhase(showPhoto ? 1 : 2); };
+  const onTap = () => {
+    if (!photo || !started.current) return;
+    if (showPhoto) setFull(true); else setPhase(2);
+  };
 
   return (
-    <div ref={ref} onClick={toggle} className="relative rounded-xl overflow-hidden select-none"
-      style={{ aspectRatio: BT_MAP_AR, background: "#e7ebe6", cursor: photo ? "pointer" : "default", border: `1px solid ${C.line}` }}>
-      <div className="absolute inset-0"
-        style={{ transform: zoomed ? `translate(${50 - px}%, ${50 - py}%) scale(${S})` : "none", transformOrigin: `${px}% ${py}%`, transition: "transform 1.4s cubic-bezier(.22,.61,.36,1)" }}>
-        <img src={mapImg} alt="" draggable="false" className="absolute inset-0 w-full h-full" style={{ objectFit: "cover" }} />
+    <>
+      <div ref={ref} onClick={onTap} className="relative rounded-xl overflow-hidden select-none"
+        style={{ aspectRatio: "1 / 1", background: "#e8eae5", cursor: photo ? "pointer" : "default", border: `1px solid ${C.line}` }}>
+        <div className="absolute inset-0"
+          style={{ transform: zoomed ? `translate(${50 - px}%, ${50 - py}%) scale(${S})` : "none", transformOrigin: `${px}% ${py}%`, transition: "transform 1.4s cubic-bezier(.22,.61,.36,1)" }}>
+          <img src={mapImg} alt="" draggable="false" className="absolute inset-0 w-full h-full" style={{ objectFit: "contain" }} />
+        </div>
+
+        <div className="absolute pointer-events-none"
+          style={{ left: zoomed ? "50%" : `${px}%`, top: zoomed ? "50%" : `${py}%`, transform: "translate(-50%, -100%)",
+            transition: "left 1.4s cubic-bezier(.22,.61,.36,1), top 1.4s cubic-bezier(.22,.61,.36,1), opacity .4s", opacity: showPhoto ? 0 : 1 }}>
+          <MapPin size={26} color={C.maroon} fill={C.maroon} strokeWidth={1.4} style={{ filter: "drop-shadow(0 2px 3px rgba(0,0,0,.35))" }} />
+        </div>
+
+        {photo && (
+          <img src={photo} alt="" className="absolute inset-0 w-full h-full"
+            style={{ objectFit: "cover", opacity: showPhoto ? 1 : 0, transform: showPhoto ? "scale(1)" : "scale(1.06)", transition: "opacity .7s ease, transform .9s ease", pointerEvents: "none" }} />
+        )}
+
+        <div className="absolute left-2.5 bottom-2.5 flex items-center gap-1.5 rounded-full px-2.5 py-1"
+          style={{ background: "rgba(0,0,0,.45)", backdropFilter: "blur(4px)", opacity: zoomed ? 1 : 0, transition: "opacity .6s .5s" }}>
+          <MapPin size={12} color="#fff" />
+          <span className="text-[11.5px] font-semibold text-white">{location.place ? (location.source === "viewpoint" ? location.place : `Near ${location.place}`) : "Bhutan"}</span>
+        </div>
+
+        {photo && showPhoto && (
+          <>
+            <button onClick={(e) => { e.stopPropagation(); setPhase(1); }} className="tap absolute right-2.5 top-2.5 w-8 h-8 rounded-full flex items-center justify-center" style={{ background: "rgba(0,0,0,.5)" }} aria-label="Show location on map">
+              <Map size={15} color="#fff" />
+            </button>
+            <div className="absolute right-2.5 bottom-2.5 w-7 h-7 rounded-full flex items-center justify-center pointer-events-none" style={{ background: "rgba(0,0,0,.45)" }}>
+              <Maximize2 size={13} color="#fff" />
+            </div>
+          </>
+        )}
+      </div>
+      {full && <Lightbox src={photo} onClose={() => setFull(false)} />}
+    </>
+  );
+}
+
+function Lightbox({ src, onClose }) {
+  return (
+    <div className="fixed inset-0 flex items-center justify-center" style={{ background: "rgba(8,10,8,.96)", zIndex: 60 }} onClick={onClose}>
+      <img src={src} alt="" style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }} />
+      <button className="absolute top-4 right-4 w-10 h-10 rounded-full flex items-center justify-center" style={{ background: "rgba(255,255,255,.15)" }} aria-label="Close">
+        <X size={20} color="#fff" />
+      </button>
+      <div className="absolute bottom-5 left-0 right-0 text-center text-[12px]" style={{ color: "rgba(255,255,255,.55)" }}>Tap anywhere to close</div>
+    </div>
+  );
+}
+
+/* ====================== Profile gallery (Instagram grid) ================== */
+function PhotoGrid({ items }) {
+  const [openIdx, setOpenIdx] = useState(null);
+  return (
+    <>
+      <div className="rounded-xl overflow-hidden" style={{ border: `1px solid ${C.line}` }}>
+        <div className="grid grid-cols-3 gap-[2px]" style={{ background: C.line }}>
+          {items.map((p, i) => (
+            <button key={p.id} onClick={() => setOpenIdx(i)} className="relative overflow-hidden" style={{ aspectRatio: "1 / 1", background: C.bg }} aria-label="View photo">
+              <img src={p.media.dataUri} alt="" loading="lazy" className="absolute inset-0 w-full h-full" style={{ objectFit: "cover" }} />
+              {p.location && (
+                <span className="absolute left-1 bottom-1 w-5 h-5 rounded-full flex items-center justify-center" style={{ background: "rgba(0,0,0,.45)" }}>
+                  <MapPin size={10} color="#fff" />
+                </span>
+              )}
+            </button>
+          ))}
+        </div>
+      </div>
+      {openIdx != null && <Lightbox src={items[openIdx].media.dataUri} onClose={() => setOpenIdx(null)} />}
+    </>
+  );
+}
+
+/* ================= Onboarding (real signup · role → details → OTP → license) ================= */
+const ONB_SPECS = ["Culture & Dzong", "Alpine Trekking & Camping", "Birdwatching & Wildlife", "Spiritual & Meditation", "Adventure & Outdoors"];
+const ONB_DRIVES = ["Long-distance touring", "Mountain & high passes", "Excursion & day trips", "Airport transfers", "Off-road & trailheads"];
+const ONB_VEHICLES = ["Sedan", "SUV", "Hiace Van", "Coaster Bus", "Large Coach"];
+const ONB_LANGS = ["Dzongkha", "English", "Hindi", "Nepali", "Japanese", "Mandarin", "German", "French", "Spanish", "Korean"];
+const ONB_YEARS = [["0\u20132 yrs", 1], ["3\u20135 yrs", 4], ["6\u201310 yrs", 8], ["10+ yrs", 12]];
+const LICENSE_LABEL = { guide: "Guide license (Department of Tourism)", driver: "Driving licence (RSTA)", operator: "Tour Operator licence (Department of Tourism)" };
+
+function OLabel({ children }) { return <div className="text-[13px] font-medium mb-1.5" style={{ color: C.ink }}>{children}</div>; }
+function OInput(props) { return <input {...props} className="w-full h-12 px-4 rounded-xl text-[15px] mb-4" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }} />; }
+function OCta({ children, onClick, disabled, busy }) {
+  return (
+    <button onClick={onClick} disabled={disabled || busy} className="tap w-full rounded-xl flex items-center justify-center gap-2 text-[15px] font-semibold"
+      style={{ height: 52, background: disabled ? "#C7CEC7" : C.pine, color: "#fff", cursor: disabled ? "not-allowed" : "pointer" }}>
+      {busy ? <Loader2 size={18} className="animate-spin" /> : <>{children} <ArrowRight size={18} strokeWidth={2.4} /></>}
+    </button>
+  );
+}
+
+function Onboard({ mode, session, onBack, onDone }) {
+  const signin = mode === "signin";
+  const [step, setStep] = useState(signin ? "email" : "role");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const [uid, setUid] = useState(session?.user?.id || null);
+  const [role, setRole] = useState(null);
+  const [name, setName] = useState("");
+  const [phone, setPhone] = useState("");
+  const [base, setBase] = useState("");
+  const [company, setCompany] = useState("");
+  const [years, setYears] = useState(4);
+  const [pitch, setPitch] = useState("");
+  const [langs, setLangs] = useState([]);
+  const [tags, setTags] = useState([]);
+  const [vehicle, setVehicle] = useState(null);
+  const [email, setEmail] = useState(session?.user?.email || "");
+  const [code, setCode] = useState("");
+  const [licPreview, setLicPreview] = useState(null);
+  const licRef = useRef();
+  const effUid = uid || session?.user?.id || null;
+
+  const toggleTag = (t) => setTags((T) => (T.includes(t) ? T.filter((x) => x !== t) : [...T, t]));
+  const cycleLang = (n) => setLangs((L) => {
+    const cur = L.find((x) => x.n === n);
+    if (!cur) return [...L, { n, l: "Fluent" }];
+    if (cur.l === "Fluent") return L.map((x) => (x.n === n ? { ...x, l: "Basic" } : x));
+    return L.filter((x) => x.n !== n);
+  });
+
+  const sendCode = async () => {
+    setBusy(true); setErr(null);
+    const { error } = await supabase.auth.signInWithOtp({ email: email.trim(), options: { shouldCreateUser: true } });
+    setBusy(false);
+    if (error) setErr(error.message); else setStep("code");
+  };
+  const verify = async () => {
+    setBusy(true); setErr(null);
+    const { data, error } = await supabase.auth.verifyOtp({ email: email.trim(), token: code.trim(), type: "email" });
+    setBusy(false);
+    if (error || !data?.session) { setErr("That code didn't match \u2014 check the newest email and try again."); return; }
+    setUid(data.session.user.id);
+    if (signin) {
+      const { data: prof } = await supabase.from("profiles").select("id").eq("id", data.session.user.id).maybeSingle();
+      if (prof) onDone(); else setStep("role");
+    } else setStep("license");
+  };
+  const finish = async (licensePath) => {
+    setBusy(true); setErr(null);
+    const { error } = await supabase.from("profiles").upsert({
+      id: effUid, email: (email || session?.user?.email || "").trim() || null, role,
+      full_name: name.trim(), phone: phone.trim() || null, base: base.trim() || null,
+      company_name: role === "operator" ? (company.trim() || name.trim()) : null,
+      years, pitch: pitch.trim() || null, languages: langs, tags,
+      vehicle: role === "driver" ? vehicle : null,
+      license_path: licensePath || null, license_status: licensePath ? "submitted" : "none",
+    });
+    setBusy(false);
+    if (error) { setErr(error.message); return; }
+    onDone();
+  };
+  const pickLicense = (e) => {
+    const f = e.target.files?.[0]; e.target.value = "";
+    if (!f || !f.type.startsWith("image/")) { setErr("Please choose a photo of your license."); return; }
+    setErr(null);
+    const r = new FileReader(); r.onload = () => setLicPreview(r.result); r.readAsDataURL(f);
+  };
+  const submitLicense = async () => {
+    setBusy(true); setErr(null);
+    try {
+      const small = await shrinkImage(licPreview, 1600, 0.85);
+      const blob = await (await fetch(small)).blob();
+      const path = `${effUid}/license.jpg`;
+      const { error } = await supabase.storage.from("licenses").upload(path, blob, { contentType: "image/jpeg", upsert: true });
+      if (error) throw error;
+      await finish(path);
+    } catch (e) { setBusy(false); setErr(e.message || "Upload failed \u2014 try a smaller photo."); }
+  };
+
+  const ORDER = signin ? ["email", "code", "role", "about", "details", "license"] : ["role", "about", "details", "email", "code", "license"];
+  const backStep = () => {
+    const i = ORDER.indexOf(step);
+    if (i <= 0 || step === "code") { if (step === "code") setStep("email"); else onBack(); return; }
+    setStep(ORDER[i - 1]);
+  };
+  const detailsNext = () => { if (effUid) setStep("license"); else setStep("email"); };
+  const detailsOk = role === "operator" ? true : (tags.length > 0 && langs.length > 0 && (role !== "driver" || vehicle));
+
+  return (
+    <div className="px-6 pt-5 pb-8">
+      <div className="flex items-center gap-3 mb-6">
+        <button onClick={backStep} className="tap w-9 h-9 rounded-full flex items-center justify-center" style={{ border: `1px solid ${C.line}`, background: C.card }} aria-label="Back">
+          <ChevronLeft size={19} color={C.ink} />
+        </button>
+        <div className="flex gap-1.5">
+          {ORDER.map((k) => <span key={k} className="rounded-full" style={{ width: k === step ? 18 : 7, height: 7, background: ORDER.indexOf(k) <= ORDER.indexOf(step) ? C.pine : C.lineSoft, transition: "width .25s" }} />)}
+        </div>
       </div>
 
-      <div className="absolute pointer-events-none"
-        style={{ left: zoomed ? "50%" : `${px}%`, top: zoomed ? "50%" : `${py}%`, transform: "translate(-50%, -100%)",
-          transition: "left 1.4s cubic-bezier(.22,.61,.36,1), top 1.4s cubic-bezier(.22,.61,.36,1), opacity .4s", opacity: showPhoto ? 0 : 1 }}>
-        <MapPin size={26} color={C.maroon} fill={C.maroon} strokeWidth={1.4} style={{ filter: "drop-shadow(0 2px 3px rgba(0,0,0,.35))" }} />
-      </div>
-
-      {photo && (
-        <img src={photo} alt="" className="absolute inset-0 w-full h-full"
-          style={{ objectFit: "cover", opacity: showPhoto ? 1 : 0, transform: showPhoto ? "scale(1)" : "scale(1.06)", transition: "opacity .7s ease, transform .9s ease", pointerEvents: "none" }} />
+      {step === "role" && (
+        <div className="fade">
+          <h2 className="text-[24px] font-semibold tracking-[-0.01em] mb-1" style={{ color: C.ink }}>How do you work with tours?</h2>
+          <p className="text-[14px] mb-5" style={{ color: C.muted }}>Pick one \u2014 it shapes the rest of your setup.</p>
+          {[["guide", "Guide", "Lead trips and share Bhutan", Compass], ["driver", "Driver", "Move guests safely on the road", Car], ["operator", "Tour Operator", "Find and book the crew", Building2]].map(([id, label, subT, Icon]) => (
+            <button key={id} onClick={() => { setRole(id); setStep("about"); }} className="tap w-full text-left rounded-2xl p-4 flex items-center gap-3.5 mb-2.5"
+              style={{ background: C.card, border: `1px solid ${role === id ? C.pine : C.line}` }}>
+              <div className="w-11 h-11 rounded-xl flex items-center justify-center shrink-0" style={{ background: C.pine }}><Icon size={20} color={C.goldSoft} /></div>
+              <div className="flex-1"><div className="text-[15.5px] font-semibold" style={{ color: C.ink }}>{label}</div>
+                <div className="text-[13px]" style={{ color: C.muted }}>{subT}</div></div>
+              <ArrowRight size={17} color={C.muted} />
+            </button>
+          ))}
+        </div>
       )}
 
-      <div className="absolute left-2.5 bottom-2.5 flex items-center gap-1.5 rounded-full px-2.5 py-1"
-        style={{ background: "rgba(0,0,0,.45)", backdropFilter: "blur(4px)", opacity: zoomed ? 1 : 0, transition: "opacity .6s .5s" }}>
-        <MapPin size={12} color="#fff" />
-        <span className="text-[11.5px] font-semibold text-white">{location.place ? (location.source === "viewpoint" ? location.place : `Near ${location.place}`) : "Bhutan"}</span>
-      </div>
+      {step === "about" && (
+        <div className="fade">
+          <h2 className="text-[24px] font-semibold tracking-[-0.01em] mb-5" style={{ color: C.ink }}>Tell us who you are</h2>
+          <OLabel>{role === "operator" ? "Your name" : "Full name"}</OLabel>
+          <OInput value={name} onChange={(e) => setName(e.target.value)} placeholder="Karma Wangchuk" />
+          {role === "operator" && (<><OLabel>Agency name</OLabel><OInput value={company} onChange={(e) => setCompany(e.target.value)} placeholder="Druk Journeys" /></>)}
+          <OLabel>Phone</OLabel>
+          <OInput value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="+975 17 00 00 00" inputMode="tel" />
+          {role !== "operator" && (<><OLabel>Home base</OLabel><OInput value={base} onChange={(e) => setBase(e.target.value)} placeholder="Paro" /></>)}
+          <OCta disabled={name.trim().length < 2} onClick={() => setStep("details")}>Continue</OCta>
+        </div>
+      )}
 
-      {photo && showPhoto && (
-        <div className="absolute right-2.5 top-2.5 w-7 h-7 rounded-full flex items-center justify-center" style={{ background: "rgba(0,0,0,.45)" }}>
-          <Map size={14} color="#fff" />
+      {step === "details" && (
+        <div className="fade">
+          <h2 className="text-[24px] font-semibold tracking-[-0.01em] mb-5" style={{ color: C.ink }}>{role === "guide" ? "Your specialities" : role === "driver" ? "What you drive" : "About your agency"}</h2>
+          <OLabel>Years of experience</OLabel>
+          <div className="flex flex-wrap gap-2 mb-5">{ONB_YEARS.map(([l, v]) => <Chip key={l} on={years === v} onClick={() => setYears(v)}>{l}</Chip>)}</div>
+          {role === "guide" && (<>
+            <OLabel>Specialities \u2014 pick all that fit</OLabel>
+            <div className="flex flex-wrap gap-2 mb-5">{ONB_SPECS.map((t) => <Chip key={t} on={tags.includes(t)} onClick={() => toggleTag(t)}>{t}</Chip>)}</div>
+          </>)}
+          {role === "driver" && (<>
+            <OLabel>Your vehicle</OLabel>
+            <div className="flex flex-wrap gap-2 mb-5">{ONB_VEHICLES.map((v) => <Chip key={v} on={vehicle === v} onClick={() => setVehicle(v)}>{v}</Chip>)}</div>
+            <OLabel>Comfortable with</OLabel>
+            <div className="flex flex-wrap gap-2 mb-5">{ONB_DRIVES.map((t) => <Chip key={t} on={tags.includes(t)} onClick={() => toggleTag(t)}>{t}</Chip>)}</div>
+          </>)}
+          {role !== "operator" && (<>
+            <OLabel>Languages \u2014 tap once for Fluent, twice for Basic</OLabel>
+            <div className="flex flex-wrap gap-2 mb-5">
+              {ONB_LANGS.map((n) => {
+                const cur = langs.find((x) => x.n === n);
+                return (
+                  <button key={n} onClick={() => cycleLang(n)} className="tap rounded-full pl-3 pr-2.5 py-1.5 text-[13px] font-medium inline-flex items-center gap-1.5"
+                    style={{ background: cur ? C.pine : C.card, border: `1px solid ${cur ? C.pine : C.line}`, color: cur ? "#fff" : C.ink }}>
+                    {n}{cur && <span className="text-[10px] px-1.5 py-0.5 rounded-full" style={{ background: C.gold, color: "#fff" }}>{cur.l}</span>}
+                  </button>
+                );
+              })}
+            </div>
+          </>)}
+          {role === "operator" && (<>
+            <OLabel>What should the crew know about you?</OLabel>
+            <textarea value={pitch} onChange={(e) => setPitch(e.target.value)} rows={3} maxLength={220} placeholder="Routes you run, group sizes, what you value."
+              className="w-full px-3.5 py-3 rounded-xl text-[15px] resize-none mb-5" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }} />
+          </>)}
+          <OCta disabled={!detailsOk} onClick={detailsNext}>Continue</OCta>
+        </div>
+      )}
+
+      {step === "email" && (
+        <div className="fade">
+          <h2 className="text-[24px] font-semibold tracking-[-0.01em] mb-1" style={{ color: C.ink }}>{signin ? "Welcome back" : "Verify your email"}</h2>
+          <p className="text-[14px] mb-5" style={{ color: C.muted }}>We\u2019ll email you a 6-digit code \u2014 no password needed.</p>
+          <OLabel>Email</OLabel>
+          <OInput value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@email.com" inputMode="email" autoCapitalize="none" />
+          {err && <p className="text-[13px] mb-3" style={{ color: C.maroon }}>{err}</p>}
+          <OCta disabled={!/\S+@\S+\.\S+/.test(email)} busy={busy} onClick={sendCode}>Send code</OCta>
+        </div>
+      )}
+
+      {step === "code" && (
+        <div className="fade">
+          <h2 className="text-[24px] font-semibold tracking-[-0.01em] mb-1" style={{ color: C.ink }}>Enter your code</h2>
+          <p className="text-[14px] mb-5" style={{ color: C.muted }}>Sent to <b style={{ color: C.ink }}>{email}</b> \u2014 check spam too.</p>
+          <input value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 6))} inputMode="numeric" placeholder="000000"
+            className="w-full h-14 rounded-xl text-center text-[26px] font-semibold mb-4" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink, letterSpacing: "0.4em" }} />
+          {err && <p className="text-[13px] mb-3" style={{ color: C.maroon }}>{err}</p>}
+          <OCta disabled={code.length !== 6} busy={busy} onClick={verify}>Verify</OCta>
+          <button onClick={sendCode} className="tap w-full text-[13.5px] font-medium mt-3" style={{ color: C.muted }}>Resend code</button>
+        </div>
+      )}
+
+      {step === "license" && (
+        <div className="fade">
+          <h2 className="text-[24px] font-semibold tracking-[-0.01em] mb-1" style={{ color: C.ink }}>Verify your license</h2>
+          <p className="text-[14px] mb-5" style={{ color: C.muted }}>{LICENSE_LABEL[role] || "Your license"} \u2014 our team checks it, and your Verified badge appears once it clears.</p>
+          {licPreview ? (
+            <div className="relative rounded-xl overflow-hidden mb-4" style={{ border: `1px solid ${C.line}` }}>
+              <img src={licPreview} alt="" className="w-full block" style={{ maxHeight: 280, objectFit: "cover" }} />
+              <button onClick={() => setLicPreview(null)} className="tap absolute top-2 right-2 w-8 h-8 rounded-full flex items-center justify-center" style={{ background: "rgba(0,0,0,.55)" }}><X size={16} color="#fff" /></button>
+            </div>
+          ) : (
+            <button onClick={() => licRef.current?.click()} className="tap w-full rounded-2xl p-8 flex flex-col items-center justify-center text-center mb-4"
+              style={{ background: C.card, border: `1.5px dashed ${C.line}` }}>
+              <div className="w-13 h-13 rounded-2xl flex items-center justify-center mb-3" style={{ width: 52, height: 52, background: C.goldSoft }}><Upload size={23} color={C.gold} /></div>
+              <div className="text-[15px] font-semibold" style={{ color: C.ink }}>Upload a photo of your license</div>
+              <div className="text-[13px] mt-1" style={{ color: C.muted }}>Front side \u00b7 clear and readable</div>
+            </button>
+          )}
+          <input ref={licRef} type="file" accept="image/*" onChange={pickLicense} className="hidden" />
+          {err && <p className="text-[13px] mb-3" style={{ color: C.maroon }}>{err}</p>}
+          <OCta disabled={!licPreview} busy={busy} onClick={submitLicense}>Submit & enter DrukConnect</OCta>
+          <button onClick={() => finish(null)} disabled={busy} className="tap w-full text-[13.5px] font-medium mt-3" style={{ color: C.muted }}>Skip for now \u2014 I\u2019ll add it later</button>
+          <div className="rounded-xl p-3 flex gap-2.5 mt-4" style={{ background: C.goldSoft }}>
+            <ShieldCheck size={16} color={C.maroon} className="shrink-0 mt-0.5" />
+            <p className="text-[12px] leading-snug" style={{ color: "#5a4a2e" }}>Your license is stored privately and never shown to other users \u2014 only our review team sees it.</p>
+          </div>
         </div>
       )}
     </div>
