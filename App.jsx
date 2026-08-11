@@ -2527,6 +2527,8 @@ function Onboard({ mode: initialMode, session, onBack, onDone }) {
   const [remember, setRemember] = useState(true);
   const [code, setCode] = useState("");
   const [pw, setPw] = useState("");
+  const [pw2, setPw2] = useState("");
+  const [saved, setSaved] = useState(false);
   const [showPw, setShowPw] = useState(false);
   const [reset, setReset] = useState(false);
   const [licPreview, setLicPreview] = useState(null);
@@ -2566,13 +2568,14 @@ function Onboard({ mode: initialMode, session, onBack, onDone }) {
   };
 
   const savePassword = async () => {
+    if (pw !== pw2) { setErr("The two passwords don't match."); return; }
     setBusy(true); setErr(null);
     const { error } = await supabase.auth.updateUser({ password: pw });
     setBusy(false);
     if (error) { setErr(error.message); return; }
     try { localStorage.setItem("bth_email", email.trim()); } catch (e) {}
-    if (reset) { onDone(); return; }
-    setStep("license");
+    setSaved(true);
+    setTimeout(() => { if (reset) onDone(); else setStep("license"); }, 1200);
   };
 
   const verify = async () => {
@@ -2581,6 +2584,7 @@ function Onboard({ mode: initialMode, session, onBack, onDone }) {
     setBusy(false);
     if (error || !data?.session) { setErr("That code didn't match — check the newest email and try again."); return; }
     setUid(data.session.user.id);
+    setPw(""); setPw2("");
     setStep("password");
   };
   const finish = async (licensePath) => {
@@ -2757,7 +2761,7 @@ function Onboard({ mode: initialMode, session, onBack, onDone }) {
               </span>
               <span className="text-[13.5px]" style={{ color: C.ink }}>Remember me</span>
             </button>
-            <button onClick={() => { if (!/\S+@\S+\.\S+/.test(email)) { setErr("Enter your email first."); return; } setReset(true); setErr(null); sendCode(); }}
+            <button onClick={() => { if (!/\S+@\S+\.\S+/.test(email)) { setErr("Enter your email first."); return; } setReset(true); setErr(null); setPw(""); setPw2(""); sendCode(); }}
               className="tap text-[13.5px] font-semibold" style={{ color: C.pine }}>Forgot password?</button>
           </div>
 
@@ -2799,21 +2803,48 @@ function Onboard({ mode: initialMode, session, onBack, onDone }) {
 
       {step === "password" && (
         <div className="fade">
-          <h2 className="text-[24px] font-semibold tracking-[-0.01em] mb-1" style={{ color: C.ink }}>{reset ? "Choose a new password" : "Create a password"}</h2>
-          <p className="text-[14px] mb-5" style={{ color: C.muted }}>So you can sign in quickly next time — no code needed.</p>
-          <OLabel>Password</OLabel>
-          <div className="relative mb-2">
-            <Lock size={16} color={C.muted} className="absolute left-4 top-1/2 -translate-y-1/2" />
-            <input value={pw} onChange={(e) => setPw(e.target.value)} type={showPw ? "text" : "password"}
-              placeholder="At least 6 characters" className="w-full h-12 pl-11 pr-12 rounded-xl text-[15px]"
-              style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }} />
-            <button onClick={() => setShowPw((v) => !v)} className="tap absolute right-3 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full flex items-center justify-center" aria-label="Show password">
-              {showPw ? <EyeOff size={16} color={C.muted} /> : <Eye size={16} color={C.muted} />}
-            </button>
-          </div>
-          <p className="text-[12px] mb-4" style={{ color: pw.length >= 6 ? C.pine : C.muted }}>{pw.length >= 6 ? "Good to go." : "6 characters or more."}</p>
-          {err && <p className="text-[13px] mb-3" style={{ color: C.maroon }}>{err}</p>}
-          <OCta disabled={pw.length < 6} busy={busy} onClick={savePassword}>{reset ? "Save & continue" : "Continue"}</OCta>
+          {saved ? (
+            <div className="flex flex-col items-center text-center py-10">
+              <div className="w-16 h-16 rounded-full flex items-center justify-center mb-4" style={{ background: C.pine }}>
+                <Check size={30} color="#fff" strokeWidth={3} />
+              </div>
+              <div className="text-[18px] font-semibold" style={{ color: C.ink }}>Password saved</div>
+              <p className="text-[14px] mt-1.5" style={{ color: C.muted }}>Use it next time you sign in.</p>
+            </div>
+          ) : (
+            <>
+              <h2 className="text-[26px] font-semibold tracking-[-0.02em] mb-1" style={{ color: C.ink }}>{reset ? "Set a new password" : "Create a password"}</h2>
+              <p className="text-[14.5px] mb-6" style={{ color: C.muted }}>
+                {reset ? "Your code checked out. Choose a new password for your account." : "So you can sign in quickly next time — no code needed."}
+              </p>
+
+              <OLabel>{reset ? "New password" : "Password"}</OLabel>
+              <div className="relative mb-3">
+                <Lock size={16} color={C.muted} className="absolute left-4 top-1/2 -translate-y-1/2" />
+                <input value={pw} onChange={(e) => setPw(e.target.value)} type={showPw ? "text" : "password"} autoComplete="new-password"
+                  placeholder="At least 6 characters" className="w-full pl-11 pr-12 rounded-2xl text-[16px]"
+                  style={{ height: 52, background: C.card, border: `1px solid ${C.line}`, color: C.ink }} />
+                <button onClick={() => setShowPw((v) => !v)} className="tap absolute right-3 top-1/2 -translate-y-1/2 w-9 h-9 rounded-full flex items-center justify-center" aria-label="Show password">
+                  {showPw ? <EyeOff size={17} color={C.muted} /> : <Eye size={17} color={C.muted} />}
+                </button>
+              </div>
+
+              <OLabel>Confirm password</OLabel>
+              <div className="relative mb-2">
+                <Lock size={16} color={C.muted} className="absolute left-4 top-1/2 -translate-y-1/2" />
+                <input value={pw2} onChange={(e) => setPw2(e.target.value)} type={showPw ? "text" : "password"} autoComplete="new-password"
+                  onKeyDown={(e) => e.key === "Enter" && pw.length >= 6 && pw === pw2 && savePassword()}
+                  placeholder="Type it again" className="w-full pl-11 pr-4 rounded-2xl text-[16px]"
+                  style={{ height: 52, background: C.card, border: `1px solid ${pw2 && pw !== pw2 ? C.maroon : C.line}`, color: C.ink }} />
+              </div>
+              <p className="text-[12.5px] mb-4" style={{ color: pw.length >= 6 && pw === pw2 ? C.pine : C.muted }}>
+                {pw.length < 6 ? "6 characters or more." : pw2 && pw !== pw2 ? "Passwords don't match yet." : pw === pw2 && pw2 ? "Good to go." : "Type it again to confirm."}
+              </p>
+
+              {err && <p className="text-[13px] mb-3" style={{ color: C.maroon }}>{err}</p>}
+              <OCta disabled={pw.length < 6 || pw !== pw2} busy={busy} onClick={savePassword}>{reset ? "Save new password" : "Continue"}</OCta>
+            </>
+          )}
         </div>
       )}
 
