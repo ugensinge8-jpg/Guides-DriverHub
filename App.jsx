@@ -2560,7 +2560,8 @@ function ProfileTabs({ cv, gallery, galleryCount }) {
     if (startX.current == null) return;
     const t = e.changedTouches ? e.changedTouches[0] : e;
     const dx = t.clientX - startX.current;
-    if (locked.current && Math.abs(dx) > 55) setTab(dx < 0 ? 1 : 0);
+    // only switch on a deliberate horizontal drag; a tap (tiny dx) always reaches the tile
+    if (locked.current && Math.abs(dx) > 60) setTab(dx < 0 ? 1 : 0);
     startX.current = null; locked.current = false;
   };
 
@@ -2584,15 +2585,12 @@ function ProfileTabs({ cv, gallery, galleryCount }) {
           style={{ background: C.pine, width: "50%", left: tab === 0 ? "0%" : "50%", transition: "left .28s cubic-bezier(.22,.61,.36,1)" }} />
       </div>
 
-      {/* swipeable panes */}
+      {/* panes — only the active one is rendered, so taps always hit the right thing */}
       <div className="overflow-hidden" onTouchStart={onStart} onTouchMove={onMove} onTouchEnd={onEnd}>
-        <div className="flex" style={{ width: "200%", transform: tab === 0 ? "translateX(0%)" : "translateX(-50%)", transition: "transform .32s cubic-bezier(.22,.61,.36,1)" }}>
-          <div className="pt-5" style={{ width: "50%" }}>{tab === 0 ? cv : <div style={{ height: 1 }} />}</div>
-          <div className="pt-5" style={{ width: "50%" }}>{gallery}</div>
-        </div>
+        <div key={tab} className="pt-5 fade">{tab === 0 ? cv : gallery}</div>
       </div>
 
-      <p className="text-center text-[11.5px] mt-3" style={{ color: C.muted }}>Swipe to switch</p>
+      <p className="text-center text-[11.5px] mt-3" style={{ color: C.muted }}>Swipe or tap to switch tabs</p>
     </div>
   );
 }
