@@ -4,7 +4,7 @@ import {
   BadgeCheck, MapPin, Inbox, ChevronLeft, Star, Phone, Mail, Briefcase,
   Search, LogOut, Newspaper, User, CalendarCheck, MessageCircle,
   Map, MessageSquare, Users, Download, Mic, Video, Heart, Share2, Trash2, Maximize2, Upload, Loader2, ArrowRight,
-  Award, UserX, RefreshCw, FileCheck2, ExternalLink, UserPlus, Send as SendIcon, Lock, Eye, EyeOff, CalendarDays, UserCheck, Plus,
+  Award, UserX, RefreshCw, FileCheck2, ExternalLink, UserPlus, Send as SendIcon, Lock, Eye, EyeOff, CalendarDays, UserCheck, Plus, CheckCheck, Camera, Navigation,
   ShieldAlert,
 } from "lucide-react";
 import mapImg from "./map.jpg";
@@ -163,6 +163,7 @@ const LANG_OPTIONS = ["English", "Hindi", "Japanese", "Mandarin", "German", "Fre
 
 /* ================================== App =================================== */
 export default function App() {
+  const realUserRef = useRef(null);   // current signed-in id — set below, used by every action
   const [accountId, setAccountId] = useState(null);
   const [posts, setPosts] = useState(CLOUD ? [] : SEED_POSTS);
   const [jobs, setJobs] = useState(CLOUD ? [] : SEED_JOBS);
@@ -278,7 +279,7 @@ export default function App() {
   const fetchDms = async () => {
     if (!CLOUD) return;
     const { data } = await supabase.from("direct_messages").select("*").order("created_at", { ascending: true });
-    if (data) setDms(data.map((r) => ({ id: r.id, from: r.sender_id, to: r.recipient_id, body: r.body, sharedPostId: r.shared_post_id || null, ts: new Date(r.created_at).getTime(), read: r.read })));
+    if (data) setDms(data.map((r) => ({ id: r.id, from: r.sender_id, to: r.recipient_id, body: r.body, sharedPostId: r.shared_post_id || null, photo: r.photo_url || null, lat: r.lat ?? null, lng: r.lng ?? null, ts: new Date(r.created_at).getTime(), read: r.read })));
   };
   useEffect(() => {
     if (!CLOUD) return;
@@ -288,12 +289,27 @@ export default function App() {
       .subscribe();
     return () => { supabase.removeChannel(ch); };
   }, []);
-  const sendDm = async (to, body, sharedPostId = null) => {
+  const sendDm = async (to, body, sharedPostId = null, extra = {}) => {
     const me = realUserRef.current;
-    if (!me) return;
-    setDms((D) => [...D, { id: uid(), from: me, to, body, sharedPostId, ts: Date.now(), read: false }]);
+    if (!me) { console.error("sendDm: no signed-in user"); return; }
+    const tempId = uid();
+    setDms((D) => [...D, { id: tempId, from: me, to, body, sharedPostId, photo: extra.photoDataUri || null, lat: extra.lat ?? null, lng: extra.lng ?? null, ts: Date.now(), read: false, sending: true }]);
     if (!CLOUD) return;
-    await supabase.from("direct_messages").insert({ sender_id: me, recipient_id: to, body, shared_post_id: sharedPostId });
+    let photoUrl = null;
+    if (extra.photoDataUri) {
+      try {
+        const small = await shrinkImage(extra.photoDataUri, 1280, 0.82);
+        const blob = await (await fetch(small)).blob();
+        const path = `dm/${me}/${Date.now()}.jpg`;
+        const { error: upErr } = await supabase.storage.from("post-media").upload(path, blob, { contentType: "image/jpeg" });
+        if (!upErr) photoUrl = supabase.storage.from("post-media").getPublicUrl(path).data.publicUrl;
+      } catch (e) { console.error("dm photo failed", e); }
+    }
+    const { error } = await supabase.from("direct_messages").insert({
+      sender_id: me, recipient_id: to, body, shared_post_id: sharedPostId,
+      photo_url: photoUrl, lat: extra.lat ?? null, lng: extra.lng ?? null,
+    });
+    if (error) console.error("sendDm failed:", error.message);
     fetchDms();
   };
   const sharePostTo = async (recipients, post, note) => {
@@ -328,7 +344,6 @@ export default function App() {
         initials: initialsOf(myProfile.full_name || "?"), licenseStatus: myProfile.license_status || "none" }
     : null;
   const user = realUser || ACCOUNTS.find((a) => a.id === accountId) || null;
-  const realUserRef = useRef(null);
   realUserRef.current = user ? (user.talentId || user.id) : null;
 
   const fetchPosts = async () => {
@@ -789,6 +804,7 @@ function Shell({ user, posts, jobs, trips, listings, actions, engagement, dm, on
         {overlay ? (
           overlay.type === "profile" ? (
             <TalentProfile talent={talentById(overlay.talentId)} posts={posts} eng={eng}
+              onOpenProfile={openProfile}
               onMessage={(id) => { setOverlay(null); setTab("chats"); setDmWith(id); }}
               canRequest={user.kind === "operator"} self={user.talentId === overlay.talentId} contactOnly={user.kind === "admin"}
               onRequest={() => setOverlay({ type: "request", talentId: overlay.talentId })}
@@ -804,7 +820,7 @@ function Shell({ user, posts, jobs, trips, listings, actions, engagement, dm, on
             {tab === "jobs" && <JobsHub user={user} jobs={jobs} listings={listings} actions={actions} />}
             {tab === "trips" && <TripsTab user={user} trips={trips} actions={actions} />}
             {tab === "chats" && <ChatsTab user={user} me={actorId} dm={dm} trips={trips} actions={actions} posts={posts} onOpenPost={setSharedPost} openWith={dmWith} onOpened={() => setDmWith(null)} onOpenProfile={openProfile} />}
-            {tab === "profile" && <TalentProfile talent={talentById(user.talentId)} posts={posts} eng={eng} self onSetAvailability={actions.setAvailability} onBack={null} />}
+            {tab === "profile" && <TalentProfile talent={talentById(user.talentId)} posts={posts} eng={eng} self onSetAvailability={actions.setAvailability} onOpenProfile={openProfile} onBack={null} />}
             {tab === "discover" && <Discover onOpen={openProfile} />}
             {tab === "requests" && <OperatorJobs user={user} jobs={jobs} listings={listings} posts={posts} actions={actions} eng={eng} onOpen={openProfile} />}
             {tab === "feed" && <Feed posts={posts} eng={eng} admin={user.kind === "admin"} onDelete={actions.deletePost} onOpenProfile={openProfile} following={myFollowing} />}
@@ -1229,7 +1245,7 @@ function TalentCard({ t, onOpen }) {
           <div className="inline-flex items-center gap-1 rounded-full px-2 py-1" style={{ background: C.goldSoft }}>
             <Star size={12} color={C.gold} fill={C.gold} /><span className="text-[12.5px] font-semibold" style={{ color: "#7a5a1e" }}>{t.rating ? t.rating.toFixed(1) : "New"}</span>
           </div>
-          <div className="text-[11.5px] mt-1" style={{ color: C.muted }}>{t.years} yrs · {t.trips} trips</div>
+          <div className="text-[11.5px] mt-1" style={{ color: C.muted }}>{t.years} yrs</div>
         </div>
       </div>
       <div className="flex flex-wrap items-center gap-1.5 mt-3">
@@ -1401,7 +1417,7 @@ function ModCard({ post, onApprove, onReject, eng }) {
 }
 
 /* ============================= Talent profile ============================ */
-function TalentProfile({ talent, posts, canRequest, self, contactOnly, eng, onRequest, onMessage, onSetAvailability, onBack }) {
+function TalentProfile({ talent, posts, canRequest, self, contactOnly, eng, onRequest, onMessage, onSetAvailability, onOpenProfile, onBack }) {
   const t = talent;
   const live = posts.filter((p) => p.talentId === t.id && p.status === "approved").length;
   const located = posts.filter((p) => p.talentId === t.id && p.status === "approved" && p.location);
@@ -1414,6 +1430,7 @@ function TalentProfile({ talent, posts, canRequest, self, contactOnly, eng, onRe
   const [viewStories, setViewStories] = useState(false);
   const [addStory, setAddStory] = useState(false);
   const [shareToStory, setShareToStory] = useState(null);
+  const [listMode, setListMode] = useState(null);
   return (
     <div className="pb-6">
       <div className="relative">
@@ -1451,8 +1468,8 @@ function TalentProfile({ talent, posts, canRequest, self, contactOnly, eng, onRe
           </div>
           <div className="flex items-center mt-4 mb-1">
             <Stat n={gallery.length} label="posts" />
-            <Stat n={followerCount} label={followerCount === 1 ? "follower" : "followers"} />
-            <Stat n={followingCount} label="following" />
+            <Stat n={followerCount} label={followerCount === 1 ? "follower" : "followers"} onClick={() => setListMode("followers")} />
+            <Stat n={followingCount} label="following" onClick={() => setListMode("following")} />
             <Stat n={t.years} label="yrs" />
           </div>
 
@@ -1552,6 +1569,10 @@ function TalentProfile({ talent, posts, canRequest, self, contactOnly, eng, onRe
         <StoryViewer stories={myStories} author={t} canDelete={self} onDelete={eng?.deleteStory} onClose={() => setViewStories(false)} />
       )}
       {addStory && <AddStory onClose={() => setAddStory(false)} onAdd={eng?.addStory} />}
+      {listMode && (
+        <FollowListSheet mode={listMode} talent={t} eng={eng} onClose={() => setListMode(null)}
+          onOpenProfile={(id) => { setListMode(null); onOpenProfile && onOpenProfile(id); }} />
+      )}
       {shareToStory && (
         <ConfirmShareStory post={shareToStory} onClose={() => setShareToStory(null)}
           onConfirm={async () => { await eng?.addStory({ kind: "photo", fromPostUrl: shareToStory.media.dataUri, caption: shareToStory.text }); setShareToStory(null); setViewStories(true); }} />
@@ -2402,7 +2423,7 @@ function MapCinema({ location, photo }) {
 
 function Lightbox({ src, onClose }) {
   return (
-    <div className="fixed inset-0 flex items-center justify-center" style={{ background: "rgba(8,10,8,.96)", zIndex: 60 }} onClick={onClose}>
+    <div className="fixed inset-0 flex items-center justify-center" style={{ background: "rgba(8,10,8,.96)", zIndex: 210 }} onClick={onClose}>
       <img src={src} alt="" style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }} />
       <button className="absolute top-4 right-4 w-10 h-10 rounded-full flex items-center justify-center" style={{ background: "rgba(255,255,255,.15)" }} aria-label="Close">
         <X size={20} color="#fff" />
@@ -2466,7 +2487,7 @@ function PostDetail({ items, index, author, eng, onShareStory, onClose }) {
   }, []);
 
   return (
-    <div className="fixed inset-0 flex flex-col" style={{ background: C.bg, zIndex: 70 }}>
+    <div className="fixed inset-0 flex flex-col" style={{ background: C.bg, zIndex: 200, height: "100dvh" }}>
       <div className="shrink-0 h-14 px-3 flex items-center gap-3" style={{ background: C.card, borderBottom: `1px solid ${C.line}` }}>
         <button onClick={onClose} className="tap w-9 h-9 rounded-full flex items-center justify-center" style={{ border: `1px solid ${C.line}` }} aria-label="Back">
           <ChevronLeft size={19} color={C.ink} />
@@ -2505,9 +2526,9 @@ function WallPost({ post: p, author, eng, onShareStory, onClose }) {
         </div>
       </div>
 
-      {/* image at true proportions */}
-      <div className="relative flex items-center justify-center" style={{ background: "#0d100d" }}>
-        <img src={p.media.dataUri} alt="" className="block w-full" style={{ maxHeight: "68vh", objectFit: "contain" }} />
+      {/* image — fits the frame, never overflows */}
+      <div className="relative w-full flex items-center justify-center overflow-hidden" style={{ background: "#0d100d", maxHeight: "62dvh" }}>
+        <img src={p.media.dataUri} alt="" className="block" style={{ maxWidth: "100%", maxHeight: "62dvh", width: "auto", height: "auto", objectFit: "contain" }} />
       </div>
 
       <div className="px-4 pt-3 pb-4">
@@ -3265,9 +3286,11 @@ function ChatsTab({ user, me, dm, trips, actions, posts, onOpenPost, openWith, o
       </div>
 
       {threads.length === 0 ? (
-        <div className="rounded-xl px-4 py-3 text-[13px]" style={{ background: C.card, border: `1px dashed ${C.line}`, color: C.muted }}>
-          No direct messages yet — tap New to start one.
-        </div>
+        <button onClick={() => setFind(true)} className="tap w-full rounded-2xl px-6 py-8 flex flex-col items-center text-center" style={{ background: C.card, border: `1px dashed ${C.line}` }}>
+          <div className="w-12 h-12 rounded-2xl flex items-center justify-center mb-3" style={{ background: C.goldSoft }}><MessageCircle size={22} color={C.gold} /></div>
+          <div className="text-[14.5px] font-semibold" style={{ color: C.ink }}>No messages yet</div>
+          <p className="text-[13px] mt-1" style={{ color: C.muted }}>Tap to message a guide, driver or operator.</p>
+        </button>
       ) : (
         <div className="rounded-2xl overflow-hidden" style={{ border: `1px solid ${C.line}` }}>
           {threads.map((t, idx) => {
@@ -3281,7 +3304,7 @@ function ChatsTab({ user, me, dm, trips, actions, posts, onOpenPost, openWith, o
                     <span className="text-[14.5px] font-semibold" style={{ color: C.ink }}>{p?.name || "Member"}</span>
                     {p?.verified && <BadgeCheck size={14} color={C.pine} />}
                   </div>
-                  <div className="text-[12.5px] truncate" style={{ color: t.unread ? C.ink : C.muted }}>{t.fromMe ? "You: " : ""}{t.body}</div>
+                  <div className="text-[12.5px] truncate" style={{ color: t.unread ? C.ink : C.muted, fontWeight: t.unread ? 600 : 400 }}>{t.fromMe ? "You: " : ""}{t.body}</div>
                 </div>
                 <div className="text-right shrink-0">
                   <div className="text-[11px]" style={{ color: C.muted }}>{relTime(t.ts)}</div>
@@ -3397,19 +3420,58 @@ function PickContact({ me, onPick, onBack }) {
 
 function DmThread({ me, otherId, dm, posts, onOpenPost, onBack, onOpenProfile }) {
   const [text, setText] = useState("");
+  const [sending, setSending] = useState(false);
+  const [note, setNote] = useState(null);
   const scrollRef = useRef();
+  const fileRef = useRef();
   const p = talentById(otherId);
-  const thread = (dm?.dms || []).filter((m) => (m.from === me && m.to === otherId) || (m.from === otherId && m.to === me)).sort((a, b) => a.ts - b.ts);
+  const thread = (dm?.dms || [])
+    .filter((m) => (m.from === me && m.to === otherId) || (m.from === otherId && m.to === me))
+    .sort((a, b) => a.ts - b.ts);
 
   useEffect(() => { dm?.markRead && dm.markRead(otherId); }, [otherId, thread.length]);
   useEffect(() => { if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight; }, [thread.length]);
 
-  const send = () => {
+  const flash = (m) => { setNote(m); setTimeout(() => setNote(null), 2400); };
+
+  const send = async () => {
     const t = text.trim();
-    if (!t) return;
-    dm.sendDm(otherId, t);
+    if (!t || sending) return;
     setText("");
+    setSending(true);
+    await dm.sendDm(otherId, t);
+    setSending(false);
   };
+
+  const sendPhoto = async (e) => {
+    const f = e.target.files?.[0]; e.target.value = "";
+    if (!f || !f.type.startsWith("image/")) return;
+    if (f.size > 8 * 1024 * 1024) return flash("Photo is over 8 MB.");
+    const r = new FileReader();
+    r.onload = async () => { await dm.sendDm(otherId, "Photo", null, { photoDataUri: r.result }); };
+    r.readAsDataURL(f);
+  };
+
+  const sendLocation = () => {
+    if (!navigator.geolocation) return flash("Location isn't available on this device.");
+    flash("Getting your location…");
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => { await dm.sendDm(otherId, "Shared a location", null, { lat: +pos.coords.latitude.toFixed(5), lng: +pos.coords.longitude.toFixed(5) }); },
+      () => flash("Couldn't get your location."),
+      { enableHighAccuracy: true, timeout: 10000 }
+    );
+  };
+
+  // group by day
+  const dayLabel = (ts) => {
+    const d = new Date(ts), now = new Date();
+    const same = (a, b) => a.toDateString() === b.toDateString();
+    if (same(d, now)) return "Today";
+    const y = new Date(now); y.setDate(now.getDate() - 1);
+    if (same(d, y)) return "Yesterday";
+    return d.toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+  };
+  let lastDay = null;
 
   return (
     <div className="fade flex flex-col" style={{ height: "100%" }}>
@@ -3422,52 +3484,260 @@ function DmThread({ me, otherId, dm, posts, onOpenPost, onBack, onOpenProfile })
               <span className="text-[14.5px] font-semibold" style={{ color: C.ink }}>{p?.name || "Member"}</span>
               {p?.verified && <BadgeCheck size={14} color={C.pine} />}
             </div>
-            <div className="text-[11.5px]" style={{ color: C.muted }}>{p ? roleLabel(p.role) : ""}</div>
+            <div className="text-[11.5px]" style={{ color: C.muted }}>{p ? roleLabel(p.role) : ""}{p?.base ? ` · ${p.base}` : ""}</div>
           </div>
         </button>
       </div>
 
-      <div ref={scrollRef} className="flex-1 overflow-y-auto hidescroll px-4 py-4 space-y-2.5" style={{ background: C.bg, scrollbarWidth: "none" }}>
+      <div ref={scrollRef} className="flex-1 overflow-y-auto hidescroll px-4 py-4 space-y-1.5" style={{ background: C.bg, scrollbarWidth: "none" }}>
         {thread.length === 0 && (
-          <p className="text-[13px] text-center py-6" style={{ color: C.muted }}>Say hello — messages are private between you two.</p>
+          <div className="text-center py-10">
+            <Avatar initials={p?.initials || "?"} size={56} />
+            <p className="text-[14px] font-semibold mt-3" style={{ color: C.ink }}>{p?.name}</p>
+            <p className="text-[13px] mt-1" style={{ color: C.muted }}>Say hello — messages are private between you two.</p>
+          </div>
         )}
-        {thread.map((m) => {
+        {thread.map((m, idx) => {
           const mine = m.from === me;
+          const prev = thread[idx - 1];
+          const next = thread[idx + 1];
+          const label = dayLabel(m.ts);
+          const showDay = label !== lastDay;
+          lastDay = label;
+          const grouped = prev && prev.from === m.from && m.ts - prev.ts < 4 * 60000;
+          const lastOfGroup = !next || next.from !== m.from || next.ts - m.ts >= 4 * 60000;
           return (
-            <div key={m.id} className={`flex ${mine ? "justify-end" : "justify-start"}`}>
-              <div style={{ maxWidth: "80%" }}>
-                <div className="rounded-2xl overflow-hidden" style={{ background: mine ? C.pine : C.card, border: mine ? "none" : `1px solid ${C.line}`, borderBottomRightRadius: mine ? 5 : 16, borderBottomLeftRadius: mine ? 16 : 5 }}>
-                  {m.sharedPostId && (() => {
-                    const sp = (posts || []).find((p) => p.id === m.sharedPostId);
-                    if (!sp) return <div className="px-3.5 pt-2.5 text-[12.5px]" style={{ color: mine ? "#ffffffcc" : C.muted }}>Shared post unavailable</div>;
-                    const a = talentById(sp.talentId);
-                    return (
-                      <button onClick={() => onOpenPost && onOpenPost(sp)} className="tap block w-full text-left">
-                        {sp.media?.dataUri && <img src={sp.media.dataUri} alt="" className="w-full block" style={{ maxHeight: 190, objectFit: "cover" }} />}
-                        <div className="px-3 py-2" style={{ background: mine ? "rgba(255,255,255,.12)" : C.bg }}>
-                          <div className="text-[12px] font-semibold" style={{ color: mine ? "#fff" : C.ink }}>{a?.name || "Member"}</div>
-                          {sp.text && <div className="text-[11.5px] truncate" style={{ color: mine ? "#ffffffcc" : C.muted }}>{sp.text}</div>}
-                        </div>
-                      </button>
-                    );
-                  })()}
-                  <div className="px-3.5 py-2.5">
-                    <span className="text-[14.5px] leading-snug" style={{ color: mine ? "#fff" : C.ink }}>{m.body}</span>
-                  </div>
+            <div key={m.id}>
+              {showDay && (
+                <div className="text-center my-3">
+                  <span className="text-[11px] font-semibold rounded-full px-2.5 py-1" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.muted }}>{label}</span>
                 </div>
-                <div className={`text-[10.5px] mt-0.5 ${mine ? "text-right mr-1" : "ml-1"}`} style={{ color: C.muted }}>{relTime(m.ts)}</div>
+              )}
+              <div className={`flex ${mine ? "justify-end" : "justify-start"}`} style={{ marginTop: grouped ? 2 : 8 }}>
+                <div style={{ maxWidth: "82%" }}>
+                  <div className="overflow-hidden" style={{
+                    background: mine ? C.pine : C.card,
+                    border: mine ? "none" : `1px solid ${C.line}`,
+                    borderRadius: 18,
+                    borderBottomRightRadius: mine && lastOfGroup ? 5 : 18,
+                    borderBottomLeftRadius: !mine && lastOfGroup ? 5 : 18,
+                  }}>
+                    {m.sharedPostId && (() => {
+                      const sp = (posts || []).find((x) => x.id === m.sharedPostId);
+                      if (!sp) return <div className="px-3.5 pt-2.5 text-[12.5px]" style={{ color: mine ? "#ffffffcc" : C.muted }}>Shared post unavailable</div>;
+                      const a = talentById(sp.talentId);
+                      return (
+                        <button onClick={() => onOpenPost && onOpenPost(sp)} className="tap block w-full text-left">
+                          {sp.media?.dataUri && <img src={sp.media.dataUri} alt="" className="w-full block" style={{ maxHeight: 190, objectFit: "cover" }} />}
+                          <div className="px-3 py-2" style={{ background: mine ? "rgba(255,255,255,.12)" : C.bg }}>
+                            <div className="text-[12px] font-semibold" style={{ color: mine ? "#fff" : C.ink }}>{a?.name || "Member"}</div>
+                            {sp.text && <div className="text-[11.5px] truncate" style={{ color: mine ? "#ffffffcc" : C.muted }}>{sp.text}</div>}
+                          </div>
+                        </button>
+                      );
+                    })()}
+
+                    {m.photo && <img src={m.photo} alt="" className="w-full block" style={{ maxHeight: 260, objectFit: "cover" }} />}
+
+                    {m.lat != null && m.lng != null && (
+                      <a href={`https://www.google.com/maps?q=${m.lat},${m.lng}`} target="_blank" rel="noreferrer" className="block px-3.5 py-2.5">
+                        <div className="flex items-center gap-2">
+                          <Navigation size={15} color={mine ? "#fff" : C.gold} />
+                          <span className="text-[13.5px] font-semibold" style={{ color: mine ? "#fff" : C.ink }}>Location shared</span>
+                        </div>
+                        <div className="text-[11.5px] mt-0.5" style={{ color: mine ? "#ffffffcc" : C.muted }}>{m.lat}, {m.lng} · open in Maps</div>
+                      </a>
+                    )}
+
+                    {m.body && !(m.photo && m.body === "Photo") && !(m.lat != null && m.body === "Shared a location") && (
+                      <div className="px-3.5 py-2.5">
+                        <span className="text-[14.5px] leading-snug" style={{ color: mine ? "#fff" : C.ink }}>{m.body}</span>
+                      </div>
+                    )}
+                  </div>
+
+                  {lastOfGroup && (
+                    <div className={`flex items-center gap-1 text-[10.5px] mt-0.5 ${mine ? "justify-end mr-1" : "ml-1"}`} style={{ color: C.muted }}>
+                      {relTime(m.ts)}
+                      {mine && (m.sending ? <Clock size={11} /> : m.read ? <CheckCheck size={12} color={C.pine} /> : <Check size={11} />)}
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
           );
         })}
       </div>
 
-      <div className="shrink-0 px-3 py-2.5 flex items-center gap-2" style={{ background: C.card, borderTop: `1px solid ${C.line}` }}>
-        <input value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => e.key === "Enter" && send()}
-          placeholder="Message…" className="flex-1 h-11 px-4 rounded-full text-[14.5px]" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
-        <button onClick={send} disabled={!text.trim()} className="tap w-11 h-11 rounded-full flex items-center justify-center shrink-0" style={{ background: text.trim() ? C.pine : "#C7CEC7" }} aria-label="Send">
-          <SendIcon size={18} color="#fff" />
+      {note && <div className="px-4 py-2 text-[12px] text-center" style={{ background: C.pineSoft, color: C.pine }}>{note}</div>}
+
+      <div className="shrink-0 px-2.5 py-2 flex items-end gap-1.5" style={{ background: C.card, borderTop: `1px solid ${C.line}` }}>
+        <button onClick={() => fileRef.current?.click()} className="tap w-10 h-10 rounded-full flex items-center justify-center shrink-0" style={{ background: C.bg }} aria-label="Send photo">
+          <Camera size={18} color={C.muted} />
         </button>
+        <input ref={fileRef} type="file" accept="image/*" onChange={sendPhoto} className="hidden" />
+        <button onClick={sendLocation} className="tap w-10 h-10 rounded-full flex items-center justify-center shrink-0" style={{ background: C.bg }} aria-label="Send location">
+          <MapPin size={18} color={C.muted} />
+        </button>
+        <textarea value={text} onChange={(e) => setText(e.target.value)} rows={1}
+          onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
+          placeholder="Message…" className="flex-1 px-4 py-2.5 rounded-2xl text-[15px] resize-none"
+          style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink, maxHeight: 100, minHeight: 40 }} />
+        <button onClick={send} disabled={!text.trim()} className="tap w-10 h-10 rounded-full flex items-center justify-center shrink-0"
+          style={{ background: text.trim() ? C.pine : "#C7CEC7" }} aria-label="Send">
+          <SendIcon size={17} color="#fff" />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* ===================== Share a post to people (in-app) ==================== */
+function SharePostSheet({ post, eng, onExternal, onClose, onSent }) {
+  const [picked, setPicked] = useState([]);
+  const [note, setNote] = useState("");
+  const [q, setQ] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const me = eng?.me;
+  const follows = eng?.follows || [];
+  const iFollow = follows.filter((f) => f.follower === me).map((f) => f.following);
+  const followsMe = follows.filter((f) => f.following === me).map((f) => f.follower);
+  const circle = [...new Set([...iFollow, ...followsMe])];
+
+  const pool = [...TALENT, ...Object.values(PROFILE_DIR)].filter((p) => p.id !== me);
+  const seen = new Set();
+  const unique = pool.filter((p) => (seen.has(p.id) ? false : (seen.add(p.id), true)));
+  const inCircle = unique.filter((p) => circle.includes(p.id));
+  const others = unique.filter((p) => !circle.includes(p.id));
+  const match = (p) => `${p.name} ${p.base || ""}`.toLowerCase().includes(q.toLowerCase());
+
+  const toggle = (id) => setPicked((P) => (P.includes(id) ? P.filter((x) => x !== id) : [...P, id]));
+
+  const send = async () => {
+    if (!picked.length || !eng?.sharePostTo) return;
+    setBusy(true);
+    await eng.sharePostTo(picked, post, note);
+    setBusy(false);
+    onSent && onSent(picked.length);
+    onClose();
+  };
+
+  const Row = ({ p }) => (
+    <button onClick={() => toggle(p.id)} className="tap w-full text-left px-1 py-2 flex items-center gap-3">
+      <Avatar initials={p.initials} size={40} />
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-1.5">
+          <span className="text-[14.5px] font-semibold" style={{ color: C.ink }}>{p.name}</span>
+          {p.verified && <BadgeCheck size={14} color={C.pine} />}
+        </div>
+        <div className="text-[12px]" style={{ color: C.muted }}>{roleLabel(p.role)}{p.base ? ` · ${p.base}` : ""}</div>
+      </div>
+      <span className="w-6 h-6 rounded-full flex items-center justify-center shrink-0"
+        style={{ background: picked.includes(p.id) ? C.pine : C.card, border: `1.5px solid ${picked.includes(p.id) ? C.pine : C.line}` }}>
+        {picked.includes(p.id) && <Check size={13} color="#fff" strokeWidth={3} />}
+      </span>
+    </button>
+  );
+
+  return (
+    <div className="fixed inset-0 flex items-end" style={{ background: "rgba(8,10,8,.55)", zIndex: 220 }} onClick={onClose}>
+      <div className="w-full rounded-t-3xl flex flex-col" style={{ background: C.card, maxHeight: "88vh" }} onClick={(e) => e.stopPropagation()}>
+        <div className="p-5 pb-3 shrink-0">
+          <div className="w-10 h-1 rounded-full mx-auto mb-4" style={{ background: C.line }} />
+          <div className="text-[17px] font-semibold" style={{ color: C.ink }}>Send this post</div>
+          <p className="text-[13px] mt-0.5 mb-3" style={{ color: C.muted }}>It arrives in their Messages.</p>
+          <div className="relative">
+            <Search size={16} color={C.muted} className="absolute left-3.5 top-1/2 -translate-y-1/2" />
+            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search people"
+              className="w-full h-11 pl-10 pr-4 rounded-xl text-[14px]" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
+          </div>
+        </div>
+
+        <div className="flex-1 overflow-y-auto hidescroll px-4" style={{ scrollbarWidth: "none" }}>
+          {inCircle.filter(match).length > 0 && (
+            <>
+              <div className="text-[11.5px] font-semibold tracking-[.12em] uppercase mt-1 mb-1" style={{ color: C.gold }}>Followers & following</div>
+              {inCircle.filter(match).map((p) => <Row key={p.id} p={p} />)}
+            </>
+          )}
+          {others.filter(match).length > 0 && (
+            <>
+              <div className="text-[11.5px] font-semibold tracking-[.12em] uppercase mt-3 mb-1" style={{ color: C.gold }}>Everyone else</div>
+              {others.filter(match).map((p) => <Row key={p.id} p={p} />)}
+            </>
+          )}
+          {unique.filter(match).length === 0 && (
+            <p className="text-[13.5px] text-center py-8" style={{ color: C.muted }}>Nobody found.</p>
+          )}
+        </div>
+
+        <div className="p-4 shrink-0" style={{ borderTop: `1px solid ${C.lineSoft}` }}>
+          <input value={note} onChange={(e) => setNote(e.target.value)} maxLength={140} placeholder="Add a message (optional)"
+            className="w-full h-11 px-3.5 rounded-xl text-[14px] mb-2.5" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
+          <button onClick={send} disabled={!picked.length || busy}
+            className="tap w-full h-12 rounded-xl text-[15px] font-semibold inline-flex items-center justify-center gap-2"
+            style={{ background: picked.length ? C.pine : "#C7CEC7", color: "#fff" }}>
+            {busy ? <Loader2 size={18} className="animate-spin" /> : <><SendIcon size={17} /> Send{picked.length ? ` to ${picked.length}` : ""}</>}
+          </button>
+          <button onClick={() => { onExternal(); onClose(); }} className="tap w-full h-11 rounded-xl text-[13.5px] font-semibold mt-2 inline-flex items-center justify-center gap-2"
+            style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }}>
+            <Share2 size={15} /> Share outside the app
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ==================== Followers / Following list sheet =================== */
+function FollowListSheet({ mode, talent, eng, onClose, onOpenProfile }) {
+  const follows = eng?.follows || [];
+  const me = eng?.me;
+  const ids = mode === "followers"
+    ? follows.filter((f) => f.following === talent.id).map((f) => f.follower)
+    : follows.filter((f) => f.follower === talent.id).map((f) => f.following);
+  const people = ids.map((id) => talentById(id)).filter(Boolean);
+
+  return (
+    <div className="fixed inset-0 flex items-end" style={{ background: "rgba(8,10,8,.55)", zIndex: 220 }} onClick={onClose}>
+      <div className="w-full rounded-t-3xl flex flex-col" style={{ background: C.card, maxHeight: "80dvh" }} onClick={(e) => e.stopPropagation()}>
+        <div className="p-5 pb-2 shrink-0">
+          <div className="w-10 h-1 rounded-full mx-auto mb-4" style={{ background: C.line }} />
+          <div className="text-[17px] font-semibold" style={{ color: C.ink }}>
+            {mode === "followers" ? "Followers" : "Following"} · {people.length}
+          </div>
+        </div>
+        <div className="flex-1 overflow-y-auto hidescroll px-4 pb-5" style={{ scrollbarWidth: "none" }}>
+          {people.length === 0 ? (
+            <p className="text-[13.5px] text-center py-10" style={{ color: C.muted }}>
+              {mode === "followers" ? "No followers yet." : "Not following anyone yet."}
+            </p>
+          ) : people.map((p) => {
+            const iFollowThem = follows.some((f) => f.follower === me && f.following === p.id);
+            return (
+              <div key={p.id} className="flex items-center gap-3 py-2.5">
+                <button onClick={() => onOpenProfile(p.id)} className="tap flex items-center gap-3 flex-1 min-w-0 text-left">
+                  <Avatar initials={p.initials} size={42} />
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[14.5px] font-semibold" style={{ color: C.ink }}>{p.name}</span>
+                      {p.verified && <BadgeCheck size={14} color={C.pine} />}
+                    </div>
+                    <div className="text-[12px]" style={{ color: C.muted }}>{roleLabel(p.role)}{p.base ? ` · ${p.base}` : ""}</div>
+                  </div>
+                </button>
+                {p.id !== me && (
+                  <button onClick={() => eng?.toggleFollow && eng.toggleFollow(p.id)}
+                    className="tap shrink-0 h-9 px-3.5 rounded-lg text-[13px] font-semibold"
+                    style={{ background: iFollowThem ? C.card : C.pine, border: iFollowThem ? `1px solid ${C.line}` : "none", color: iFollowThem ? C.ink : "#fff" }}>
+                    {iFollowThem ? "Following" : "Follow"}
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </div>
       </div>
     </div>
   );
@@ -3574,15 +3844,6 @@ function AvailabilityEditor({ talent, onSet }) {
   );
 }
 
-function Stat({ n, label }) {
-  return (
-    <div className="flex-1 text-center">
-      <div className="text-[17px] font-semibold leading-none" style={{ color: C.ink }}>{n}</div>
-      <div className="text-[11.5px] mt-1" style={{ color: C.muted }}>{label}</div>
-    </div>
-  );
-}
-
 /* ================================ Stories ================================ */
 function StoryViewer({ stories, author, canDelete, onDelete, onClose }) {
   const [i, setI] = useState(0);
@@ -3609,9 +3870,8 @@ function StoryViewer({ stories, author, canDelete, onDelete, onClose }) {
   };
 
   return (
-    <div className="fixed inset-0 flex flex-col" style={{ background: "#08090880", backdropFilter: "blur(2px)", zIndex: 80 }}>
+    <div className="fixed inset-0 flex flex-col" style={{ background: "#08090880", backdropFilter: "blur(2px)", zIndex: 220 }}>
       <div className="flex-1 flex flex-col" style={{ background: "#0b0d0b" }}>
-        {/* progress bars */}
         <div className="flex gap-1 px-3 pt-3">
           {stories.map((_, k) => (
             <div key={k} className="flex-1 h-[3px] rounded-full overflow-hidden" style={{ background: "rgba(255,255,255,.25)" }}>
@@ -3642,7 +3902,7 @@ function StoryViewer({ stories, author, canDelete, onDelete, onClose }) {
           onTouchEnd={(e) => { setPaused(false); const dx = e.changedTouches[0].clientX - (startX.current ?? 0);
             if (dx < -50 && i < stories.length - 1) setI(i + 1); if (dx > 50 && i > 0) setI(i - 1); }}>
           {st.kind === "video" ? (
-            <video src={st.url} autoPlay playsInline muted={false} className="absolute inset-0 w-full h-full" style={{ objectFit: "contain" }} />
+            <video src={st.url} autoPlay playsInline className="absolute inset-0 w-full h-full" style={{ objectFit: "contain" }} />
           ) : (
             <img src={st.url} alt="" className="absolute inset-0 w-full h-full" style={{ objectFit: "contain" }} />
           )}
@@ -3686,7 +3946,7 @@ function AddStory({ onClose, onAdd }) {
   };
 
   return (
-    <div className="fixed inset-0 flex items-end" style={{ background: "rgba(8,10,8,.55)", zIndex: 80 }} onClick={onClose}>
+    <div className="fixed inset-0 flex items-end" style={{ background: "rgba(8,10,8,.55)", zIndex: 220 }} onClick={onClose}>
       <div className="w-full rounded-t-3xl p-5" style={{ background: C.card }} onClick={(e) => e.stopPropagation()}>
         <div className="w-10 h-1 rounded-full mx-auto mb-4" style={{ background: C.line }} />
         <div className="text-[17px] font-semibold mb-1" style={{ color: C.ink }}>Add to your story</div>
@@ -3725,7 +3985,7 @@ function AddStory({ onClose, onAdd }) {
 function ConfirmShareStory({ post, onClose, onConfirm }) {
   const [busy, setBusy] = useState(false);
   return (
-    <div className="fixed inset-0 flex items-end" style={{ background: "rgba(8,10,8,.55)", zIndex: 80 }} onClick={onClose}>
+    <div className="fixed inset-0 flex items-end" style={{ background: "rgba(8,10,8,.55)", zIndex: 220 }} onClick={onClose}>
       <div className="w-full rounded-t-3xl p-5" style={{ background: C.card }} onClick={(e) => e.stopPropagation()}>
         <div className="w-10 h-1 rounded-full mx-auto mb-4" style={{ background: C.line }} />
         <div className="text-[17px] font-semibold mb-1" style={{ color: C.ink }}>Share this post to your story?</div>
@@ -3743,100 +4003,12 @@ function ConfirmShareStory({ post, onClose, onConfirm }) {
   );
 }
 
-/* ===================== Share a post to people (in-app) ==================== */
-function SharePostSheet({ post, eng, onExternal, onClose, onSent }) {
-  const [picked, setPicked] = useState([]);
-  const [note, setNote] = useState("");
-  const [q, setQ] = useState("");
-  const [busy, setBusy] = useState(false);
-
-  const me = eng?.me;
-  const follows = eng?.follows || [];
-  const iFollow = follows.filter((f) => f.follower === me).map((f) => f.following);
-  const followsMe = follows.filter((f) => f.following === me).map((f) => f.follower);
-  const circle = [...new Set([...iFollow, ...followsMe])];
-
-  const pool = [...TALENT, ...Object.values(PROFILE_DIR)].filter((p) => p.id !== me);
-  const seen = new Set();
-  const unique = pool.filter((p) => (seen.has(p.id) ? false : (seen.add(p.id), true)));
-  const inCircle = unique.filter((p) => circle.includes(p.id));
-  const others = unique.filter((p) => !circle.includes(p.id));
-  const match = (p) => `${p.name} ${p.base || ""}`.toLowerCase().includes(q.toLowerCase());
-
-  const toggle = (id) => setPicked((P) => (P.includes(id) ? P.filter((x) => x !== id) : [...P, id]));
-
-  const send = async () => {
-    if (!picked.length || !eng?.sharePostTo) return;
-    setBusy(true);
-    await eng.sharePostTo(picked, post, note);
-    setBusy(false);
-    onSent && onSent(picked.length);
-    onClose();
-  };
-
-  const Row = ({ p }) => (
-    <button onClick={() => toggle(p.id)} className="tap w-full text-left px-1 py-2 flex items-center gap-3">
-      <Avatar initials={p.initials} size={40} />
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-1.5">
-          <span className="text-[14.5px] font-semibold" style={{ color: C.ink }}>{p.name}</span>
-          {p.verified && <BadgeCheck size={14} color={C.pine} />}
-        </div>
-        <div className="text-[12px]" style={{ color: C.muted }}>{roleLabel(p.role)}{p.base ? ` · ${p.base}` : ""}</div>
-      </div>
-      <span className="w-6 h-6 rounded-full flex items-center justify-center shrink-0"
-        style={{ background: picked.includes(p.id) ? C.pine : C.card, border: `1.5px solid ${picked.includes(p.id) ? C.pine : C.line}` }}>
-        {picked.includes(p.id) && <Check size={13} color="#fff" strokeWidth={3} />}
-      </span>
-    </button>
-  );
-
+function Stat({ n, label, onClick }) {
+  const Tag = onClick ? "button" : "div";
   return (
-    <div className="fixed inset-0 flex items-end" style={{ background: "rgba(8,10,8,.55)", zIndex: 80 }} onClick={onClose}>
-      <div className="w-full rounded-t-3xl flex flex-col" style={{ background: C.card, maxHeight: "88vh" }} onClick={(e) => e.stopPropagation()}>
-        <div className="p-5 pb-3 shrink-0">
-          <div className="w-10 h-1 rounded-full mx-auto mb-4" style={{ background: C.line }} />
-          <div className="text-[17px] font-semibold" style={{ color: C.ink }}>Send this post</div>
-          <p className="text-[13px] mt-0.5 mb-3" style={{ color: C.muted }}>It arrives in their Messages.</p>
-          <div className="relative">
-            <Search size={16} color={C.muted} className="absolute left-3.5 top-1/2 -translate-y-1/2" />
-            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search people"
-              className="w-full h-11 pl-10 pr-4 rounded-xl text-[14px]" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
-          </div>
-        </div>
-
-        <div className="flex-1 overflow-y-auto hidescroll px-4" style={{ scrollbarWidth: "none" }}>
-          {inCircle.filter(match).length > 0 && (
-            <>
-              <div className="text-[11.5px] font-semibold tracking-[.12em] uppercase mt-1 mb-1" style={{ color: C.gold }}>Followers & following</div>
-              {inCircle.filter(match).map((p) => <Row key={p.id} p={p} />)}
-            </>
-          )}
-          {others.filter(match).length > 0 && (
-            <>
-              <div className="text-[11.5px] font-semibold tracking-[.12em] uppercase mt-3 mb-1" style={{ color: C.gold }}>Everyone else</div>
-              {others.filter(match).map((p) => <Row key={p.id} p={p} />)}
-            </>
-          )}
-          {unique.filter(match).length === 0 && (
-            <p className="text-[13.5px] text-center py-8" style={{ color: C.muted }}>Nobody found.</p>
-          )}
-        </div>
-
-        <div className="p-4 shrink-0" style={{ borderTop: `1px solid ${C.lineSoft}` }}>
-          <input value={note} onChange={(e) => setNote(e.target.value)} maxLength={140} placeholder="Add a message (optional)"
-            className="w-full h-11 px-3.5 rounded-xl text-[14px] mb-2.5" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
-          <button onClick={send} disabled={!picked.length || busy}
-            className="tap w-full h-12 rounded-xl text-[15px] font-semibold inline-flex items-center justify-center gap-2"
-            style={{ background: picked.length ? C.pine : "#C7CEC7", color: "#fff" }}>
-            {busy ? <Loader2 size={18} className="animate-spin" /> : <><SendIcon size={17} /> Send{picked.length ? ` to ${picked.length}` : ""}</>}
-          </button>
-          <button onClick={() => { onExternal(); onClose(); }} className="tap w-full h-11 rounded-xl text-[13.5px] font-semibold mt-2 inline-flex items-center justify-center gap-2"
-            style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }}>
-            <Share2 size={15} /> Share outside the app
-          </button>
-        </div>
-      </div>
-    </div>
+    <Tag onClick={onClick} className={`flex-1 text-center ${onClick ? "tap" : ""}`}>
+      <div className="text-[17px] font-semibold leading-none" style={{ color: C.ink }}>{n}</div>
+      <div className="text-[11.5px] mt-1" style={{ color: onClick ? C.pine : C.muted }}>{label}</div>
+    </Tag>
   );
 }
