@@ -2417,7 +2417,7 @@ function PhotoGrid({ items, author, eng, onShareStory }) {
   const [openIdx, setOpenIdx] = useState(null);
   return (
     <>
-      <div className="rounded-xl overflow-hidden" style={{ border: `1px solid ${C.line}` }}>
+      <div className="overflow-hidden" style={{ marginLeft: -20, marginRight: -20 }}>
         <div className="grid grid-cols-3 gap-[2px]" style={{ background: C.line }}>
           {items.map((p, i) => {
             const likes = (eng?.likes || []).filter((l) => l.post_id === p.id).length;
@@ -2541,7 +2541,7 @@ function WallPost({ post: p, author, eng, onShareStory, onClose }) {
 
 /* ===================== Profile tabs (swipeable CV / Gallery) ===================== */
 function ProfileTabs({ cv, gallery, galleryCount }) {
-  const [tab, setTab] = useState(0);           // 0 = CV · 1 = Gallery
+  const [tab, setTab] = useState(0);           // 0 = Posts · 1 = Reviews
   const startX = useRef(null);
   const startY = useRef(null);
   const locked = useRef(false);
@@ -2561,11 +2561,11 @@ function ProfileTabs({ cv, gallery, galleryCount }) {
     const t = e.changedTouches ? e.changedTouches[0] : e;
     const dx = t.clientX - startX.current;
     // only switch on a deliberate horizontal drag; a tap (tiny dx) always reaches the tile
-    if (locked.current && Math.abs(dx) > 60) setTab(dx < 0 ? 1 : 0);
+    if (locked.current && Math.abs(dx) > 60) setTab(dx < 0 ? 1 : 0);   // left = Reviews, right = Posts
     startX.current = null; locked.current = false;
   };
 
-  const TABS = [{ label: "CV", Icon: Award }, { label: "Gallery", Icon: ImagePlus, count: galleryCount }];
+  const TABS = [{ label: "Posts", Icon: ImagePlus, count: galleryCount }, { label: "Reviews", Icon: Award }];
 
   return (
     <div className="mt-5">
@@ -2587,10 +2587,8 @@ function ProfileTabs({ cv, gallery, galleryCount }) {
 
       {/* panes — only the active one is rendered, so taps always hit the right thing */}
       <div className="overflow-hidden" onTouchStart={onStart} onTouchMove={onMove} onTouchEnd={onEnd}>
-        <div key={tab} className="pt-5 fade">{tab === 0 ? cv : gallery}</div>
+        <div key={tab} className="pt-4 fade">{tab === 0 ? gallery : cv}</div>
       </div>
-
-      <p className="text-center text-[11.5px] mt-3" style={{ color: C.muted }}>Swipe or tap to switch tabs</p>
     </div>
   );
 }
