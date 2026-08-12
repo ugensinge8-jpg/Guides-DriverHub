@@ -279,7 +279,7 @@ export default function App() {
   const fetchDms = async () => {
     if (!CLOUD) return;
     const { data } = await supabase.from("direct_messages").select("*").order("created_at", { ascending: true });
-    if (data) setDms(data.map((r) => ({ id: r.id, from: r.sender_id, to: r.recipient_id, body: r.body, sharedPostId: r.shared_post_id || null, photo: r.photo_url || null, lat: r.lat ?? null, lng: r.lng ?? null, ts: new Date(r.created_at).getTime(), read: r.read })));
+    if (data) setDms(data.map((r) => ({ id: r.id, from: r.sender_id, to: r.recipient_id, body: r.body, sharedPostId: r.shared_post_id || null, photo: r.photo_url || null, lat: r.lat ?? null, lng: r.lng ?? null, accuracy: r.accuracy_m ?? null, altitude: r.altitude_m ?? null, ts: new Date(r.created_at).getTime(), read: r.read })));
   };
   useEffect(() => {
     if (!CLOUD) return;
@@ -293,7 +293,7 @@ export default function App() {
     const me = realUserRef.current;
     if (!me) { console.error("sendDm: no signed-in user"); return; }
     const tempId = uid();
-    setDms((D) => [...D, { id: tempId, from: me, to, body, sharedPostId, photo: extra.photoDataUri || null, lat: extra.lat ?? null, lng: extra.lng ?? null, ts: Date.now(), read: false, sending: true }]);
+    setDms((D) => [...D, { id: tempId, from: me, to, body, sharedPostId, photo: extra.photoDataUri || null, lat: extra.lat ?? null, lng: extra.lng ?? null, accuracy: extra.accuracy ?? null, altitude: extra.altitude ?? null, ts: Date.now(), read: false, sending: true }]);
     if (!CLOUD) return;
     let photoUrl = null;
     if (extra.photoDataUri) {
@@ -308,6 +308,7 @@ export default function App() {
     const { error } = await supabase.from("direct_messages").insert({
       sender_id: me, recipient_id: to, body, shared_post_id: sharedPostId,
       photo_url: photoUrl, lat: extra.lat ?? null, lng: extra.lng ?? null,
+      accuracy_m: extra.accuracy ?? null, altitude_m: extra.altitude ?? null,
     });
     if (error) console.error("sendDm failed:", error.message);
     fetchDms();
@@ -3454,12 +3455,32 @@ function DmThread({ me, otherId, dm, posts, onOpenPost, onBack, onOpenProfile })
 
   const sendLocation = () => {
     if (!navigator.geolocation) return flash("Location isn't available on this device.");
-    flash("Getting your location…");
-    navigator.geolocation.getCurrentPosition(
-      async (pos) => { await dm.sendDm(otherId, "Shared a location", null, { lat: +pos.coords.latitude.toFixed(5), lng: +pos.coords.longitude.toFixed(5) }); },
-      () => flash("Couldn't get your location."),
-      { enableHighAccuracy: true, timeout: 10000 }
+    flash("Getting an accurate fix…");
+    let best = null;
+    // watch briefly and keep the most accurate reading — a single sample is often
+    // 100m+ out in mountain terrain, and improves as the GPS settles
+    const id = navigator.geolocation.watchPosition(
+      (pos) => {
+        if (!best || pos.coords.accuracy < best.coords.accuracy) best = pos;
+        if (pos.coords.accuracy <= 15) finish();
+      },
+      (e) => { if (!best) { navigator.geolocation.clearWatch(id); flash(e.code === 1 ? "Location permission denied." : "Couldn't get your location."); } },
+      { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 }
     );
+    const timer = setTimeout(finish, 12000);
+    function finish() {
+      clearTimeout(timer);
+      navigator.geolocation.clearWatch(id);
+      if (!best) return flash("Couldn't get a fix — try again outdoors.");
+      const acc = Math.round(best.coords.accuracy);
+      dm.sendDm(otherId, "Shared a location", null, {
+        lat: +best.coords.latitude.toFixed(6),
+        lng: +best.coords.longitude.toFixed(6),
+        accuracy: acc,
+        altitude: best.coords.altitude != null ? Math.round(best.coords.altitude) : null,
+      });
+      flash(acc <= 20 ? `Sent · accurate to ${acc}m` : `Sent · approx. ${acc}m — GPS is weak here`);
+    }
   };
 
   // group by day
@@ -3540,13 +3561,27 @@ function DmThread({ me, otherId, dm, posts, onOpenPost, onBack, onOpenProfile })
                     {m.photo && <img src={m.photo} alt="" className="w-full block" style={{ maxHeight: 260, objectFit: "cover" }} />}
 
                     {m.lat != null && m.lng != null && (
-                      <a href={`https://www.google.com/maps?q=${m.lat},${m.lng}`} target="_blank" rel="noreferrer" className="block px-3.5 py-2.5">
+                      <div className="px-3.5 py-2.5">
                         <div className="flex items-center gap-2">
                           <Navigation size={15} color={mine ? "#fff" : C.gold} />
                           <span className="text-[13.5px] font-semibold" style={{ color: mine ? "#fff" : C.ink }}>Location shared</span>
                         </div>
-                        <div className="text-[11.5px] mt-0.5" style={{ color: mine ? "#ffffffcc" : C.muted }}>{m.lat}, {m.lng} · open in Maps</div>
-                      </a>
+                        <div className="text-[11.5px] mt-0.5 font-mono" style={{ color: mine ? "#ffffffcc" : C.muted }}>{m.lat}, {m.lng}</div>
+                        <div className="text-[11px] mt-0.5" style={{ color: mine ? "#ffffffaa" : C.muted }}>
+                          {m.accuracy != null ? `±${m.accuracy}m` : "accuracy unknown"}{m.altitude != null ? ` · ${m.altitude}m elevation` : ""}
+                        </div>
+                        <div className="flex gap-2 mt-2">
+                          <a href={`https://www.google.com/maps/search/?api=1&query=${m.lat},${m.lng}`} target="_blank" rel="noreferrer"
+                            className="tap flex-1 h-9 rounded-lg text-[12px] font-semibold inline-flex items-center justify-center"
+                            style={{ background: mine ? "rgba(255,255,255,.16)" : C.bg, color: mine ? "#fff" : C.ink }}>Open in Maps</a>
+                          <a href={`https://www.google.com/maps/dir/?api=1&destination=${m.lat},${m.lng}`} target="_blank" rel="noreferrer"
+                            className="tap flex-1 h-9 rounded-lg text-[12px] font-semibold inline-flex items-center justify-center"
+                            style={{ background: mine ? "rgba(255,255,255,.16)" : C.bg, color: mine ? "#fff" : C.ink }}>Directions</a>
+                        </div>
+                        <button onClick={() => { navigator.clipboard?.writeText(`${m.lat}, ${m.lng}`); }}
+                          className="tap w-full h-8 rounded-lg text-[11.5px] font-medium mt-1.5"
+                          style={{ background: "transparent", color: mine ? "#ffffffaa" : C.muted }}>Copy coordinates</button>
+                      </div>
                     )}
 
                     {m.body && !(m.photo && m.body === "Photo") && !(m.lat != null && m.body === "Shared a location") && (
