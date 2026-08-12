@@ -4,7 +4,7 @@ import {
   BadgeCheck, MapPin, Inbox, ChevronLeft, Star, Phone, Mail, Briefcase,
   Search, LogOut, Newspaper, User, CalendarCheck, MessageCircle,
   Map, MessageSquare, Users, Download, Mic, Video, Heart, Share2, Trash2, Maximize2, Upload, Loader2, ArrowRight,
-  Award, UserX, RefreshCw, FileCheck2, ExternalLink, UserPlus, Send as SendIcon, Lock, Eye, EyeOff, CalendarDays,
+  Award, UserX, RefreshCw, FileCheck2, ExternalLink, UserPlus, Send as SendIcon, Lock, Eye, EyeOff, CalendarDays, UserCheck, Plus,
   ShieldAlert,
 } from "lucide-react";
 import mapImg from "./map.jpg";
@@ -176,6 +176,8 @@ export default function App() {
   const [dirTick, setDirTick] = useState(0);
   const [dms, setDms] = useState([]);
   const [authBusy, setAuthBusy] = useState(false);   // true while the signup/reset wizard is running
+  const [follows, setFollows] = useState([]);
+  const [stories, setStories] = useState([]);
 
   const loadProfiles = async () => {
     if (!CLOUD) return;
@@ -183,6 +185,84 @@ export default function App() {
     if (data) { PROFILE_DIR = {}; data.forEach((p) => { PROFILE_DIR[p.id] = profileToTalent(p); }); setDirTick((t) => t + 1); }
   };
   const reloadMe = () => { setProfileTick((t) => t + 1); loadProfiles(); };
+
+  /* ---- Stories (24h, then the file itself is deleted) ---- */
+  const fetchStories = async () => {
+    if (!CLOUD) return;
+    const cutoff = new Date(Date.now() - 24 * 3600e3).toISOString();
+    const { data } = await supabase.from("stories").select("*").gt("created_at", cutoff).order("created_at", { ascending: true });
+    if (data) setStories(data.map((r) => ({
+      id: r.id, authorId: r.author_id, kind: r.kind, url: r.media_url, path: r.media_path,
+      caption: r.caption || "", ts: new Date(r.created_at).getTime(),
+    })));
+    // housekeeping: remove anything already expired, files included
+    const { data: old } = await supabase.from("stories").select("id, media_path").lte("created_at", cutoff);
+    if (old && old.length) {
+      const paths = old.map((o) => o.media_path).filter(Boolean);
+      if (paths.length) await supabase.storage.from("stories").remove(paths);
+      await supabase.from("stories").delete().in("id", old.map((o) => o.id));
+    }
+  };
+  useEffect(() => {
+    if (!CLOUD) return;
+    fetchStories();
+    const iv = setInterval(fetchStories, 5 * 60 * 1000);
+    const ch = supabase.channel("stories-live")
+      .on("postgres_changes", { event: "*", schema: "public", table: "stories" }, fetchStories)
+      .subscribe();
+    return () => { clearInterval(iv); supabase.removeChannel(ch); };
+  }, []);
+
+  const addStory = async ({ kind, dataUri, caption, fromPostUrl }) => {
+    const me = realUserRef.current;
+    if (!CLOUD || !me) return;
+    let url = fromPostUrl || null, path = null;
+    if (!url && dataUri) {
+      try {
+        const small = kind === "photo" ? await shrinkImage(dataUri, 1280, 0.82) : dataUri;
+        const blob = await (await fetch(small)).blob();
+        const ext = kind === "video" ? "mp4" : "jpg";
+        path = `${me}/${Date.now()}.${ext}`;
+        const { error } = await supabase.storage.from("stories").upload(path, blob, { contentType: blob.type || (kind === "video" ? "video/mp4" : "image/jpeg") });
+        if (error) return;
+        url = supabase.storage.from("stories").getPublicUrl(path).data.publicUrl;
+      } catch (e) { return; }
+    }
+    if (!url) return;
+    await supabase.from("stories").insert({ author_id: me, kind, media_url: url, media_path: path, caption: caption || null });
+    fetchStories();
+  };
+
+  const deleteStory = async (st) => {
+    if (!CLOUD) return;
+    if (st.path) await supabase.storage.from("stories").remove([st.path]);
+    await supabase.from("stories").delete().eq("id", st.id);
+    fetchStories();
+  };
+
+  const fetchFollows = async () => {
+    if (!CLOUD) return;
+    const { data } = await supabase.from("follows").select("*");
+    if (data) setFollows(data.map((f) => ({ follower: f.follower_id, following: f.following_id })));
+  };
+  useEffect(() => {
+    if (!CLOUD) return;
+    fetchFollows();
+    const ch = supabase.channel("follows-live")
+      .on("postgres_changes", { event: "*", schema: "public", table: "follows" }, fetchFollows)
+      .subscribe();
+    return () => { supabase.removeChannel(ch); };
+  }, []);
+  const toggleFollow = async (targetId) => {
+    const me = realUserRef.current;
+    if (!me || me === targetId) return;
+    const already = follows.some((f) => f.follower === me && f.following === targetId);
+    setFollows((F) => (already ? F.filter((f) => !(f.follower === me && f.following === targetId)) : [...F, { follower: me, following: targetId }]));
+    if (!CLOUD) return;
+    if (already) await supabase.from("follows").delete().eq("follower_id", me).eq("following_id", targetId);
+    else await supabase.from("follows").insert({ follower_id: me, following_id: targetId });
+    fetchFollows();
+  };
 
   const setAvailability = async (status, from, note) => {
     const me = realUserRef.current;
@@ -198,7 +278,7 @@ export default function App() {
   const fetchDms = async () => {
     if (!CLOUD) return;
     const { data } = await supabase.from("direct_messages").select("*").order("created_at", { ascending: true });
-    if (data) setDms(data.map((r) => ({ id: r.id, from: r.sender_id, to: r.recipient_id, body: r.body, ts: new Date(r.created_at).getTime(), read: r.read })));
+    if (data) setDms(data.map((r) => ({ id: r.id, from: r.sender_id, to: r.recipient_id, body: r.body, sharedPostId: r.shared_post_id || null, ts: new Date(r.created_at).getTime(), read: r.read })));
   };
   useEffect(() => {
     if (!CLOUD) return;
@@ -208,13 +288,18 @@ export default function App() {
       .subscribe();
     return () => { supabase.removeChannel(ch); };
   }, []);
-  const sendDm = async (to, body) => {
+  const sendDm = async (to, body, sharedPostId = null) => {
     const me = realUserRef.current;
     if (!me) return;
-    setDms((D) => [...D, { id: uid(), from: me, to, body, ts: Date.now(), read: false }]);
+    setDms((D) => [...D, { id: uid(), from: me, to, body, sharedPostId, ts: Date.now(), read: false }]);
     if (!CLOUD) return;
-    await supabase.from("direct_messages").insert({ sender_id: me, recipient_id: to, body });
+    await supabase.from("direct_messages").insert({ sender_id: me, recipient_id: to, body, shared_post_id: sharedPostId });
     fetchDms();
+  };
+  const sharePostTo = async (recipients, post, note) => {
+    for (const to of recipients) {
+      await sendDm(to, note?.trim() || "Shared a post", post.id);
+    }
   };
   const markRead = async (withId) => {
     const me = realUserRef.current;
@@ -553,7 +638,7 @@ export default function App() {
           <Login onPick={setAccountId} session={session} myProfile={myProfile} onAuthed={reloadMe} onBusy={setAuthBusy} />
         ) : (
           <Shell key={user.id} user={user} posts={posts} jobs={jobs} trips={trips} listings={listings}
-            actions={{ addPost, approve, reject, deletePost, reloadDirectory: loadProfiles, setAvailability, sendJob, setJobStatus, postChat, openChat, postListing, applyToListing, setApplicant, hireApplicant }} engagement={{ likes, comments, toggleLike, addComment, deleteComment }} dm={{ dms, sendDm, markRead }} onLogout={() => { if (session) supabase.auth.signOut(); setAccountId(null); }} />
+            actions={{ addPost, approve, reject, deletePost, reloadDirectory: loadProfiles, setAvailability, toggleFollow, sendJob, setJobStatus, postChat, openChat, postListing, applyToListing, setApplicant, hireApplicant }} engagement={{ likes, comments, toggleLike, addComment, deleteComment, follows, toggleFollow, stories, addStory, deleteStory }} dm={{ dms, sendDm, markRead, sharePostTo }} onLogout={() => { if (session) supabase.auth.signOut(); setAccountId(null); }} />
         )}
       </div>
     </div>
@@ -679,9 +764,11 @@ function Shell({ user, posts, jobs, trips, listings, actions, engagement, dm, on
   const [tab, setTab] = useState(DEFAULT_TAB[user.kind]);
   const [overlay, setOverlay] = useState(null); // {type:'profile'|'request', talentId}
   const [dmWith, setDmWith] = useState(null);
+  const [sharedPost, setSharedPost] = useState(null);
   const nav = NAV[user.kind];
   const actorId = user.talentId || (user.kind === "operator" ? "a_operator" : "a_admin");
-  const eng = { ...engagement, me: actorId, isAdmin: user.kind === "admin" };
+  const eng = { ...engagement, me: actorId, isAdmin: user.kind === "admin", sharePostTo: dm?.sharePostTo };
+  const myFollowing = (engagement?.follows || []).filter((f) => f.follower === actorId).map((f) => f.following);
   const unreadDm = (dm?.dms || []).filter((m) => m.to === actorId && !m.read).length;
 
   const pendingModCount = posts.filter((p) => p.status === "pending").length;
@@ -716,16 +803,20 @@ function Shell({ user, posts, jobs, trips, listings, actions, engagement, dm, on
             {tab === "post" && <PostTab user={user} posts={posts} onAdd={actions.addPost} eng={eng} onOpenProfile={openProfile} />}
             {tab === "jobs" && <JobsHub user={user} jobs={jobs} listings={listings} actions={actions} />}
             {tab === "trips" && <TripsTab user={user} trips={trips} actions={actions} />}
-            {tab === "chats" && <ChatsTab user={user} me={actorId} dm={dm} trips={trips} actions={actions} openWith={dmWith} onOpened={() => setDmWith(null)} onOpenProfile={openProfile} />}
+            {tab === "chats" && <ChatsTab user={user} me={actorId} dm={dm} trips={trips} actions={actions} posts={posts} onOpenPost={setSharedPost} openWith={dmWith} onOpened={() => setDmWith(null)} onOpenProfile={openProfile} />}
             {tab === "profile" && <TalentProfile talent={talentById(user.talentId)} posts={posts} eng={eng} self onSetAvailability={actions.setAvailability} onBack={null} />}
             {tab === "discover" && <Discover onOpen={openProfile} />}
             {tab === "requests" && <OperatorJobs user={user} jobs={jobs} listings={listings} posts={posts} actions={actions} eng={eng} onOpen={openProfile} />}
-            {tab === "feed" && <Feed posts={posts} eng={eng} admin={user.kind === "admin"} onDelete={actions.deletePost} onOpenProfile={openProfile} />}
+            {tab === "feed" && <Feed posts={posts} eng={eng} admin={user.kind === "admin"} onDelete={actions.deletePost} onOpenProfile={openProfile} following={myFollowing} />}
             {tab === "review" && <Review posts={posts} onApprove={actions.approve} onReject={actions.reject} eng={eng} />}
             {tab === "users" && <AdminUsers onChanged={actions.reloadDirectory} />}
           </div>
         )}
       </div>
+
+      {sharedPost && (
+        <PostDetail items={[sharedPost]} index={0} author={talentById(sharedPost.talentId)} eng={eng} onIndex={() => {}} onClose={() => setSharedPost(null)} />
+      )}
 
       {!overlay && (
         <BottomNav nav={nav} tab={tab} setTab={setTab}
@@ -1187,11 +1278,19 @@ function SentRequests({ operator, operatorId, jobs, onOpen }) {
 }
 
 /* ========================= Feed (operator & admin) ======================== */
-function Feed({ posts, eng, admin, onDelete, onOpenProfile }) {
-  const live = admin ? posts : posts.filter((p) => p.status === "approved");
+function Feed({ posts, eng, admin, onDelete, onOpenProfile, following }) {
+  const [scope, setScope] = useState("all");
+  const base = admin ? posts : posts.filter((p) => p.status === "approved");
+  const live = scope === "following" && following?.length ? base.filter((p) => following.includes(p.talentId)) : base;
   return (
     <div className="px-5 py-4">
       <SectionLabel trailing={admin ? `${live.length} total` : undefined}>Highlights</SectionLabel>
+      {!admin && following?.length > 0 && (
+        <div className="flex gap-2 mb-3.5">
+          <Chip on={scope === "all"} onClick={() => setScope("all")}>Everyone</Chip>
+          <Chip on={scope === "following"} onClick={() => setScope("following")}>Following · {following.length}</Chip>
+        </div>
+      )}
       {live.length === 0 ? (
         <Empty Icon={Inbox} title="No highlights yet" body="Approved posts from guides and drivers appear here." />
       ) : (
@@ -1307,6 +1406,14 @@ function TalentProfile({ talent, posts, canRequest, self, contactOnly, eng, onRe
   const live = posts.filter((p) => p.talentId === t.id && p.status === "approved").length;
   const located = posts.filter((p) => p.talentId === t.id && p.status === "approved" && p.location);
   const gallery = posts.filter((p) => p.talentId === t.id && p.status === "approved" && p.media && p.media.kind === "photo");
+  const allFollows = eng?.follows || [];
+  const followerCount = allFollows.filter((f) => f.following === t.id).length;
+  const followingCount = allFollows.filter((f) => f.follower === t.id).length;
+  const iFollow = allFollows.some((f) => f.follower === eng?.me && f.following === t.id);
+  const myStories = (eng?.stories || []).filter((st) => st.authorId === t.id);
+  const [viewStories, setViewStories] = useState(false);
+  const [addStory, setAddStory] = useState(false);
+  const [shareToStory, setShareToStory] = useState(null);
   return (
     <div className="pb-6">
       <div className="relative">
@@ -1315,10 +1422,22 @@ function TalentProfile({ talent, posts, canRequest, self, contactOnly, eng, onRe
         )}
         <div className="h-24" style={{ background: `radial-gradient(120% 140% at 80% 0%, ${C.pine} 0%, ${C.pineDeep} 70%)` }} />
         <div className="px-5">
-          <div className="-mt-9 mb-3">
-            <div className="rounded-2xl flex items-center justify-center" style={{ width: 72, height: 72, background: C.pine, border: `3px solid ${C.bg}` }}>
-              <span className="text-[23px] font-semibold" style={{ color: C.goldSoft }}>{t.initials}</span>
-            </div>
+          <div className="-mt-9 mb-3 flex items-end gap-3">
+            <button onClick={() => myStories.length && setViewStories(true)} className="relative" style={{ cursor: myStories.length ? "pointer" : "default" }}>
+              <div className="rounded-2xl flex items-center justify-center" style={{ width: 72, height: 72, background: C.pine, border: `3px solid ${C.bg}`,
+                boxShadow: myStories.length ? `0 0 0 3px ${C.gold}` : "none" }}>
+                <span className="text-[23px] font-semibold" style={{ color: C.goldSoft }}>{t.initials}</span>
+              </div>
+              {myStories.length > 0 && (
+                <span className="absolute -bottom-1 -right-1 rounded-full px-1.5 py-0.5 text-[10px] font-bold" style={{ background: C.gold, color: "#fff" }}>{myStories.length}</span>
+              )}
+            </button>
+            {self && (
+              <button onClick={() => setAddStory(true)} className="tap mb-1 inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[12.5px] font-semibold"
+                style={{ background: C.goldSoft, color: "#7a5a1e" }}>
+                <Plus size={14} strokeWidth={3} /> Add story
+              </button>
+            )}
           </div>
           <div>
             <div>
@@ -1330,11 +1449,27 @@ function TalentProfile({ talent, posts, canRequest, self, contactOnly, eng, onRe
               {t.role !== "operator" && <div className="mt-2"><AvailabilityChip talent={t} /></div>}
             </div>
           </div>
-          <div className="flex items-center gap-4 mt-3.5 text-[13px]" style={{ color: C.muted }}>
-            <span><b style={{ color: C.ink }}>{t.years}</b> yrs</span><span style={{ color: C.line }}>|</span>
-            <span><b style={{ color: C.ink }}>{t.trips}</b> trips</span><span style={{ color: C.line }}>|</span>
-            <span><b style={{ color: C.ink }}>{live}</b> posts</span>
+          <div className="flex items-center mt-4 mb-1">
+            <Stat n={gallery.length} label="posts" />
+            <Stat n={followerCount} label={followerCount === 1 ? "follower" : "followers"} />
+            <Stat n={followingCount} label="following" />
+            <Stat n={t.years} label="yrs" />
           </div>
+
+          {!self && (
+            <div className="flex gap-2 mt-3">
+              <button onClick={() => eng?.toggleFollow && eng.toggleFollow(t.id)}
+                className="tap flex-1 h-10 rounded-xl text-[14px] font-semibold inline-flex items-center justify-center gap-1.5"
+                style={{ background: iFollow ? C.card : C.pine, border: iFollow ? `1px solid ${C.line}` : "none", color: iFollow ? C.ink : "#fff" }}>
+                {iFollow ? <><UserCheck size={15} /> Following</> : <><UserPlus size={15} /> Follow</>}
+              </button>
+              <button onClick={() => onMessage && onMessage(t.id)}
+                className="tap flex-1 h-10 rounded-xl text-[14px] font-semibold inline-flex items-center justify-center gap-1.5"
+                style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }}>
+                <MessageCircle size={15} /> Message
+              </button>
+            </div>
+          )}
         </div>
       </div>
 
@@ -1387,7 +1522,7 @@ function TalentProfile({ talent, posts, canRequest, self, contactOnly, eng, onRe
           }
           gallery={
             gallery.length > 0
-              ? <PhotoGrid items={gallery} author={t} eng={eng} />
+              ? <PhotoGrid items={gallery} author={t} eng={eng} onShareStory={self ? setShareToStory : null} />
               : <Empty Icon={ImagePlus} title="No photos yet" body="Approved trip photos appear here as a gallery." />
           }
           galleryCount={gallery.length}
@@ -1411,6 +1546,15 @@ function TalentProfile({ talent, posts, canRequest, self, contactOnly, eng, onRe
       )}
       {self && (
         <div className="px-5 mt-6"><div className="rounded-xl px-4 py-3 text-[13px] text-center" style={{ background: C.goldSoft, color: "#7a5a1e" }}>This is how operators see your profile.</div></div>
+      )}
+
+      {viewStories && myStories.length > 0 && (
+        <StoryViewer stories={myStories} author={t} canDelete={self} onDelete={eng?.deleteStory} onClose={() => setViewStories(false)} />
+      )}
+      {addStory && <AddStory onClose={() => setAddStory(false)} onAdd={eng?.addStory} />}
+      {shareToStory && (
+        <ConfirmShareStory post={shareToStory} onClose={() => setShareToStory(null)}
+          onConfirm={async () => { await eng?.addStory({ kind: "photo", fromPostUrl: shareToStory.media.dataUri, caption: shareToStory.text }); setShareToStory(null); setViewStories(true); }} />
       )}
     </div>
   );
@@ -2114,7 +2258,8 @@ function PostEngagement({ post, eng }) {
   const [text, setText] = useState("");
   const [note, setNote] = useState(null);
 
-  const share = async () => {
+  const [sharing, setSharing] = useState(false);
+  const shareExternal = async () => {
     const line = `${actorName(post.talentId)} on Bhutan Tourism Hub${post.text ? `: “${post.text}”` : ""}`;
     const url = window.location.origin;
     try {
@@ -2122,6 +2267,7 @@ function PostEngagement({ post, eng }) {
       else { await navigator.clipboard.writeText(`${line}\n${url}`); setNote("Link copied"); setTimeout(() => setNote(null), 2000); }
     } catch (e) {}
   };
+  const share = () => setSharing(true);
   const send = () => { const t = text.trim(); if (!t) return; addComment(post.id, me, t); setText(""); setOpen(true); };
 
   return (
@@ -2140,6 +2286,11 @@ function PostEngagement({ post, eng }) {
         </button>
       </div>
       {note && <div className="text-[12px] mt-1.5" style={{ color: C.pine }}>{note}</div>}
+      {sharing && (
+        <SharePostSheet post={post} eng={eng} onExternal={shareExternal}
+          onClose={() => setSharing(false)}
+          onSent={(n) => { setNote(`Sent to ${n} ${n === 1 ? "person" : "people"}`); setTimeout(() => setNote(null), 2600); }} />
+      )}
 
       {open && (
         <div className="mt-3 space-y-2.5 fade">
@@ -2262,7 +2413,7 @@ function Lightbox({ src, onClose }) {
 }
 
 /* ====================== Profile gallery (Instagram grid) ================== */
-function PhotoGrid({ items, author, eng }) {
+function PhotoGrid({ items, author, eng, onShareStory }) {
   const [openIdx, setOpenIdx] = useState(null);
   return (
     <>
@@ -2291,14 +2442,14 @@ function PhotoGrid({ items, author, eng }) {
         </div>
       </div>
       {openIdx != null && (
-        <PostDetail items={items} index={openIdx} author={author} eng={eng} onIndex={setOpenIdx} onClose={() => setOpenIdx(null)} />
+        <PostDetail items={items} index={openIdx} author={author} eng={eng} onShareStory={onShareStory} onIndex={setOpenIdx} onClose={() => setOpenIdx(null)} />
       )}
     </>
   );
 }
 
 /* ======================= Post detail (Instagram-style) ==================== */
-function PostDetail({ items, index, author, eng, onIndex, onClose }) {
+function PostDetail({ items, index, author, eng, onShareStory, onIndex, onClose }) {
   const p = items[index];
   const [showMap, setShowMap] = useState(false);
   const startX = useRef(null);
@@ -2371,6 +2522,12 @@ function PostDetail({ items, index, author, eng, onIndex, onClose }) {
             </div>
           )}
 
+          {onShareStory && (
+            <button onClick={() => { onShareStory(p); onClose(); }} className="tap w-full h-11 rounded-xl text-[13.5px] font-semibold inline-flex items-center justify-center gap-2 mt-3"
+              style={{ background: C.goldSoft, color: "#7a5a1e" }}>
+              <Plus size={15} strokeWidth={3} /> Share to your story
+            </button>
+          )}
           {eng ? <PostEngagement post={p} eng={eng} /> : (
             <div className="mt-3 pt-3 text-[12.5px]" style={{ borderTop: `1px solid ${C.lineSoft}`, color: C.muted }}>
               Sign in to like, comment or share.
@@ -3036,7 +3193,7 @@ function Onboard({ mode: initialMode, session, onBack, onDone }) {
 }
 
 /* ===================== Messages · unified inbox (trips + DMs) ==================== */
-function ChatsTab({ user, me, dm, trips, actions, openWith, onOpened, onOpenProfile }) {
+function ChatsTab({ user, me, dm, trips, actions, posts, onOpenPost, openWith, onOpened, onOpenProfile }) {
   const [withId, setWithId] = useState(openWith || null);
   const [tripId, setTripId] = useState(null);
   const [find, setFind] = useState(false);
@@ -3061,7 +3218,7 @@ function ChatsTab({ user, me, dm, trips, actions, openWith, onOpened, onOpenProf
 
   const openTrip = myTrips.find((t) => t.id === tripId);
   if (openTrip) return <TripChatView user={user} meId={me} trip={openTrip} actions={actions} onBack={() => setTripId(null)} />;
-  if (withId) return <DmThread me={me} otherId={withId} dm={dm} onBack={() => setWithId(null)} onOpenProfile={onOpenProfile} />;
+  if (withId) return <DmThread me={me} otherId={withId} dm={dm} posts={posts} onOpenPost={onOpenPost} onBack={() => setWithId(null)} onOpenProfile={onOpenProfile} />;
   if (find) return <PickContact me={me} onPick={(id) => { setFind(false); setWithId(id); }} onBack={() => setFind(false)} />;
 
   return (
@@ -3242,7 +3399,7 @@ function PickContact({ me, onPick, onBack }) {
   );
 }
 
-function DmThread({ me, otherId, dm, onBack, onOpenProfile }) {
+function DmThread({ me, otherId, dm, posts, onOpenPost, onBack, onOpenProfile }) {
   const [text, setText] = useState("");
   const scrollRef = useRef();
   const p = talentById(otherId);
@@ -3283,8 +3440,24 @@ function DmThread({ me, otherId, dm, onBack, onOpenProfile }) {
           return (
             <div key={m.id} className={`flex ${mine ? "justify-end" : "justify-start"}`}>
               <div style={{ maxWidth: "80%" }}>
-                <div className="rounded-2xl px-3.5 py-2.5" style={{ background: mine ? C.pine : C.card, border: mine ? "none" : `1px solid ${C.line}`, borderBottomRightRadius: mine ? 5 : 16, borderBottomLeftRadius: mine ? 16 : 5 }}>
-                  <span className="text-[14.5px] leading-snug" style={{ color: mine ? "#fff" : C.ink }}>{m.body}</span>
+                <div className="rounded-2xl overflow-hidden" style={{ background: mine ? C.pine : C.card, border: mine ? "none" : `1px solid ${C.line}`, borderBottomRightRadius: mine ? 5 : 16, borderBottomLeftRadius: mine ? 16 : 5 }}>
+                  {m.sharedPostId && (() => {
+                    const sp = (posts || []).find((p) => p.id === m.sharedPostId);
+                    if (!sp) return <div className="px-3.5 pt-2.5 text-[12.5px]" style={{ color: mine ? "#ffffffcc" : C.muted }}>Shared post unavailable</div>;
+                    const a = talentById(sp.talentId);
+                    return (
+                      <button onClick={() => onOpenPost && onOpenPost(sp)} className="tap block w-full text-left">
+                        {sp.media?.dataUri && <img src={sp.media.dataUri} alt="" className="w-full block" style={{ maxHeight: 190, objectFit: "cover" }} />}
+                        <div className="px-3 py-2" style={{ background: mine ? "rgba(255,255,255,.12)" : C.bg }}>
+                          <div className="text-[12px] font-semibold" style={{ color: mine ? "#fff" : C.ink }}>{a?.name || "Member"}</div>
+                          {sp.text && <div className="text-[11.5px] truncate" style={{ color: mine ? "#ffffffcc" : C.muted }}>{sp.text}</div>}
+                        </div>
+                      </button>
+                    );
+                  })()}
+                  <div className="px-3.5 py-2.5">
+                    <span className="text-[14.5px] leading-snug" style={{ color: mine ? "#fff" : C.ink }}>{m.body}</span>
+                  </div>
                 </div>
                 <div className={`text-[10.5px] mt-0.5 ${mine ? "text-right mr-1" : "ml-1"}`} style={{ color: C.muted }}>{relTime(m.ts)}</div>
               </div>
@@ -3401,6 +3574,273 @@ function AvailabilityEditor({ talent, onSet }) {
         style={{ background: saved ? C.pineSoft : dirty ? C.pine : "#C7CEC7", color: saved ? C.pine : "#fff" }}>
         {busy ? <Loader2 size={16} className="animate-spin" /> : saved ? <><Check size={16} /> Saved</> : "Save availability"}
       </button>
+    </div>
+  );
+}
+
+function Stat({ n, label }) {
+  return (
+    <div className="flex-1 text-center">
+      <div className="text-[17px] font-semibold leading-none" style={{ color: C.ink }}>{n}</div>
+      <div className="text-[11.5px] mt-1" style={{ color: C.muted }}>{label}</div>
+    </div>
+  );
+}
+
+/* ================================ Stories ================================ */
+function StoryViewer({ stories, author, canDelete, onDelete, onClose }) {
+  const [i, setI] = useState(0);
+  const [paused, setPaused] = useState(false);
+  const st = stories[i];
+  const startX = useRef(null);
+
+  useEffect(() => {
+    if (paused || !st) return;
+    const ms = st.kind === "video" ? 15000 : 5000;
+    const t = setTimeout(() => { if (i < stories.length - 1) setI(i + 1); else onClose(); }, ms);
+    return () => clearTimeout(t);
+  }, [i, paused, stories.length]);
+
+  if (!st) return null;
+  const hoursLeft = Math.max(0, 24 - Math.floor((Date.now() - st.ts) / 3600e3));
+
+  const tap = (e) => {
+    const x = e.clientX - e.currentTarget.getBoundingClientRect().left;
+    const w = e.currentTarget.offsetWidth;
+    if (x < w * 0.32) { if (i > 0) setI(i - 1); }
+    else if (i < stories.length - 1) setI(i + 1);
+    else onClose();
+  };
+
+  return (
+    <div className="fixed inset-0 flex flex-col" style={{ background: "#08090880", backdropFilter: "blur(2px)", zIndex: 80 }}>
+      <div className="flex-1 flex flex-col" style={{ background: "#0b0d0b" }}>
+        {/* progress bars */}
+        <div className="flex gap-1 px-3 pt-3">
+          {stories.map((_, k) => (
+            <div key={k} className="flex-1 h-[3px] rounded-full overflow-hidden" style={{ background: "rgba(255,255,255,.25)" }}>
+              <div style={{ width: k < i ? "100%" : k === i ? "100%" : "0%", height: "100%", background: "#fff",
+                transition: k === i ? `width ${st.kind === "video" ? 15 : 5}s linear` : "none" }} />
+            </div>
+          ))}
+        </div>
+
+        <div className="px-4 py-3 flex items-center gap-2.5">
+          <Avatar initials={author?.initials || "?"} size={32} />
+          <div className="flex-1 min-w-0">
+            <div className="text-[13.5px] font-semibold text-white">{author?.name || "Member"}</div>
+            <div className="text-[11px]" style={{ color: "rgba(255,255,255,.6)" }}>{relTime(st.ts)} · {hoursLeft}h left</div>
+          </div>
+          {canDelete && (
+            <button onClick={() => { onDelete && onDelete(st); onClose(); }} className="tap w-9 h-9 rounded-full flex items-center justify-center" style={{ background: "rgba(255,255,255,.14)" }} aria-label="Delete story">
+              <Trash2 size={16} color="#fff" />
+            </button>
+          )}
+          <button onClick={onClose} className="tap w-9 h-9 rounded-full flex items-center justify-center" style={{ background: "rgba(255,255,255,.14)" }} aria-label="Close">
+            <X size={18} color="#fff" />
+          </button>
+        </div>
+
+        <div className="flex-1 relative" onClick={tap}
+          onTouchStart={(e) => { startX.current = e.touches[0].clientX; setPaused(true); }}
+          onTouchEnd={(e) => { setPaused(false); const dx = e.changedTouches[0].clientX - (startX.current ?? 0);
+            if (dx < -50 && i < stories.length - 1) setI(i + 1); if (dx > 50 && i > 0) setI(i - 1); }}>
+          {st.kind === "video" ? (
+            <video src={st.url} autoPlay playsInline muted={false} className="absolute inset-0 w-full h-full" style={{ objectFit: "contain" }} />
+          ) : (
+            <img src={st.url} alt="" className="absolute inset-0 w-full h-full" style={{ objectFit: "contain" }} />
+          )}
+          {st.caption && (
+            <div className="absolute left-0 right-0 bottom-0 px-5 py-6" style={{ background: "linear-gradient(to top, rgba(0,0,0,.7), transparent)" }}>
+              <p className="text-[15px] leading-snug text-white">{st.caption}</p>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AddStory({ onClose, onAdd }) {
+  const [media, setMedia] = useState(null);
+  const [caption, setCaption] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const inputRef = useRef();
+
+  const pick = (e) => {
+    const f = e.target.files?.[0]; e.target.value = "";
+    if (!f) return;
+    const isVideo = f.type.startsWith("video/");
+    if (!isVideo && !f.type.startsWith("image/")) return setErr("Choose a photo or a video.");
+    if (isVideo && f.size > 30 * 1024 * 1024) return setErr("Video is over 30 MB — keep stories short.");
+    if (!isVideo && f.size > 8 * 1024 * 1024) return setErr("Photo is over 8 MB.");
+    setErr(null);
+    const r = new FileReader();
+    r.onload = () => setMedia({ kind: isVideo ? "video" : "photo", dataUri: r.result });
+    r.readAsDataURL(f);
+  };
+
+  const post = async () => {
+    if (!media) return;
+    setBusy(true);
+    await onAdd({ kind: media.kind, dataUri: media.dataUri, caption: caption.trim() });
+    setBusy(false);
+    onClose();
+  };
+
+  return (
+    <div className="fixed inset-0 flex items-end" style={{ background: "rgba(8,10,8,.55)", zIndex: 80 }} onClick={onClose}>
+      <div className="w-full rounded-t-3xl p-5" style={{ background: C.card }} onClick={(e) => e.stopPropagation()}>
+        <div className="w-10 h-1 rounded-full mx-auto mb-4" style={{ background: C.line }} />
+        <div className="text-[17px] font-semibold mb-1" style={{ color: C.ink }}>Add to your story</div>
+        <p className="text-[13px] mb-4" style={{ color: C.muted }}>Photo or short video. Disappears after 24 hours.</p>
+
+        {media ? (
+          <div className="relative rounded-xl overflow-hidden mb-3" style={{ border: `1px solid ${C.line}` }}>
+            {media.kind === "video"
+              ? <video src={media.dataUri} controls className="w-full block" style={{ maxHeight: 260 }} />
+              : <img src={media.dataUri} alt="" className="w-full block" style={{ maxHeight: 260, objectFit: "cover" }} />}
+            <button onClick={() => setMedia(null)} className="tap absolute top-2 right-2 w-8 h-8 rounded-full flex items-center justify-center" style={{ background: "rgba(0,0,0,.55)" }}><X size={16} color="#fff" /></button>
+          </div>
+        ) : (
+          <button onClick={() => inputRef.current?.click()} className="tap w-full rounded-2xl p-8 flex flex-col items-center mb-3" style={{ background: C.bg, border: `1.5px dashed ${C.line}` }}>
+            <div className="w-12 h-12 rounded-2xl flex items-center justify-center mb-2.5" style={{ background: C.goldSoft }}><ImagePlus size={22} color={C.gold} /></div>
+            <div className="text-[14.5px] font-semibold" style={{ color: C.ink }}>Choose photo or video</div>
+            <div className="text-[12.5px] mt-0.5" style={{ color: C.muted }}>Video up to 30 MB</div>
+          </button>
+        )}
+        <input ref={inputRef} type="file" accept="image/*,video/*" onChange={pick} className="hidden" />
+
+        <input value={caption} onChange={(e) => setCaption(e.target.value)} maxLength={120} placeholder="Add a caption (optional)"
+          className="w-full h-11 px-3.5 rounded-xl text-[14px] mb-3" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
+
+        {err && <p className="text-[13px] mb-2" style={{ color: C.maroon }}>{err}</p>}
+
+        <button onClick={post} disabled={!media || busy} className="tap w-full h-12 rounded-xl text-[15px] font-semibold inline-flex items-center justify-center gap-2"
+          style={{ background: media ? C.pine : "#C7CEC7", color: "#fff" }}>
+          {busy ? <Loader2 size={18} className="animate-spin" /> : "Share to story"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function ConfirmShareStory({ post, onClose, onConfirm }) {
+  const [busy, setBusy] = useState(false);
+  return (
+    <div className="fixed inset-0 flex items-end" style={{ background: "rgba(8,10,8,.55)", zIndex: 80 }} onClick={onClose}>
+      <div className="w-full rounded-t-3xl p-5" style={{ background: C.card }} onClick={(e) => e.stopPropagation()}>
+        <div className="w-10 h-1 rounded-full mx-auto mb-4" style={{ background: C.line }} />
+        <div className="text-[17px] font-semibold mb-1" style={{ color: C.ink }}>Share this post to your story?</div>
+        <p className="text-[13px] mb-4" style={{ color: C.muted }}>It stays visible for 24 hours. Your original post is unchanged.</p>
+        <div className="rounded-xl overflow-hidden mb-4" style={{ border: `1px solid ${C.line}` }}>
+          <img src={post.media.dataUri} alt="" className="w-full block" style={{ maxHeight: 220, objectFit: "cover" }} />
+        </div>
+        <button onClick={async () => { setBusy(true); await onConfirm(); setBusy(false); }} disabled={busy}
+          className="tap w-full h-12 rounded-xl text-[15px] font-semibold inline-flex items-center justify-center gap-2" style={{ background: C.pine, color: "#fff" }}>
+          {busy ? <Loader2 size={18} className="animate-spin" /> : "Share to story"}
+        </button>
+        <button onClick={onClose} className="tap w-full h-11 rounded-xl text-[14px] font-semibold mt-2" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.muted }}>Cancel</button>
+      </div>
+    </div>
+  );
+}
+
+/* ===================== Share a post to people (in-app) ==================== */
+function SharePostSheet({ post, eng, onExternal, onClose, onSent }) {
+  const [picked, setPicked] = useState([]);
+  const [note, setNote] = useState("");
+  const [q, setQ] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const me = eng?.me;
+  const follows = eng?.follows || [];
+  const iFollow = follows.filter((f) => f.follower === me).map((f) => f.following);
+  const followsMe = follows.filter((f) => f.following === me).map((f) => f.follower);
+  const circle = [...new Set([...iFollow, ...followsMe])];
+
+  const pool = [...TALENT, ...Object.values(PROFILE_DIR)].filter((p) => p.id !== me);
+  const seen = new Set();
+  const unique = pool.filter((p) => (seen.has(p.id) ? false : (seen.add(p.id), true)));
+  const inCircle = unique.filter((p) => circle.includes(p.id));
+  const others = unique.filter((p) => !circle.includes(p.id));
+  const match = (p) => `${p.name} ${p.base || ""}`.toLowerCase().includes(q.toLowerCase());
+
+  const toggle = (id) => setPicked((P) => (P.includes(id) ? P.filter((x) => x !== id) : [...P, id]));
+
+  const send = async () => {
+    if (!picked.length || !eng?.sharePostTo) return;
+    setBusy(true);
+    await eng.sharePostTo(picked, post, note);
+    setBusy(false);
+    onSent && onSent(picked.length);
+    onClose();
+  };
+
+  const Row = ({ p }) => (
+    <button onClick={() => toggle(p.id)} className="tap w-full text-left px-1 py-2 flex items-center gap-3">
+      <Avatar initials={p.initials} size={40} />
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-1.5">
+          <span className="text-[14.5px] font-semibold" style={{ color: C.ink }}>{p.name}</span>
+          {p.verified && <BadgeCheck size={14} color={C.pine} />}
+        </div>
+        <div className="text-[12px]" style={{ color: C.muted }}>{roleLabel(p.role)}{p.base ? ` · ${p.base}` : ""}</div>
+      </div>
+      <span className="w-6 h-6 rounded-full flex items-center justify-center shrink-0"
+        style={{ background: picked.includes(p.id) ? C.pine : C.card, border: `1.5px solid ${picked.includes(p.id) ? C.pine : C.line}` }}>
+        {picked.includes(p.id) && <Check size={13} color="#fff" strokeWidth={3} />}
+      </span>
+    </button>
+  );
+
+  return (
+    <div className="fixed inset-0 flex items-end" style={{ background: "rgba(8,10,8,.55)", zIndex: 80 }} onClick={onClose}>
+      <div className="w-full rounded-t-3xl flex flex-col" style={{ background: C.card, maxHeight: "88vh" }} onClick={(e) => e.stopPropagation()}>
+        <div className="p-5 pb-3 shrink-0">
+          <div className="w-10 h-1 rounded-full mx-auto mb-4" style={{ background: C.line }} />
+          <div className="text-[17px] font-semibold" style={{ color: C.ink }}>Send this post</div>
+          <p className="text-[13px] mt-0.5 mb-3" style={{ color: C.muted }}>It arrives in their Messages.</p>
+          <div className="relative">
+            <Search size={16} color={C.muted} className="absolute left-3.5 top-1/2 -translate-y-1/2" />
+            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search people"
+              className="w-full h-11 pl-10 pr-4 rounded-xl text-[14px]" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
+          </div>
+        </div>
+
+        <div className="flex-1 overflow-y-auto hidescroll px-4" style={{ scrollbarWidth: "none" }}>
+          {inCircle.filter(match).length > 0 && (
+            <>
+              <div className="text-[11.5px] font-semibold tracking-[.12em] uppercase mt-1 mb-1" style={{ color: C.gold }}>Followers & following</div>
+              {inCircle.filter(match).map((p) => <Row key={p.id} p={p} />)}
+            </>
+          )}
+          {others.filter(match).length > 0 && (
+            <>
+              <div className="text-[11.5px] font-semibold tracking-[.12em] uppercase mt-3 mb-1" style={{ color: C.gold }}>Everyone else</div>
+              {others.filter(match).map((p) => <Row key={p.id} p={p} />)}
+            </>
+          )}
+          {unique.filter(match).length === 0 && (
+            <p className="text-[13.5px] text-center py-8" style={{ color: C.muted }}>Nobody found.</p>
+          )}
+        </div>
+
+        <div className="p-4 shrink-0" style={{ borderTop: `1px solid ${C.lineSoft}` }}>
+          <input value={note} onChange={(e) => setNote(e.target.value)} maxLength={140} placeholder="Add a message (optional)"
+            className="w-full h-11 px-3.5 rounded-xl text-[14px] mb-2.5" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
+          <button onClick={send} disabled={!picked.length || busy}
+            className="tap w-full h-12 rounded-xl text-[15px] font-semibold inline-flex items-center justify-center gap-2"
+            style={{ background: picked.length ? C.pine : "#C7CEC7", color: "#fff" }}>
+            {busy ? <Loader2 size={18} className="animate-spin" /> : <><SendIcon size={17} /> Send{picked.length ? ` to ${picked.length}` : ""}</>}
+          </button>
+          <button onClick={() => { onExternal(); onClose(); }} className="tap w-full h-11 rounded-xl text-[13.5px] font-semibold mt-2 inline-flex items-center justify-center gap-2"
+            style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }}>
+            <Share2 size={15} /> Share outside the app
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
