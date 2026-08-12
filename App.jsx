@@ -166,7 +166,7 @@ export default function App() {
   const [accountId, setAccountId] = useState(null);
   const [posts, setPosts] = useState(CLOUD ? [] : SEED_POSTS);
   const [jobs, setJobs] = useState(CLOUD ? [] : SEED_JOBS);
-  const [trips, setTrips] = useState(SEED_TRIPS);
+  const [trips, setTrips] = useState(CLOUD ? [] : SEED_TRIPS);
   const [listings, setListings] = useState(CLOUD ? [] : SEED_LISTINGS);
   const [likes, setLikes] = useState([]);
   const [comments, setComments] = useState([]);
@@ -381,7 +381,73 @@ export default function App() {
     fetchJobs();
   };
 
+  /* ---- Trips in the database ---- */
+  const fetchTrips = async () => {
+    if (!CLOUD) return;
+    const [{ data: T }, { data: M }, { data: MS }, { data: IT }] = await Promise.all([
+      supabase.from("trips").select("*").order("start_date", { ascending: true }),
+      supabase.from("trip_members").select("*"),
+      supabase.from("trip_messages").select("*").order("created_at", { ascending: true }),
+      supabase.from("trip_itinerary").select("*").order("day_no", { ascending: true }),
+    ]);
+    if (!T) return;
+    setTrips(T.map((tr) => ({
+      id: tr.id, operatorId: tr.operator_id, operator: tr.operator_name, title: tr.title,
+      start: tr.start_date, end: tr.end_date, meetingPoint: tr.meeting_point || "To be set by operator",
+      members: (M || []).filter((m) => m.trip_id === tr.id).map((m) => {
+        const p = talentById(m.user_id);
+        return { id: m.user_id, name: p?.name || m.display_name || "Member", initials: p?.initials || initialsOf(m.display_name || "?"), roleInTrip: m.role_in_trip };
+      }),
+      itinerary: (IT || []).filter((i) => i.trip_id === tr.id).map((i) => ({ day: i.day_no, title: i.title })),
+      chat: {
+        state: tr.chat_state || "active",
+        messages: (MS || []).filter((m) => m.trip_id === tr.id).map((m) => ({
+          id: m.id, senderId: m.sender_id, kind: m.kind, body: m.body,
+          photo: m.photo_url || null, ts: new Date(m.created_at).getTime(),
+        })),
+      },
+      createdAt: new Date(tr.created_at).getTime(),
+    })));
+  };
+  useEffect(() => {
+    if (!CLOUD) return;
+    fetchTrips();
+    const ch = supabase.channel("trips-live")
+      .on("postgres_changes", { event: "*", schema: "public", table: "trips" }, fetchTrips)
+      .on("postgres_changes", { event: "*", schema: "public", table: "trip_members" }, fetchTrips)
+      .on("postgres_changes", { event: "*", schema: "public", table: "trip_messages" }, fetchTrips)
+      .on("postgres_changes", { event: "*", schema: "public", table: "trip_itinerary" }, fetchTrips)
+      .subscribe();
+    return () => { supabase.removeChannel(ch); };
+  }, [dirTick]);
+
+  const createTripCloud = async (job) => {
+    const opId = job.operatorId || realUserRef.current;
+    const t = talentById(job.toTalentId);
+    // one trip per operator + date range: join the existing one if it's there
+    const { data: found } = await supabase.from("trips").select("id")
+      .eq("operator_id", opId).eq("start_date", job.start).eq("end_date", job.end).maybeSingle();
+    let tripId = found?.id;
+    if (!tripId) {
+      const scheduled = new Date(job.start + "T00:00").getTime() - 3 * 86400e3 > Date.now();
+      const { data: created, error } = await supabase.from("trips").insert({
+        operator_id: opId, operator_name: job.operator, title: job.title,
+        start_date: job.start, end_date: job.end, chat_state: scheduled ? "scheduled" : "active",
+      }).select("id").single();
+      if (error || !created) return;
+      tripId = created.id;
+      await supabase.from("trip_members").insert({ trip_id: tripId, user_id: opId, display_name: job.operator, role_in_trip: "operator" });
+      await supabase.from("trip_messages").insert({ trip_id: tripId, sender_id: null, kind: "system", body: "Trip created from a confirmed booking." });
+    }
+    await supabase.from("trip_members").upsert({
+      trip_id: tripId, user_id: job.toTalentId, display_name: t?.name || "Member", role_in_trip: t?.role || "guide",
+    });
+    await supabase.from("trip_messages").insert({ trip_id: tripId, sender_id: null, kind: "system", body: `${t?.name || "A crew member"} joined the trip.` });
+    fetchTrips();
+  };
+
   const createTripFromJob = (job) => {
+    if (CLOUD) { createTripCloud(job); return; }
     const t = talentById(job.toTalentId);
     const talentMember = { id: job.toTalentId, name: t.name, initials: t.initials, roleInTrip: t.role };
     setTrips((prev) => {
@@ -414,8 +480,31 @@ export default function App() {
     if (status === "accepted" && job) createTripFromJob(job);
   };
 
-  const postChat = (tripId, msg) => setTrips((prev) => prev.map((tr) => (tr.id === tripId ? { ...tr, chat: { ...tr.chat, messages: [...tr.chat.messages, msg] } } : tr)));
-  const openChat = (tripId) => setTrips((prev) => prev.map((tr) => (tr.id === tripId ? { ...tr, chat: { ...tr.chat, state: "active" } } : tr)));
+  const postChat = async (tripId, msg) => {
+    setTrips((prev) => prev.map((tr) => (tr.id === tripId ? { ...tr, chat: { ...tr.chat, messages: [...tr.chat.messages, msg] } } : tr)));
+    if (!CLOUD) return;
+    let photoUrl = null;
+    if (msg.kind === "photo" && msg.photo) {
+      try {
+        const small = await shrinkImage(msg.photo, 1280, 0.82);
+        const blob = await (await fetch(small)).blob();
+        const path = `${tripId}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.jpg`;
+        const { error } = await supabase.storage.from("post-media").upload(path, blob, { contentType: "image/jpeg" });
+        if (!error) photoUrl = supabase.storage.from("post-media").getPublicUrl(path).data.publicUrl;
+      } catch (e) {}
+    }
+    await supabase.from("trip_messages").insert({
+      trip_id: tripId, sender_id: msg.senderId, kind: msg.kind,
+      body: msg.kind === "text" ? msg.body : null, photo_url: photoUrl,
+    });
+    fetchTrips();
+  };
+  const openChat = async (tripId) => {
+    setTrips((prev) => prev.map((tr) => (tr.id === tripId ? { ...tr, chat: { ...tr.chat, state: "active" } } : tr)));
+    if (!CLOUD) return;
+    await supabase.from("trips").update({ chat_state: "active" }).eq("id", tripId);
+    fetchTrips();
+  };
 
   const postListing = async (l) => {
     if (!CLOUD) { setListings((L) => [{ id: uid(), status: "open", createdAt: Date.now(), applicants: [], ...l }, ...L]); return; }
@@ -1404,7 +1493,8 @@ function CrewAvatars({ members, size = 26 }) {
 function TripsTab({ user, trips, actions }) {
   const [openId, setOpenId] = useState(null);
   const meId = user.kind === "operator" ? "a_operator" : user.talentId;
-  const mine = trips.filter((tr) => (user.kind === "operator" ? tr.operator === user.name : tr.members.some((m) => m.id === user.talentId)));
+  const mineId = user.talentId || user.id;
+  const mine = trips.filter((tr) => tr.members.some((m) => m.id === mineId) || (tr.operatorId && tr.operatorId === mineId));
   const open = mine.find((tr) => tr.id === openId);
   if (open) return <TripHub user={user} meId={meId} trip={open} actions={actions} onBack={() => setOpenId(null)} />;
   return (
@@ -2954,9 +3044,8 @@ function ChatsTab({ user, me, dm, trips, actions, openWith, onOpened, onOpenProf
 
   useEffect(() => { if (openWith) { setWithId(openWith); onOpened && onOpened(); } }, [openWith]);
 
-  const myTrips = (trips || []).filter((tr) =>
-    user.kind === "operator" ? tr.operator === user.name : tr.members.some((m) => m.id === user.talentId)
-  );
+  const meId = user.talentId || user.id;
+  const myTrips = (trips || []).filter((tr) => tr.members.some((m) => m.id === meId) || (tr.operatorId && tr.operatorId === meId));
 
   const threads = useMemo(() => {
     const map = new Map();
