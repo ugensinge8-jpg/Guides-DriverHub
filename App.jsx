@@ -4,7 +4,7 @@ import {
   BadgeCheck, MapPin, Inbox, ChevronLeft, Star, Phone, Mail, Briefcase,
   Search, LogOut, Newspaper, User, CalendarCheck, MessageCircle,
   Map, MessageSquare, Users, Download, Mic, Video, Heart, Share2, Trash2, Maximize2, Upload, Loader2, ArrowRight,
-  Award, UserX, RefreshCw, FileCheck2, ExternalLink, UserPlus, Send as SendIcon, Lock, Eye, EyeOff,
+  Award, UserX, RefreshCw, FileCheck2, ExternalLink, UserPlus, Send as SendIcon, Lock, Eye, EyeOff, CalendarDays,
   ShieldAlert,
 } from "lucide-react";
 import mapImg from "./map.jpg";
@@ -68,6 +68,7 @@ const profileToTalent = (p) => ({
   grades: {}, tags: Array.isArray(p.tags) ? p.tags : [],
   languages: Array.isArray(p.languages) ? p.languages : [],
   phone: p.phone || "", email: p.email || "", pitch: p.pitch || "", vehicle: p.vehicle || null,
+  availability: p.availability || "open", availableFrom: p.available_from || null, availableNote: p.availability_note || "",
 });
 const talentById = (id) => TALENT.find((t) => t.id === id) || PROFILE_DIR[id] || null;
 const initialsOf = (name) => (String(name || "?").trim().split(/\s+/).filter(Boolean).map((w) => w[0]).slice(0, 2).join("") || "?").toUpperCase();
@@ -182,6 +183,17 @@ export default function App() {
     if (data) { PROFILE_DIR = {}; data.forEach((p) => { PROFILE_DIR[p.id] = profileToTalent(p); }); setDirTick((t) => t + 1); }
   };
   const reloadMe = () => { setProfileTick((t) => t + 1); loadProfiles(); };
+
+  const setAvailability = async (status, from, note) => {
+    const me = realUserRef.current;
+    if (!CLOUD || !me) return;
+    await supabase.from("profiles").update({
+      availability: status,
+      available_from: from || null,
+      availability_note: note || null,
+    }).eq("id", me);
+    reloadMe();
+  };
 
   const fetchDms = async () => {
     if (!CLOUD) return;
@@ -452,7 +464,7 @@ export default function App() {
           <Login onPick={setAccountId} session={session} myProfile={myProfile} onAuthed={reloadMe} onBusy={setAuthBusy} />
         ) : (
           <Shell key={user.id} user={user} posts={posts} jobs={jobs} trips={trips} listings={listings}
-            actions={{ addPost, approve, reject, deletePost, reloadDirectory: loadProfiles, sendJob, setJobStatus, postChat, openChat, postListing, applyToListing, setApplicant, hireApplicant }} engagement={{ likes, comments, toggleLike, addComment, deleteComment }} dm={{ dms, sendDm, markRead }} onLogout={() => { if (session) supabase.auth.signOut(); setAccountId(null); }} />
+            actions={{ addPost, approve, reject, deletePost, reloadDirectory: loadProfiles, setAvailability, sendJob, setJobStatus, postChat, openChat, postListing, applyToListing, setApplicant, hireApplicant }} engagement={{ likes, comments, toggleLike, addComment, deleteComment }} dm={{ dms, sendDm, markRead }} onLogout={() => { if (session) supabase.auth.signOut(); setAccountId(null); }} />
         )}
       </div>
     </div>
@@ -616,7 +628,7 @@ function Shell({ user, posts, jobs, trips, listings, actions, engagement, dm, on
             {tab === "jobs" && <JobsHub user={user} jobs={jobs} listings={listings} actions={actions} />}
             {tab === "trips" && <TripsTab user={user} trips={trips} actions={actions} />}
             {tab === "chats" && <ChatsTab user={user} me={actorId} dm={dm} trips={trips} actions={actions} openWith={dmWith} onOpened={() => setDmWith(null)} onOpenProfile={openProfile} />}
-            {tab === "profile" && <TalentProfile talent={talentById(user.talentId)} posts={posts} eng={eng} self onBack={null} />}
+            {tab === "profile" && <TalentProfile talent={talentById(user.talentId)} posts={posts} eng={eng} self onSetAvailability={actions.setAvailability} onBack={null} />}
             {tab === "discover" && <Discover onOpen={openProfile} />}
             {tab === "requests" && <OperatorJobs user={user} jobs={jobs} listings={listings} posts={posts} actions={actions} onOpen={openProfile} />}
             {tab === "feed" && <Feed posts={posts} eng={eng} admin={user.kind === "admin"} onDelete={actions.deletePost} onOpenProfile={openProfile} />}
@@ -977,9 +989,11 @@ function Discover({ onOpen }) {
   const [q, setQ] = useState("");
   const [role, setRole] = useState("all");
   const [lang, setLang] = useState(null);
+  const [onlyFree, setOnlyFree] = useState(false);
 
   const POOL = [...TALENT, ...Object.values(PROFILE_DIR).filter((p) => p.role === "guide" || p.role === "driver")];
   const list = POOL.filter((t) => (role === "all" || t.role === role))
+    .filter((t) => (!onlyFree || (t.availability || "open") === "open"))
     .filter((t) => (!lang || t.languages.some((l) => l.n === lang)))
     .filter((t) => t.name.toLowerCase().includes(q.toLowerCase()) || t.base.toLowerCase().includes(q.toLowerCase()) || t.tags.join(" ").toLowerCase().includes(q.toLowerCase()))
     .sort((a, b) => (b.rating || 0) - (a.rating || 0));
@@ -1002,6 +1016,7 @@ function Discover({ onOpen }) {
       </div>
 
       <div className="flex gap-2 overflow-x-auto hidescroll pb-1 mb-4" style={{ scrollbarWidth: "none" }}>
+        <Chip on={onlyFree} onClick={() => setOnlyFree((v) => !v)}>Available now</Chip>
         <Chip on={!lang} onClick={() => setLang(null)}>All languages</Chip>
         {LANG_OPTIONS.map((l) => <Chip key={l} on={lang === l} onClick={() => setLang(lang === l ? null : l)}>{l}</Chip>)}
       </div>
@@ -1037,8 +1052,9 @@ function TalentCard({ t, onOpen }) {
           <div className="text-[11.5px] mt-1" style={{ color: C.muted }}>{t.years} yrs · {t.trips} trips</div>
         </div>
       </div>
-      <div className="flex flex-wrap gap-1.5 mt-3">
-        {t.languages.slice(0, 4).map((l) => (
+      <div className="flex flex-wrap items-center gap-1.5 mt-3">
+        <AvailabilityChip talent={t} />
+        {t.languages.slice(0, 3).map((l) => (
           <span key={l.n} className="text-[11.5px] rounded-md px-1.5 py-0.5" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.muted }}>{l.n}</span>
         ))}
       </div>
@@ -1197,7 +1213,7 @@ function ModCard({ post, onApprove, onReject, eng }) {
 }
 
 /* ============================= Talent profile ============================ */
-function TalentProfile({ talent, posts, canRequest, self, contactOnly, eng, onRequest, onMessage, onBack }) {
+function TalentProfile({ talent, posts, canRequest, self, contactOnly, eng, onRequest, onMessage, onSetAvailability, onBack }) {
   const t = talent;
   const live = posts.filter((p) => p.talentId === t.id && p.status === "approved").length;
   const located = posts.filter((p) => p.talentId === t.id && p.status === "approved" && p.location);
@@ -1222,6 +1238,7 @@ function TalentProfile({ talent, posts, canRequest, self, contactOnly, eng, onRe
                 {t.verified && <BadgeCheck size={17} color={C.pine} className="shrink-0 mt-1" />}
               </div>
               <div className="flex items-center gap-1 text-[13.5px] mt-1" style={{ color: C.muted }}><MapPin size={13} /> {roleLabel(t.role)}{t.base ? ` · ${t.base}` : ""}</div>
+              {t.role !== "operator" && <div className="mt-2"><AvailabilityChip talent={t} /></div>}
             </div>
           </div>
           <div className="flex items-center gap-4 mt-3.5 text-[13px]" style={{ color: C.muted }}>
@@ -1233,6 +1250,8 @@ function TalentProfile({ talent, posts, canRequest, self, contactOnly, eng, onRe
       </div>
 
       <div className="px-5">
+        {self && t.role !== "operator" && <AvailabilityEditor talent={t} onSet={onSetAvailability} />}
+
         <ProfileTabs
           cv={
             <>
@@ -1698,7 +1717,7 @@ function OperatorJobs({ user, jobs, listings, posts, actions, onOpen }) {
   const manage = mine.find((l) => l.id === manageId);
   const openCount = mine.filter((l) => l.status === "open").length;
 
-  if (profileId) return <TalentProfile talent={talentById(profileId)} posts={posts} contactOnly onBack={() => setProfileId(null)} />;
+  if (profileId) return <TalentProfile talent={talentById(profileId)} posts={posts} canRequest onBack={() => setProfileId(null)} />;
   if (posting) return <ListingForm operator={user.name} onBack={() => setPosting(false)} onPost={(l) => { actions.postListing(l); setPosting(false); setSub("open"); }} />;
   if (manage) return <ManageApplicants listing={manage} actions={actions} onViewProfile={setProfileId} onBack={() => setManageId(null)} />;
 
@@ -1770,7 +1789,29 @@ function ManageApplicants({ listing, actions, onViewProfile, onBack }) {
                   {a.status !== "applied" && <AppStatusBadge status={a.status} />}
                 </div>
                 {a.message && <p className="text-[13.5px] leading-snug mt-3" style={{ color: C.ink }}>“{a.message}”</p>}
-                <button onClick={() => onViewProfile(a.talentId)} className="tap text-[13px] font-semibold mt-3 inline-flex items-center gap-1" style={{ color: C.pine }}>View full profile →</button>
+                {(() => {
+                  const p = talentById(a.talentId);
+                  if (!p) return null;
+                  return (
+                    <div className="mt-3">
+                      <div className="flex flex-wrap items-center gap-2 mb-2.5">
+                        <AvailabilityChip talent={p} />
+                        {p.verified && <span className="inline-flex items-center gap-1 text-[11.5px] font-semibold rounded-full px-2 py-1" style={{ background: C.pineSoft, color: C.pine }}><BadgeCheck size={12} /> Verified</span>}
+                        {p.years > 0 && <span className="text-[11.5px] rounded-full px-2 py-1" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.muted }}>{p.years} yrs</span>}
+                        {p.base && <span className="text-[11.5px] rounded-full px-2 py-1" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.muted }}>{p.base}</span>}
+                      </div>
+                      {p.languages?.length > 0 && (
+                        <div className="flex flex-wrap gap-1.5 mb-2.5">
+                          {p.languages.slice(0, 4).map((l) => <span key={l.n} className="text-[11px] rounded-md px-1.5 py-0.5" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.muted }}>{l.n}</span>)}
+                        </div>
+                      )}
+                      <button onClick={() => onViewProfile(a.talentId)} className="tap w-full h-10 rounded-xl text-[13.5px] font-semibold inline-flex items-center justify-center gap-1.5"
+                        style={{ background: C.card, border: `1.5px solid ${C.pine}`, color: C.pine }}>
+                        <User size={15} /> View full profile & reviews
+                      </button>
+                    </div>
+                  );
+                })()}
                 {a.status === "applied" && (
                   <div className="flex gap-2.5 mt-3">
                     <button onClick={() => actions.setApplicant(listing.id, a.talentId, "declined")} className="tap flex-1 h-11 rounded-xl text-[14px] font-semibold inline-flex items-center justify-center gap-2" style={{ background: C.card, border: `1.5px solid ${C.maroon}`, color: C.maroon }}><X size={17} /> Decline</button>
@@ -3186,6 +3227,80 @@ function VerifyBanner({ user }) {
         <div className="text-[12.5px] font-semibold" style={{ color: map.fg }}>{map.title}</div>
         <div className="text-[12px] leading-snug" style={{ color: map.fg, opacity: .85 }}>{map.body}</div>
       </div>
+    </div>
+  );
+}
+
+/* ========================= Availability (talent-set) ========================= */
+const AVAIL = {
+  open:   { label: "Available for work", bg: "#E4EFE7", fg: "#21402F", dot: "#2E7D4F" },
+  busy:   { label: "On a trip",          bg: "#F3E8CF", fg: "#7a5a1e", dot: "#C0872B" },
+  closed: { label: "Not taking work",    bg: "#F7E9E7", fg: "#7A2E2E", dot: "#9C4B4B" },
+};
+
+function AvailabilityChip({ talent }) {
+  const st = AVAIL[talent?.availability] || AVAIL.open;
+  const until = talent?.availableFrom ? ` · free from ${fmtDate(talent.availableFrom)}` : "";
+  return (
+    <span className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[12px] font-semibold" style={{ background: st.bg, color: st.fg }}>
+      <span className="rounded-full" style={{ width: 7, height: 7, background: st.dot }} />
+      {st.label}{until}
+    </span>
+  );
+}
+
+function AvailabilityEditor({ talent, onSet }) {
+  const [status, setStatus] = useState(talent?.availability || "open");
+  const [from, setFrom] = useState(talent?.availableFrom || "");
+  const [note, setNote] = useState(talent?.availableNote || "");
+  const [saved, setSaved] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  const save = async () => {
+    if (!onSet) return;
+    setBusy(true);
+    await onSet(status, status === "busy" ? from : null, note);
+    setBusy(false);
+    setSaved(true);
+    setTimeout(() => setSaved(false), 2200);
+  };
+
+  const dirty = status !== (talent?.availability || "open") || from !== (talent?.availableFrom || "") || note !== (talent?.availableNote || "");
+
+  return (
+    <div className="rounded-2xl p-4 mt-5" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+      <div className="flex items-center gap-2 mb-1">
+        <CalendarDays size={16} color={C.gold} />
+        <span className="text-[14px] font-semibold" style={{ color: C.ink }}>Your availability</span>
+      </div>
+      <p className="text-[12.5px] mb-3" style={{ color: C.muted }}>Operators see this before they book you.</p>
+
+      <div className="space-y-2 mb-3">
+        {Object.entries(AVAIL).map(([k, v]) => (
+          <button key={k} onClick={() => setStatus(k)} className="tap w-full rounded-xl px-3.5 py-2.5 flex items-center gap-3"
+            style={{ background: status === k ? C.bg : C.card, border: `1px solid ${status === k ? C.pine : C.line}` }}>
+            <span className="rounded-full shrink-0" style={{ width: 9, height: 9, background: v.dot }} />
+            <span className="text-[14px] font-medium flex-1 text-left" style={{ color: C.ink }}>{v.label}</span>
+            {status === k && <Check size={16} color={C.pine} strokeWidth={2.6} />}
+          </button>
+        ))}
+      </div>
+
+      {status === "busy" && (
+        <div className="mb-3 fade">
+          <div className="text-[12.5px] font-medium mb-1.5" style={{ color: C.ink }}>Free again from</div>
+          <input type="date" value={from} onChange={(e) => setFrom(e.target.value)}
+            className="w-full h-11 px-3.5 rounded-xl text-[14px]" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
+        </div>
+      )}
+
+      <input value={note} onChange={(e) => setNote(e.target.value)} maxLength={80} placeholder="Optional note — e.g. weekends only"
+        className="w-full h-11 px-3.5 rounded-xl text-[14px] mb-3" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
+
+      <button onClick={save} disabled={!dirty || busy} className="tap w-full h-11 rounded-xl text-[14px] font-semibold inline-flex items-center justify-center gap-2"
+        style={{ background: saved ? C.pineSoft : dirty ? C.pine : "#C7CEC7", color: saved ? C.pine : "#fff" }}>
+        {busy ? <Loader2 size={16} className="animate-spin" /> : saved ? <><Check size={16} /> Saved</> : "Save availability"}
+      </button>
     </div>
   );
 }
