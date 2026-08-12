@@ -630,7 +630,7 @@ function Shell({ user, posts, jobs, trips, listings, actions, engagement, dm, on
             {tab === "chats" && <ChatsTab user={user} me={actorId} dm={dm} trips={trips} actions={actions} openWith={dmWith} onOpened={() => setDmWith(null)} onOpenProfile={openProfile} />}
             {tab === "profile" && <TalentProfile talent={talentById(user.talentId)} posts={posts} eng={eng} self onSetAvailability={actions.setAvailability} onBack={null} />}
             {tab === "discover" && <Discover onOpen={openProfile} />}
-            {tab === "requests" && <OperatorJobs user={user} jobs={jobs} listings={listings} posts={posts} actions={actions} onOpen={openProfile} />}
+            {tab === "requests" && <OperatorJobs user={user} jobs={jobs} listings={listings} posts={posts} actions={actions} eng={eng} onOpen={openProfile} />}
             {tab === "feed" && <Feed posts={posts} eng={eng} admin={user.kind === "admin"} onDelete={actions.deletePost} onOpenProfile={openProfile} />}
             {tab === "review" && <Review posts={posts} onApprove={actions.approve} onReject={actions.reject} eng={eng} />}
             {tab === "users" && <AdminUsers onChanged={actions.reloadDirectory} />}
@@ -1707,7 +1707,7 @@ function MyApplications({ talent, listings }) {
 }
 
 /* ---- Operator: jobs hub ---- */
-function OperatorJobs({ user, jobs, listings, posts, actions, onOpen }) {
+function OperatorJobs({ user, jobs, listings, posts, actions, eng, onOpen }) {
   const myId = user.talentId || user.id;
   const [sub, setSub] = useState("open");
   const [posting, setPosting] = useState(false);
@@ -1717,7 +1717,7 @@ function OperatorJobs({ user, jobs, listings, posts, actions, onOpen }) {
   const manage = mine.find((l) => l.id === manageId);
   const openCount = mine.filter((l) => l.status === "open").length;
 
-  if (profileId) return <TalentProfile talent={talentById(profileId)} posts={posts} canRequest onBack={() => setProfileId(null)} />;
+  if (profileId) return <TalentProfile talent={talentById(profileId)} posts={posts} eng={eng} canRequest onBack={() => setProfileId(null)} />;
   if (posting) return <ListingForm operator={user.name} onBack={() => setPosting(false)} onPost={(l) => { actions.postListing(l); setPosting(false); setSub("open"); }} />;
   if (manage) return <ManageApplicants listing={manage} actions={actions} onViewProfile={setProfileId} onBack={() => setManageId(null)} />;
 
@@ -2178,23 +2178,30 @@ function PhotoGrid({ items, author, eng }) {
     <>
       <div className="rounded-xl overflow-hidden" style={{ border: `1px solid ${C.line}` }}>
         <div className="grid grid-cols-3 gap-[2px]" style={{ background: C.line }}>
-          {items.map((p, i) => (
-            <button key={p.id} onClick={() => setOpenIdx(i)} className="relative overflow-hidden" style={{ aspectRatio: "1 / 1", background: C.bg }} aria-label="Open post">
-              <img src={p.media.dataUri} alt="" loading="lazy" className="absolute inset-0 w-full h-full" style={{ objectFit: "cover" }} />
-              {p.location && (
-                <span className="absolute left-1 bottom-1 w-5 h-5 rounded-full flex items-center justify-center" style={{ background: "rgba(0,0,0,.45)" }}>
-                  <MapPin size={10} color="#fff" />
-                </span>
-              )}
-            </button>
-          ))}
+          {items.map((p, i) => {
+            const likes = (eng?.likes || []).filter((l) => l.post_id === p.id).length;
+            const comments = (eng?.comments || []).filter((c) => c.post_id === p.id).length;
+            return (
+              <button key={p.id} onClick={() => setOpenIdx(i)} className="relative overflow-hidden group" style={{ aspectRatio: "1 / 1", background: C.bg }} aria-label="Open post">
+                <img src={p.media.dataUri} alt="" loading="lazy" className="absolute inset-0 w-full h-full" style={{ objectFit: "cover" }} />
+                {p.location && (
+                  <span className="absolute left-1 top-1 w-5 h-5 rounded-full flex items-center justify-center" style={{ background: "rgba(0,0,0,.45)" }}>
+                    <MapPin size={10} color="#fff" />
+                  </span>
+                )}
+                {(likes > 0 || comments > 0) && (
+                  <span className="absolute left-1 right-1 bottom-1 flex items-center justify-center gap-2.5 rounded-md py-0.5" style={{ background: "rgba(0,0,0,.42)" }}>
+                    {likes > 0 && <span className="inline-flex items-center gap-1 text-[10.5px] font-bold text-white"><Heart size={10} color="#fff" fill="#fff" /> {likes}</span>}
+                    {comments > 0 && <span className="inline-flex items-center gap-1 text-[10.5px] font-bold text-white"><MessageCircle size={10} color="#fff" /> {comments}</span>}
+                  </span>
+                )}
+              </button>
+            );
+          })}
         </div>
       </div>
       {openIdx != null && (
-        <PostDetail
-          items={items} index={openIdx} author={author} eng={eng}
-          onIndex={setOpenIdx} onClose={() => setOpenIdx(null)}
-        />
+        <PostDetail items={items} index={openIdx} author={author} eng={eng} onIndex={setOpenIdx} onClose={() => setOpenIdx(null)} />
       )}
     </>
   );
@@ -2274,7 +2281,11 @@ function PostDetail({ items, index, author, eng, onIndex, onClose }) {
             </div>
           )}
 
-          {eng && <PostEngagement post={p} eng={eng} />}
+          {eng ? <PostEngagement post={p} eng={eng} /> : (
+            <div className="mt-3 pt-3 text-[12.5px]" style={{ borderTop: `1px solid ${C.lineSoft}`, color: C.muted }}>
+              Sign in to like, comment or share.
+            </div>
+          )}
         </div>
       </div>
     </div>
