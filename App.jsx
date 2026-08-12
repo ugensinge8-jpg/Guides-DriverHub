@@ -815,7 +815,7 @@ function Shell({ user, posts, jobs, trips, listings, actions, engagement, dm, on
       </div>
 
       {sharedPost && (
-        <PostDetail items={[sharedPost]} index={0} author={talentById(sharedPost.talentId)} eng={eng} onIndex={() => {}} onClose={() => setSharedPost(null)} />
+        <PostDetail items={[sharedPost]} index={0} author={talentById(sharedPost.talentId)} eng={eng} onClose={() => setSharedPost(null)} />
       )}
 
       {!overlay && (
@@ -2442,17 +2442,22 @@ function PhotoGrid({ items, author, eng, onShareStory }) {
         </div>
       </div>
       {openIdx != null && (
-        <PostDetail items={items} index={openIdx} author={author} eng={eng} onShareStory={onShareStory} onIndex={setOpenIdx} onClose={() => setOpenIdx(null)} />
+        <PostDetail items={items} index={openIdx} author={author} eng={eng} onShareStory={onShareStory} onClose={() => setOpenIdx(null)} />
       )}
     </>
   );
 }
 
-/* ======================= Post detail (Instagram-style) ==================== */
-function PostDetail({ items, index, author, eng, onShareStory, onIndex, onClose }) {
-  const p = items[index];
-  const [showMap, setShowMap] = useState(false);
-  const startX = useRef(null);
+/* ============ Post wall — full posts, scrollable, opens at a tile ========== */
+function PostDetail({ items, index, author, eng, onShareStory, onClose }) {
+  const scroller = useRef(null);
+  const refs = useRef({});
+
+  // jump to the tapped post on open, without animation
+  useEffect(() => {
+    const el = refs.current[items[index]?.id];
+    if (el && scroller.current) scroller.current.scrollTop = el.offsetTop;
+  }, []);
 
   useEffect(() => {
     const onKey = (e) => { if (e.key === "Escape") onClose(); };
@@ -2460,23 +2465,37 @@ function PostDetail({ items, index, author, eng, onShareStory, onIndex, onClose 
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  const swipeStart = (e) => { startX.current = (e.touches ? e.touches[0] : e).clientX; };
-  const swipeEnd = (e) => {
-    if (startX.current == null) return;
-    const dx = (e.changedTouches ? e.changedTouches[0] : e).clientX - startX.current;
-    if (dx < -55 && index < items.length - 1) onIndex(index + 1);
-    if (dx > 55 && index > 0) onIndex(index - 1);
-    startX.current = null;
-  };
-
   return (
     <div className="fixed inset-0 flex flex-col" style={{ background: C.bg, zIndex: 70 }}>
-      {/* header */}
       <div className="shrink-0 h-14 px-3 flex items-center gap-3" style={{ background: C.card, borderBottom: `1px solid ${C.line}` }}>
-        <button onClick={onClose} className="tap w-9 h-9 rounded-full flex items-center justify-center" style={{ border: `1px solid ${C.line}` }} aria-label="Close">
+        <button onClick={onClose} className="tap w-9 h-9 rounded-full flex items-center justify-center" style={{ border: `1px solid ${C.line}` }} aria-label="Back">
           <ChevronLeft size={19} color={C.ink} />
         </button>
-        <Avatar initials={author?.initials || "?"} size={34} />
+        <div className="flex-1">
+          <div className="text-[15px] font-semibold" style={{ color: C.ink }}>Posts</div>
+          <div className="text-[11.5px]" style={{ color: C.muted }}>{author?.name || "Member"} · {items.length}</div>
+        </div>
+      </div>
+
+      <div ref={scroller} className="flex-1 overflow-y-auto hidescroll" style={{ scrollbarWidth: "none" }}>
+        {items.map((p) => (
+          <div key={p.id} ref={(el) => { refs.current[p.id] = el; }} style={{ borderBottom: `8px solid ${C.bg}` }}>
+            <WallPost post={p} author={author} eng={eng} onShareStory={onShareStory} onClose={onClose} />
+          </div>
+        ))}
+        <div className="py-10 text-center text-[12.5px]" style={{ color: C.muted }}>You're all caught up</div>
+      </div>
+    </div>
+  );
+}
+
+function WallPost({ post: p, author, eng, onShareStory, onClose }) {
+  const [showMap, setShowMap] = useState(false);
+  return (
+    <div style={{ background: C.card }}>
+      {/* author */}
+      <div className="px-4 py-3 flex items-center gap-3">
+        <Avatar initials={author?.initials || "?"} size={36} />
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-1.5">
             <span className="text-[14px] font-semibold" style={{ color: C.ink }}>{author?.name || "Member"}</span>
@@ -2484,56 +2503,37 @@ function PostDetail({ items, index, author, eng, onShareStory, onIndex, onClose 
           </div>
           <div className="text-[11.5px]" style={{ color: C.muted }}>{relTime(p.createdAt)}</div>
         </div>
-        <span className="text-[12px] font-medium" style={{ color: C.muted }}>{index + 1}/{items.length}</span>
       </div>
 
-      {/* scrollable body */}
-      <div className="flex-1 overflow-y-auto hidescroll" style={{ scrollbarWidth: "none" }}>
-        {/* image at its true proportions */}
-        <div onTouchStart={swipeStart} onTouchEnd={swipeEnd} className="relative flex items-center justify-center" style={{ background: "#0d100d", minHeight: 240 }}>
-          <img src={p.media.dataUri} alt="" className="block" style={{ width: "100%", maxHeight: "62vh", objectFit: "contain" }} />
-          {items.length > 1 && (
-            <>
-              {index > 0 && (
-                <button onClick={() => onIndex(index - 1)} className="tap absolute left-2 top-1/2 -translate-y-1/2 w-9 h-9 rounded-full flex items-center justify-center" style={{ background: "rgba(0,0,0,.45)" }} aria-label="Previous">
-                  <ChevronLeft size={18} color="#fff" />
-                </button>
-              )}
-              {index < items.length - 1 && (
-                <button onClick={() => onIndex(index + 1)} className="tap absolute right-2 top-1/2 -translate-y-1/2 w-9 h-9 rounded-full flex items-center justify-center" style={{ background: "rgba(0,0,0,.45)" }} aria-label="Next">
-                  <ChevronLeft size={18} color="#fff" style={{ transform: "rotate(180deg)" }} />
-                </button>
-              )}
-            </>
-          )}
-        </div>
+      {/* image at true proportions */}
+      <div className="relative flex items-center justify-center" style={{ background: "#0d100d" }}>
+        <img src={p.media.dataUri} alt="" className="block w-full" style={{ maxHeight: "68vh", objectFit: "contain" }} />
+      </div>
 
-        <div className="px-5 py-4">
-          {p.text && <p className="text-[15px] leading-relaxed" style={{ color: C.ink }}>{p.text}</p>}
+      <div className="px-4 pt-3 pb-4">
+        {p.text && <p className="text-[15px] leading-relaxed" style={{ color: C.ink }}>{p.text}</p>}
 
-          {p.location && (
-            <div className="mt-3">
-              <button onClick={() => setShowMap((v) => !v)} className="tap inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[13px] font-semibold" style={{ background: C.goldSoft, color: "#7a5a1e" }}>
-                <MapPin size={14} color={C.gold} />
-                {p.location.place ? (p.location.source === "viewpoint" ? p.location.place : `Near ${p.location.place}`) : "Pinned in Bhutan"}
-              </button>
-              {p.location.description && <p className="text-[12.5px] leading-snug mt-2" style={{ color: C.muted }}>{p.location.description}</p>}
-              {showMap && <div className="mt-3"><BhutanMap readOnly value={p.location} /></div>}
-            </div>
-          )}
-
-          {onShareStory && (
-            <button onClick={() => { onShareStory(p); onClose(); }} className="tap w-full h-11 rounded-xl text-[13.5px] font-semibold inline-flex items-center justify-center gap-2 mt-3"
-              style={{ background: C.goldSoft, color: "#7a5a1e" }}>
-              <Plus size={15} strokeWidth={3} /> Share to your story
+        {p.location && (
+          <div className="mt-2.5">
+            <button onClick={() => setShowMap((v) => !v)} className="tap inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[12.5px] font-semibold" style={{ background: C.goldSoft, color: "#7a5a1e" }}>
+              <MapPin size={13} color={C.gold} />
+              {p.location.place ? (p.location.source === "viewpoint" ? p.location.place : `Near ${p.location.place}`) : "Pinned in Bhutan"}
             </button>
-          )}
-          {eng ? <PostEngagement post={p} eng={eng} /> : (
-            <div className="mt-3 pt-3 text-[12.5px]" style={{ borderTop: `1px solid ${C.lineSoft}`, color: C.muted }}>
-              Sign in to like, comment or share.
-            </div>
-          )}
-        </div>
+            {p.location.description && <p className="text-[12.5px] leading-snug mt-2" style={{ color: C.muted }}>{p.location.description}</p>}
+            {showMap && <div className="mt-2.5"><BhutanMap readOnly value={p.location} /></div>}
+          </div>
+        )}
+
+        {onShareStory && (
+          <button onClick={() => { onShareStory(p); onClose && onClose(); }} className="tap w-full h-10 rounded-xl text-[13px] font-semibold inline-flex items-center justify-center gap-2 mt-3"
+            style={{ background: C.goldSoft, color: "#7a5a1e" }}>
+            <Plus size={14} strokeWidth={3} /> Share to your story
+          </button>
+        )}
+
+        {eng ? <PostEngagement post={p} eng={eng} /> : (
+          <div className="mt-3 pt-3 text-[12.5px]" style={{ borderTop: `1px solid ${C.lineSoft}`, color: C.muted }}>Sign in to like, comment or share.</div>
+        )}
       </div>
     </div>
   );
