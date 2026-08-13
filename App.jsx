@@ -4,7 +4,7 @@ import {
   BadgeCheck, MapPin, Inbox, ChevronLeft, Star, Phone, Mail, Briefcase,
   Search, LogOut, Newspaper, User, CalendarCheck, MessageCircle,
   Map, MessageSquare, Users, Download, Mic, Video, Heart, Share2, Trash2, Maximize2, Upload, Loader2, ArrowRight,
-  Award, UserX, RefreshCw, FileCheck2, ExternalLink, UserPlus, Send as SendIcon, Lock, Eye, EyeOff, CalendarDays, UserCheck, Plus, CheckCheck, Camera, Navigation,
+  Award, UserX, RefreshCw, FileCheck2, ExternalLink, UserPlus, Send as SendIcon, Lock, Eye, EyeOff, CalendarDays, UserCheck, Plus, CheckCheck, Camera, Navigation, Bell,
   ShieldAlert,
 } from "lucide-react";
 import mapImg from "./map.jpg";
@@ -279,7 +279,13 @@ export default function App() {
   const fetchDms = async () => {
     if (!CLOUD) return;
     const { data } = await supabase.from("direct_messages").select("*").order("created_at", { ascending: true });
-    if (data) setDms(data.map((r) => ({ id: r.id, from: r.sender_id, to: r.recipient_id, body: r.body, sharedPostId: r.shared_post_id || null, photo: r.photo_url || null, lat: r.lat ?? null, lng: r.lng ?? null, accuracy: r.accuracy_m ?? null, altitude: r.altitude_m ?? null, ts: new Date(r.created_at).getTime(), read: r.read })));
+    if (data) setDms(data.map((r) => ({
+      id: r.id, from: r.sender_id, to: r.recipient_id, body: r.body,
+      sharedPostId: r.shared_post_id ?? null, photo: r.photo_url ?? null,
+      lat: r.lat ?? null, lng: r.lng ?? null,
+      accuracy: r.accuracy_m ?? null, altitude: r.altitude_m ?? null,
+      ts: new Date(r.created_at).getTime(), read: r.read,
+    })));
   };
   useEffect(() => {
     if (!CLOUD) return;
@@ -291,7 +297,7 @@ export default function App() {
   }, []);
   const sendDm = async (to, body, sharedPostId = null, extra = {}) => {
     const me = realUserRef.current;
-    if (!me) { console.error("sendDm: no signed-in user"); return; }
+    if (!me) { console.error("sendDm: no signed-in user"); return { ok: false, reason: "not signed in" }; }
     const tempId = uid();
     setDms((D) => [...D, { id: tempId, from: me, to, body, sharedPostId, photo: extra.photoDataUri || null, lat: extra.lat ?? null, lng: extra.lng ?? null, accuracy: extra.accuracy ?? null, altitude: extra.altitude ?? null, ts: Date.now(), read: false, sending: true }]);
     if (!CLOUD) return;
@@ -305,12 +311,22 @@ export default function App() {
         if (!upErr) photoUrl = supabase.storage.from("post-media").getPublicUrl(path).data.publicUrl;
       } catch (e) { console.error("dm photo failed", e); }
     }
-    const { error } = await supabase.from("direct_messages").insert({
-      sender_id: me, recipient_id: to, body, shared_post_id: sharedPostId,
-      photo_url: photoUrl, lat: extra.lat ?? null, lng: extra.lng ?? null,
-      accuracy_m: extra.accuracy ?? null, altitude_m: extra.altitude ?? null,
-    });
-    if (error) console.error("sendDm failed:", error.message);
+    const base = { sender_id: me, recipient_id: to, body };
+    const full = { ...base };
+    if (sharedPostId) full.shared_post_id = sharedPostId;
+    if (photoUrl) full.photo_url = photoUrl;
+    if (extra.lat != null) { full.lat = extra.lat; full.lng = extra.lng; }
+    if (extra.accuracy != null) full.accuracy_m = extra.accuracy;
+    if (extra.altitude != null) full.altitude_m = extra.altitude;
+
+    let { error } = await supabase.from("direct_messages").insert(full);
+    if (error) {
+      console.error("sendDm insert failed:", error.message, full);
+      // a missing column shouldn't stop the message — retry with text only
+      const retry = await supabase.from("direct_messages").insert(base);
+      if (retry.error) console.error("sendDm retry failed:", retry.error.message);
+      else console.warn("sendDm: sent without extras — run the column migration");
+    }
     fetchDms();
   };
   const sharePostTo = async (recipients, post, note) => {
@@ -640,11 +656,17 @@ export default function App() {
     <div className="min-h-screen w-full flex justify-center" style={{ background: C.bg }}>
       <style>{`
         *{ font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Helvetica Neue", ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+        html, body { overscroll-behavior-y: none; }
+        .hidescroll { -webkit-overflow-scrolling: touch; overscroll-behavior: contain; }
+        img, video { -webkit-user-drag: none; }
+        button, a { -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
+        @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; } }
         .tap{ transition: transform .12s ease, background .15s ease, box-shadow .15s ease, border-color .15s ease; }
         .tap:active{ transform: scale(.985); }
         .hidescroll::-webkit-scrollbar{ display:none; }
         @media (prefers-reduced-motion: no-preference){ .fade{ animation: fade .28s ease both; } }
-        @keyframes fade{ from{ opacity:0; transform: translateY(6px);} }
+        @keyframes fade{ from{ opacity:0; transform: translateY(4px);} }
+        .fade{ animation-duration:.2s; }
         textarea:focus, input:focus{ outline:none; border-color:${C.pine}!important; box-shadow:0 0 0 3px ${C.pine}1f; }
         textarea::placeholder, input::placeholder{ color:${C.muted}; opacity:.7; }
       `}</style>
@@ -781,6 +803,27 @@ function Shell({ user, posts, jobs, trips, listings, actions, engagement, dm, on
   const [overlay, setOverlay] = useState(null); // {type:'profile'|'request', talentId}
   const [dmWith, setDmWith] = useState(null);
   const [sharedPost, setSharedPost] = useState(null);
+  const [searchTerm, setSearchTerm] = useState("");
+  const [alertsOpen, setAlertsOpen] = useState(false);
+
+  const alertItems = useMemo(() => {
+    const out = [];
+    (dm?.dms || []).filter((m) => m.to === actorId && !m.read).forEach((m) =>
+      out.push({ id: `dm-${m.id}`, kind: "message", who: m.from, text: m.body, ts: m.ts }));
+    (engagement?.likes || []).forEach((l) => {
+      const p = posts.find((x) => x.id === l.post_id && x.talentId === actorId);
+      if (p && l.liker_id !== actorId) out.push({ id: `like-${l.post_id}-${l.liker_id}`, kind: "like", who: l.liker_id, text: p.text || "your post", ts: p.createdAt });
+    });
+    (engagement?.comments || []).forEach((c) => {
+      const p = posts.find((x) => x.id === c.post_id && x.talentId === actorId);
+      if (p && c.author_id !== actorId) out.push({ id: `cm-${c.id}`, kind: "comment", who: c.author_id, text: c.body, ts: c.ts });
+    });
+    (engagement?.follows || []).filter((f) => f.following === actorId).forEach((f) =>
+      out.push({ id: `fl-${f.follower}`, kind: "follow", who: f.follower, text: "started following you", ts: Date.now() }));
+    jobs.filter((j) => j.toTalentId === actorId && j.status === "pending").forEach((j) =>
+      out.push({ id: `job-${j.id}`, kind: "job", who: j.operatorId, text: j.title, ts: j.createdAt }));
+    return out.sort((a, b) => b.ts - a.ts).slice(0, 40);
+  }, [dm?.dms, engagement?.likes, engagement?.comments, engagement?.follows, jobs, posts, actorId]);
   const nav = NAV[user.kind];
   const actorId = user.talentId || (user.kind === "operator" ? "a_operator" : "a_admin");
   const eng = { ...engagement, me: actorId, isAdmin: user.kind === "admin", sharePostTo: dm?.sharePostTo };
@@ -798,10 +841,11 @@ function Shell({ user, posts, jobs, trips, listings, actions, engagement, dm, on
 
   return (
     <>
-      <TopBar user={user} onLogout={onLogout} />
-      <VerifyBanner user={user} />
+      <TopBar user={user} onLogout={onLogout} alerts={alertItems.length} onOpenAlerts={() => setAlertsOpen(true)}
+        onSearch={(term) => { setOverlay(null); setTab(user.kind === "operator" ? "discover" : "post"); setSearchTerm(term); }} />
 
       <div className="flex-1 overflow-y-auto hidescroll" style={{ scrollbarWidth: "none" }}>
+        <VerifyBanner user={user} />
         {overlay ? (
           overlay.type === "profile" ? (
             <TalentProfile talent={talentById(overlay.talentId)} posts={posts} eng={eng}
@@ -822,7 +866,7 @@ function Shell({ user, posts, jobs, trips, listings, actions, engagement, dm, on
             {tab === "trips" && <TripsTab user={user} trips={trips} actions={actions} />}
             {tab === "chats" && <ChatsTab user={user} me={actorId} dm={dm} trips={trips} actions={actions} posts={posts} onOpenPost={setSharedPost} openWith={dmWith} onOpened={() => setDmWith(null)} onOpenProfile={openProfile} />}
             {tab === "profile" && <TalentProfile talent={talentById(user.talentId)} posts={posts} eng={eng} self onSetAvailability={actions.setAvailability} onOpenProfile={openProfile} onBack={null} />}
-            {tab === "discover" && <Discover onOpen={openProfile} />}
+            {tab === "discover" && <Discover onOpen={openProfile} initialQuery={searchTerm} />}
             {tab === "requests" && <OperatorJobs user={user} jobs={jobs} listings={listings} posts={posts} actions={actions} eng={eng} onOpen={openProfile} />}
             {tab === "feed" && <Feed posts={posts} eng={eng} admin={user.kind === "admin"} onDelete={actions.deletePost} onOpenProfile={openProfile} following={myFollowing} />}
             {tab === "review" && <Review posts={posts} onApprove={actions.approve} onReject={actions.reject} eng={eng} />}
@@ -835,28 +879,50 @@ function Shell({ user, posts, jobs, trips, listings, actions, engagement, dm, on
         <PostDetail items={[sharedPost]} index={0} author={talentById(sharedPost.talentId)} eng={eng} onClose={() => setSharedPost(null)} />
       )}
 
-      {!overlay && (
-        <BottomNav nav={nav} tab={tab} setTab={setTab}
-          badges={{ jobs: jobsBadge, review: pendingModCount, chats: unreadDm }} />
+      {alertsOpen && (
+        <AlertsSheet items={alertItems} onClose={() => setAlertsOpen(false)}
+          onOpenProfile={(id) => { setAlertsOpen(false); openProfile(id); }}
+          onOpenMessages={() => { setAlertsOpen(false); setTab("chats"); }}
+          onOpenJobs={() => { setAlertsOpen(false); setTab(user.kind === "operator" ? "requests" : "jobs"); }} />
       )}
+
+      <BottomNav nav={nav} tab={tab}
+        setTab={(t) => { setOverlay(null); setSharedPost(null); setTab(t); }}
+        badges={{ jobs: jobsBadge, review: pendingModCount, chats: unreadDm }} />
     </>
   );
 }
 
-function TopBar({ user, onLogout }) {
+function TopBar({ user, onLogout, onSearch, alerts, onOpenAlerts }) {
+  const [q, setQ] = useState("");
+  const submit = () => { const t = q.trim(); if (t && onSearch) onSearch(t); };
+
   return (
-    <div className="shrink-0 h-14 px-4 flex items-center justify-between" style={{ background: C.bg, borderBottom: `1px solid ${C.lineSoft}` }}>
-      <div className="flex items-center gap-2">
-        <div className="w-7 h-7 rounded-lg flex items-center justify-center" style={{ background: C.pine }}>
-          <Compass size={15} color={C.goldSoft} />
-        </div>
-        <span className="text-[15px] font-semibold" style={{ color: C.ink }}>Bhutan Tourism Hub</span>
+    <div className="shrink-0 h-14 px-2.5 flex items-center gap-2" style={{ background: C.bg, borderBottom: `1px solid ${C.lineSoft}` }}>
+      <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0" style={{ background: C.pine }}>
+        <Compass size={16} color={C.goldSoft} />
       </div>
-      <button onClick={onLogout} className="tap flex items-center gap-2 rounded-full pl-1 pr-3 py-1" style={{ border: `1px solid ${C.line}`, background: C.card }}>
-        <div className="w-6 h-6 rounded-full flex items-center justify-center" style={{ background: C.pine }}>
-          <span className="text-[10px] font-bold" style={{ color: C.goldSoft }}>{user.initials}</span>
-        </div>
-        <LogOut size={14} color={C.muted} />
+
+      <div className="relative flex-1 min-w-0">
+        <Search size={15} color={C.muted} className="absolute left-3 top-1/2 -translate-y-1/2" />
+        <input value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()}
+          placeholder="Search people or add friends"
+          className="w-full h-9 pl-9 pr-3 rounded-full text-[13.5px]"
+          style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }} />
+      </div>
+
+      <button onClick={onOpenAlerts} className="tap relative w-9 h-9 rounded-full flex items-center justify-center shrink-0"
+        style={{ border: `1px solid ${C.line}`, background: C.card }} aria-label="Notifications">
+        <Bell size={16} color={C.ink} />
+        {alerts > 0 && (
+          <span className="absolute -top-1 -right-1 min-w-[17px] h-[17px] px-1 rounded-full flex items-center justify-center text-[9.5px] font-bold text-white"
+            style={{ background: C.maroon }}>{alerts > 9 ? "9+" : alerts}</span>
+        )}
+      </button>
+
+      <button onClick={onLogout} className="tap w-9 h-9 rounded-full flex items-center justify-center shrink-0"
+        style={{ border: `1px solid ${C.line}`, background: C.card }} aria-label="Sign out">
+        <LogOut size={15} color={C.muted} />
       </button>
     </div>
   );
@@ -864,7 +930,7 @@ function TopBar({ user, onLogout }) {
 
 function BottomNav({ nav, tab, setTab, badges }) {
   return (
-    <div className="shrink-0 flex" style={{ background: C.card, borderTop: `1px solid ${C.line}` }}>
+    <div className="shrink-0 flex" style={{ background: C.card, borderTop: `1px solid ${C.line}`, position: "relative", zIndex: 240 }}>
       {nav.map((n) => {
         const on = tab === n.id;
         const badge = badges[n.id] || 0;
@@ -1182,8 +1248,9 @@ function Pill({ Icon, children }) {
 }
 
 /* ============================ Discover (operator) ========================= */
-function Discover({ onOpen }) {
-  const [q, setQ] = useState("");
+function Discover({ onOpen, initialQuery }) {
+  const [q, setQ] = useState(initialQuery || "");
+  useEffect(() => { if (initialQuery) setQ(initialQuery); }, [initialQuery]);
   const [role, setRole] = useState("all");
   const [lang, setLang] = useState(null);
   const [onlyFree, setOnlyFree] = useState(false);
@@ -2446,7 +2513,7 @@ function PhotoGrid({ items, author, eng, onShareStory }) {
             const comments = (eng?.comments || []).filter((c) => c.post_id === p.id).length;
             return (
               <button key={p.id} onClick={() => setOpenIdx(i)} className="relative overflow-hidden group" style={{ aspectRatio: "1 / 1", background: C.bg }} aria-label="Open post">
-                <img src={p.media.dataUri} alt="" loading="lazy" className="absolute inset-0 w-full h-full" style={{ objectFit: "cover" }} />
+                <img src={p.media.dataUri} alt="" loading="lazy" decoding="async" className="absolute inset-0 w-full h-full" style={{ objectFit: "cover" }} />
                 {p.location && (
                   <span className="absolute left-1 top-1 w-5 h-5 rounded-full flex items-center justify-center" style={{ background: "rgba(0,0,0,.45)" }}>
                     <MapPin size={10} color="#fff" />
@@ -2488,18 +2555,17 @@ function PostDetail({ items, index, author, eng, onShareStory, onClose }) {
   }, []);
 
   return (
-    <div className="fixed inset-0 flex flex-col" style={{ background: C.bg, zIndex: 200, height: "100dvh" }}>
-      <div className="shrink-0 h-14 px-3 flex items-center gap-3" style={{ background: C.card, borderBottom: `1px solid ${C.line}` }}>
-        <button onClick={onClose} className="tap w-9 h-9 rounded-full flex items-center justify-center" style={{ border: `1px solid ${C.line}` }} aria-label="Back">
-          <ChevronLeft size={19} color={C.ink} />
-        </button>
-        <div className="flex-1">
-          <div className="text-[15px] font-semibold" style={{ color: C.ink }}>Posts</div>
-          <div className="text-[11.5px]" style={{ color: C.muted }}>{author?.name || "Member"} · {items.length}</div>
-        </div>
-      </div>
-
+    <div className="fixed inset-0 flex flex-col" style={{ background: C.bg, zIndex: 200, height: "100dvh", paddingBottom: 62 }}>
       <div ref={scroller} className="flex-1 overflow-y-auto hidescroll" style={{ scrollbarWidth: "none" }}>
+        <div className="h-14 px-3 flex items-center gap-3" style={{ background: C.card, borderBottom: `1px solid ${C.line}` }}>
+          <button onClick={onClose} className="tap w-9 h-9 rounded-full flex items-center justify-center" style={{ border: `1px solid ${C.line}` }} aria-label="Back">
+            <ChevronLeft size={19} color={C.ink} />
+          </button>
+          <div className="flex-1">
+            <div className="text-[15px] font-semibold" style={{ color: C.ink }}>Posts</div>
+            <div className="text-[11.5px]" style={{ color: C.muted }}>{author?.name || "Member"} · {items.length}</div>
+          </div>
+        </div>
         {items.map((p) => (
           <div key={p.id} ref={(el) => { refs.current[p.id] = el; }} style={{ borderBottom: `8px solid ${C.bg}` }}>
             <WallPost post={p} author={author} eng={eng} onShareStory={onShareStory} onClose={onClose} />
@@ -2529,7 +2595,7 @@ function WallPost({ post: p, author, eng, onShareStory, onClose }) {
 
       {/* image — fits the frame, never overflows */}
       <div className="relative w-full flex items-center justify-center overflow-hidden" style={{ background: "#0d100d", maxHeight: "62dvh" }}>
-        <img src={p.media.dataUri} alt="" className="block" style={{ maxWidth: "100%", maxHeight: "62dvh", width: "auto", height: "auto", objectFit: "contain" }} />
+        <img src={p.media.dataUri} alt="" loading="lazy" decoding="async" className="block" style={{ maxWidth: "100%", maxHeight: "62dvh", width: "auto", height: "auto", objectFit: "contain" }} />
       </div>
 
       <div className="px-4 pt-3 pb-4">
@@ -2592,7 +2658,7 @@ function ProfileTabs({ cv, gallery, galleryCount }) {
   return (
     <div className="mt-5">
       {/* tab bar */}
-      <div className="relative flex" style={{ borderBottom: `1px solid ${C.line}` }}>
+      <div className="relative flex" style={{ borderBottom: `1px solid ${C.line}`, background: C.bg }}>
         {TABS.map((x, i) => {
           const on = tab === i;
           return (
@@ -4045,5 +4111,65 @@ function Stat({ n, label, onClick }) {
       <div className="text-[17px] font-semibold leading-none" style={{ color: C.ink }}>{n}</div>
       <div className="text-[11.5px] mt-1" style={{ color: onClick ? C.pine : C.muted }}>{label}</div>
     </Tag>
+  );
+}
+
+/* ============================== Notifications ============================= */
+function AlertsSheet({ items, onClose, onOpenProfile, onOpenMessages, onOpenJobs }) {
+  const meta = {
+    message: { Icon: MessageCircle, bg: C.pineSoft, fg: C.pine, verb: "sent you a message" },
+    like:    { Icon: Heart,         bg: C.maroonSoft, fg: C.maroon, verb: "liked your post" },
+    comment: { Icon: MessageSquare, bg: C.goldSoft, fg: "#7a5a1e", verb: "commented" },
+    follow:  { Icon: UserPlus,      bg: C.pineSoft, fg: C.pine, verb: "started following you" },
+    job:     { Icon: Briefcase,     bg: C.goldSoft, fg: "#7a5a1e", verb: "sent you a job request" },
+  };
+
+  return (
+    <div className="fixed inset-0 flex items-end" style={{ background: "rgba(8,10,8,.55)", zIndex: 230 }} onClick={onClose}>
+      <div className="w-full rounded-t-3xl flex flex-col" style={{ background: C.card, maxHeight: "80dvh" }} onClick={(e) => e.stopPropagation()}>
+        <div className="p-5 pb-2 shrink-0">
+          <div className="w-10 h-1 rounded-full mx-auto mb-4" style={{ background: C.line }} />
+          <div className="flex items-center justify-between">
+            <div className="text-[17px] font-semibold" style={{ color: C.ink }}>Notifications</div>
+            <span className="text-[12.5px]" style={{ color: C.muted }}>{items.length}</span>
+          </div>
+        </div>
+
+        <div className="flex-1 overflow-y-auto hidescroll px-4 pb-5" style={{ scrollbarWidth: "none" }}>
+          {items.length === 0 ? (
+            <div className="text-center py-12">
+              <div className="w-12 h-12 rounded-2xl flex items-center justify-center mx-auto mb-3" style={{ background: C.goldSoft }}><Bell size={22} color={C.gold} /></div>
+              <p className="text-[14px] font-semibold" style={{ color: C.ink }}>You're all caught up</p>
+              <p className="text-[13px] mt-1" style={{ color: C.muted }}>Messages, likes, follows and job requests appear here.</p>
+            </div>
+          ) : items.map((a) => {
+            const m = meta[a.kind] || meta.message;
+            const p = talentById(a.who);
+            const go = () => {
+              if (a.kind === "message") return onOpenMessages();
+              if (a.kind === "job") return onOpenJobs();
+              if (p) return onOpenProfile(a.who);
+            };
+            return (
+              <button key={a.id} onClick={go} className="tap w-full text-left flex items-start gap-3 py-3" style={{ borderBottom: `1px solid ${C.lineSoft}` }}>
+                <div className="relative shrink-0">
+                  <Avatar initials={p?.initials || "?"} size={40} />
+                  <span className="absolute -bottom-1 -right-1 w-5 h-5 rounded-full flex items-center justify-center" style={{ background: m.bg, border: `2px solid ${C.card}` }}>
+                    <m.Icon size={10} color={m.fg} />
+                  </span>
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="text-[13.5px] leading-snug" style={{ color: C.ink }}>
+                    <b>{p?.name || "Someone"}</b> <span style={{ color: C.muted }}>{m.verb}</span>
+                  </div>
+                  {a.text && a.kind !== "follow" && <div className="text-[12.5px] truncate mt-0.5" style={{ color: C.muted }}>{a.text}</div>}
+                  <div className="text-[11px] mt-0.5" style={{ color: C.muted }}>{relTime(a.ts)}</div>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </div>
   );
 }
