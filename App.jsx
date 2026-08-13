@@ -145,7 +145,8 @@ export default function App() {
 
   const loadProfiles = async () => {
     if (!CLOUD) return;
-    const { data } = await supabase.from("profiles").select("*");
+    const { data, error } = await supabase.from("profiles").select("*");
+    if (error) { console.error("loadProfiles failed:", error.message); return; }
     if (data) { PROFILE_DIR = {}; data.forEach((p) => { PROFILE_DIR[p.id] = profileToTalent(p); }); setDirTick((t) => t + 1); }
   };
   const reloadMe = () => { setProfileTick((t) => t + 1); loadProfiles(); };
@@ -154,7 +155,8 @@ export default function App() {
   const fetchStories = async () => {
     if (!CLOUD) return;
     const cutoff = new Date(Date.now() - 24 * 3600e3).toISOString();
-    const { data } = await supabase.from("stories").select("*").gt("created_at", cutoff).order("created_at", { ascending: true });
+    const { data, error: stErr } = await supabase.from("stories").select("*").gt("created_at", cutoff).order("created_at", { ascending: true });
+    if (stErr) console.error("fetchStories failed:", stErr.message);
     if (data) setStories(data.map((r) => ({
       id: r.id, authorId: r.author_id, kind: r.kind, url: r.media_url, path: r.media_path,
       caption: r.caption || "", ts: new Date(r.created_at).getTime(),
@@ -164,7 +166,7 @@ export default function App() {
     if (old && old.length) {
       const paths = old.map((o) => o.media_path).filter(Boolean);
       if (paths.length) await supabase.storage.from("stories").remove(paths);
-      await supabase.from("stories").delete().in("id", old.map((o) => o.id));
+      { const { error: _e } = await supabase.from("stories").delete().in("id", old.map((o) => o.id)); if (_e) console.error("stories.purge failed:", _e.message); }
     }
   };
   useEffect(() => {
@@ -206,7 +208,8 @@ export default function App() {
 
   const fetchFollows = async () => {
     if (!CLOUD) return;
-    const { data } = await supabase.from("follows").select("*");
+    const { data, error } = await supabase.from("follows").select("*");
+    if (error) console.error("fetchFollows failed:", error.message);
     if (data) setFollows(data.map((f) => ({ follower: f.follower_id, following: f.following_id })));
   };
   useEffect(() => {
@@ -307,7 +310,7 @@ export default function App() {
   const markRead = async (withId) => {
     const me = realUserRef.current;
     if (!CLOUD || !me) return;
-    await supabase.from("direct_messages").update({ read: true }).eq("sender_id", withId).eq("recipient_id", me).eq("read", false);
+    { const { error: _e } = await supabase.from("direct_messages").update({ read: true }).eq("sender_id", withId).eq("recipient_id", me).eq("read", false); if (_e) console.error("direct_messages.markRead failed:", _e.message); }
   };
 
   useEffect(() => {
@@ -355,22 +358,23 @@ export default function App() {
       return;
     }
     const up = media ? await uploadPostMedia(talentId, media) : { media_url: null, media_kind: null };
-    await supabase.from("posts").insert({
+    const { error: postErr } = await supabase.from("posts").insert({
       talent_id: talentId, body: text || null,
       media_url: up.media_url, media_kind: up.media_kind,
       lat: location?.lat ?? null, lng: location?.lng ?? null,
       place: location?.place ?? null, loc_desc: location?.description ?? null, loc_source: location?.source ?? null,
     });
+    if (postErr) console.error("posts.insert failed:", postErr.message);
     fetchPosts();
   };
   const approve = async (id) => {
     if (!CLOUD) { setPosts((p) => p.map((x) => (x.id === id ? { ...x, status: "approved", reason: null } : x))); return; }
-    await supabase.from("posts").update({ status: "approved", reject_reason: null }).eq("id", id);
+    { const { error: _e } = await supabase.from("posts").update({ status: "approved", reject_reason: null }).eq("id", id); if (_e) console.error("posts.approve failed:", _e.message); }
     fetchPosts();
   };
   const reject = async (id, reason) => {
     if (!CLOUD) { setPosts((p) => p.map((x) => (x.id === id ? { ...x, status: "rejected", reason } : x))); return; }
-    await supabase.from("posts").update({ status: "rejected", reject_reason: reason }).eq("id", id);
+    { const { error: _e } = await supabase.from("posts").update({ status: "rejected", reject_reason: reason }).eq("id", id); if (_e) console.error("posts.reject failed:", _e.message); }
     fetchPosts();
   };
   const fetchEngagement = async () => {
@@ -397,27 +401,29 @@ export default function App() {
     const mine = likes.some((l) => l.post_id === postId && l.liker_id === me);
     setLikes((L) => (mine ? L.filter((l) => !(l.post_id === postId && l.liker_id === me)) : [...L, { post_id: postId, liker_id: me }]));
     if (!CLOUD) return;
-    if (mine) await supabase.from("post_likes").delete().eq("post_id", postId).eq("liker_id", me);
-    else await supabase.from("post_likes").insert({ post_id: postId, liker_id: me });
+    const { error: likeErr } = mine
+      ? await supabase.from("post_likes").delete().eq("post_id", postId).eq("liker_id", me)
+      : await supabase.from("post_likes").insert({ post_id: postId, liker_id: me });
+    if (likeErr) console.error("post_likes failed:", likeErr.message);
     fetchEngagement();
   };
   const addComment = async (postId, me, body) => {
     setComments((Cm) => [...Cm, { id: uid(), post_id: postId, author_id: me, body, ts: Date.now() }]);
     if (!CLOUD) return;
-    await supabase.from("post_comments").insert({ post_id: postId, author_id: me, body });
+    { const { error: _e } = await supabase.from("post_comments").insert({ post_id: postId, author_id: me, body }); if (_e) console.error("post_comments.insert failed:", _e.message); }
     fetchEngagement();
   };
   const deleteComment = async (id) => {
     setComments((Cm) => Cm.filter((c) => c.id !== id));
     if (!CLOUD) return;
-    await supabase.from("post_comments").delete().eq("id", id);
+    { const { error: _e } = await supabase.from("post_comments").delete().eq("id", id); if (_e) console.error("post_comments.delete failed:", _e.message); }
   };
   const deletePost = async (id) => {
     setPosts((P) => P.filter((p) => p.id !== id));
     setLikes((L) => L.filter((l) => l.post_id !== id));
     setComments((Cm) => Cm.filter((c) => c.post_id !== id));
     if (!CLOUD) return;
-    await supabase.from("posts").delete().eq("id", id);
+    { const { error: _e } = await supabase.from("posts").delete().eq("id", id); if (_e) console.error("posts.delete failed:", _e.message); }
     fetchPosts();
   };
 
@@ -461,23 +467,25 @@ export default function App() {
 
   const sendJob = async (job) => {
     if (!CLOUD) { setJobs((j) => [{ id: uid(), status: "pending", createdAt: Date.now(), ...job }, ...j]); return; }
-    await supabase.from("job_requests").insert({
+    const { error: jrErr } = await supabase.from("job_requests").insert({
       operator_id: realUserRef.current, operator_name: job.operator, talent_id: job.toTalentId,
       title: job.title, role_needed: job.role, start_date: job.start, end_date: job.end,
       languages: job.languages || [], notes: job.notes || null,
     });
+    if (jrErr) console.error("job_requests.insert failed:", jrErr.message);
     fetchJobs();
   };
 
   /* ---- Trips in the database ---- */
   const fetchTrips = async () => {
     if (!CLOUD) return;
-    const [{ data: T }, { data: M }, { data: MS }, { data: IT }] = await Promise.all([
+    const [{ data: T, error: tErr }, { data: M }, { data: MS }, { data: IT }] = await Promise.all([
       supabase.from("trips").select("*").order("start_date", { ascending: true }),
       supabase.from("trip_members").select("*"),
       supabase.from("trip_messages").select("*").order("created_at", { ascending: true }),
       supabase.from("trip_itinerary").select("*").order("day_no", { ascending: true }),
     ]);
+    if (tErr) console.error("fetchTrips failed:", tErr.message);
     if (!T) return;
     setTrips(T.map((tr) => ({
       id: tr.id, operatorId: tr.operator_id, operator: tr.operator_name, title: tr.title,
@@ -513,8 +521,9 @@ export default function App() {
     const opId = job.operatorId || realUserRef.current;
     const t = talentById(job.toTalentId);
     // one trip per operator + date range: join the existing one if it's there
-    const { data: found } = await supabase.from("trips").select("id")
+    const { data: found, error: findErr } = await supabase.from("trips").select("id")
       .eq("operator_id", opId).eq("start_date", job.start).eq("end_date", job.end).maybeSingle();
+    if (findErr) console.error("trips.find failed:", findErr.message);
     let tripId = found?.id;
     if (!tripId) {
       const scheduled = new Date(job.start + "T00:00").getTime() - 3 * 86400e3 > Date.now();
@@ -525,12 +534,13 @@ export default function App() {
       if (error || !created) return;
       tripId = created.id;
       await supabase.from("trip_members").insert({ trip_id: tripId, user_id: opId, display_name: job.operator, role_in_trip: "operator" });
-      await supabase.from("trip_messages").insert({ trip_id: tripId, sender_id: null, kind: "system", body: "Trip created from a confirmed booking." });
+      { const { error: _e } = await supabase.from("trip_messages").insert({ trip_id: tripId, sender_id: null, kind: "system", body: "Trip created from a confirmed booking." }); if (_e) console.error("trip_messages.system failed:", _e.message); }
     }
-    await supabase.from("trip_members").upsert({
+    const { error: tmErr } = await supabase.from("trip_members").upsert({
       trip_id: tripId, user_id: job.toTalentId, display_name: t?.name || "Member", role_in_trip: t?.role || "guide",
     });
-    await supabase.from("trip_messages").insert({ trip_id: tripId, sender_id: null, kind: "system", body: `${t?.name || "A crew member"} joined the trip.` });
+    if (tmErr) console.error("trip_members.upsert failed:", tmErr.message);
+    { const { error: _e } = await supabase.from("trip_messages").insert({ trip_id: tripId, sender_id: null, kind: "system", body: `${t?.name || "A crew member"} joined the trip.` }); if (_e) console.error("trip_messages.join failed:", _e.message); }
     fetchTrips();
   };
 
@@ -564,7 +574,7 @@ export default function App() {
   const setJobStatus = async (id, status) => {
     setJobs((j) => j.map((x) => (x.id === id ? { ...x, status } : x)));
     const job = jobs.find((x) => x.id === id);
-    if (CLOUD) { await supabase.from("job_requests").update({ status }).eq("id", id); fetchJobs(); }
+    if (CLOUD) { const { error: jsErr } = await supabase.from("job_requests").update({ status }).eq("id", id); if (jsErr) console.error("job_requests.status failed:", jsErr.message); fetchJobs(); }
     if (status === "accepted" && job) createTripFromJob(job);
   };
 
@@ -596,10 +606,11 @@ export default function App() {
 
   const postListing = async (l) => {
     if (!CLOUD) { setListings((L) => [{ id: uid(), status: "open", createdAt: Date.now(), applicants: [], ...l }, ...L]); return; }
-    await supabase.from("job_listings").insert({
+    const { error: jlErr } = await supabase.from("job_listings").insert({
       operator_id: realUserRef.current, operator_name: l.operator, title: l.title, role: l.role,
       start_date: l.start, end_date: l.end, languages: l.languages || [], notes: l.notes || null, urgent: !!l.urgent,
     });
+    if (jlErr) console.error("job_listings.insert failed:", jlErr.message);
     fetchJobs();
   };
   const applyToListing = async (listingId, applicant) => {
@@ -607,19 +618,20 @@ export default function App() {
       setListings((L) => L.map((l) => (l.id === listingId ? (l.applicants.some((a) => a.talentId === applicant.talentId) ? l : { ...l, applicants: [...l.applicants, { status: "applied", appliedAt: Date.now(), ...applicant }] }) : l)));
       return;
     }
-    await supabase.from("job_applicants").upsert({ listing_id: listingId, talent_id: applicant.talentId, message: applicant.message || null, status: "applied" });
+    const { error: jaErr } = await supabase.from("job_applicants").upsert({ listing_id: listingId, talent_id: applicant.talentId, message: applicant.message || null, status: "applied" });
+    if (jaErr) console.error("job_applicants.upsert failed:", jaErr.message);
     fetchJobs();
   };
   const setApplicant = async (listingId, talentId, status) => {
     setListings((L) => L.map((l) => (l.id === listingId ? { ...l, applicants: l.applicants.map((a) => (a.talentId === talentId ? { ...a, status } : a)) } : l)));
     if (!CLOUD) return;
-    await supabase.from("job_applicants").update({ status }).eq("listing_id", listingId).eq("talent_id", talentId);
+    { const { error: _e } = await supabase.from("job_applicants").update({ status }).eq("listing_id", listingId).eq("talent_id", talentId); if (_e) console.error("job_applicants.status failed:", _e.message); }
     fetchJobs();
   };
   const hireApplicant = async (listing, applicant) => {
     await setApplicant(listing.id, applicant.talentId, "hired");
     setListings((L) => L.map((l) => (l.id === listing.id ? { ...l, status: "filled" } : l)));
-    if (CLOUD) { await supabase.from("job_listings").update({ status: "filled" }).eq("id", listing.id); fetchJobs(); }
+    if (CLOUD) { const { error: jfErr } = await supabase.from("job_listings").update({ status: "filled" }).eq("id", listing.id); if (jfErr) console.error("job_listings.filled failed:", jfErr.message); fetchJobs(); }
     createTripFromJob({ id: `${listing.id}_${applicant.talentId}`, toTalentId: applicant.talentId, operator: listing.operator, title: listing.title, start: listing.start, end: listing.end });
   };
 
@@ -2869,7 +2881,7 @@ function AdminUsers({ onChanged }) {
   const removeUser = async (u) => {
     setBusyId(u.id);
     // remove their content first so nothing is orphaned, then the profile
-    await supabase.from("post_comments").delete().eq("author_id", u.id);
+    { const { error: _e } = await supabase.from("post_comments").delete().eq("author_id", u.id); if (_e) console.error("post_comments.adminPurge failed:", _e.message); }
     await supabase.from("post_likes").delete().eq("liker_id", u.id);
     await supabase.from("posts").delete().eq("talent_id", u.id);
     if (u.license_path) await supabase.storage.from("licenses").remove([u.license_path]);
@@ -3105,7 +3117,8 @@ function Onboard({ mode: initialMode, session, onBack, onDone }) {
       return;
     }
     try { if (remember) localStorage.setItem("bth_email", email.trim()); else localStorage.removeItem("bth_email"); } catch (e) {}
-    const { data: prof } = await supabase.from("profiles").select("id").eq("id", data.session.user.id).maybeSingle();
+    const { data: prof, error: profErr } = await supabase.from("profiles").select("id").eq("id", data.session.user.id).maybeSingle();
+    if (profErr) console.error("profile lookup failed:", profErr.message);
     if (prof) onDone(); else { setUid(data.session.user.id); setStep("role"); }
   };
 
@@ -3934,9 +3947,21 @@ function SharePostSheet({ post, eng, onExternal, onClose, onSent }) {
   const followsMe = follows.filter((f) => f.following === me).map((f) => f.follower);
   const circle = [...new Set([...iFollow, ...followsMe])];
 
-  const pool = [...TALENT, ...Object.values(PROFILE_DIR)].filter((p) => p.id !== me);
-  const seen = new Set();
-  const unique = pool.filter((p) => (seen.has(p.id) ? false : (seen.add(p.id), true)));
+  const [fetched, setFetched] = useState(null);
+  useEffect(() => {
+    let on = true;
+    (async () => {
+      if (!CLOUD) { setFetched(TALENT.filter((p) => p.id !== me)); return; }
+      const { data, error } = await supabase.from("profiles").select("*").order("full_name", { ascending: true });
+      if (!on) return;
+      if (error) { console.error("SharePostSheet load failed:", error.message); setFetched([]); return; }
+      const list = (data || []).map(profileToTalent).filter((p) => p.id !== me);
+      list.forEach((p) => { PROFILE_DIR[p.id] = p; });
+      setFetched(list);
+    })();
+    return () => { on = false; };
+  }, [me]);
+  const unique = fetched || [];
   const inCircle = unique.filter((p) => circle.includes(p.id));
   const others = unique.filter((p) => !circle.includes(p.id));
   const match = (p) => `${p.name} ${p.base || ""}`.toLowerCase().includes(q.toLowerCase());
