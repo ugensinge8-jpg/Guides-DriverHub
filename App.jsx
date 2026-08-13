@@ -4,7 +4,7 @@ import {
   BadgeCheck, MapPin, Inbox, ChevronLeft, Star, Phone, Mail, Briefcase,
   Search, LogOut, Newspaper, User, CalendarCheck, MessageCircle,
   Map, MessageSquare, Users, Download, Mic, Video, Heart, Share2, Trash2, Maximize2, Upload, Loader2, ArrowRight,
-  Award, UserX, RefreshCw, FileCheck2, ExternalLink, UserPlus, Send as SendIcon, Lock, Eye, EyeOff, CalendarDays, UserCheck, Plus, CheckCheck, Camera, Navigation, Bell,
+  Award, UserX, RefreshCw, FileCheck2, ExternalLink, UserPlus, Send as SendIcon, Lock, Eye, EyeOff, CalendarDays, UserCheck, Plus, CheckCheck, Camera, Navigation, Bell, Smartphone, Share,
   ShieldAlert,
 } from "lucide-react";
 import mapImg from "./map.jpg";
@@ -34,6 +34,7 @@ const profileToTalent = (p) => ({
   languages: Array.isArray(p.languages) ? p.languages : [],
   phone: p.phone || "", email: p.email || "", pitch: p.pitch || "", vehicle: p.vehicle || null,
   availability: p.availability || "open", availableFrom: p.available_from || null, availableNote: p.availability_note || "",
+  joinedAt: p.created_at ? new Date(p.created_at).getTime() : null,
 });
 const talentById = (id) => TALENT.find((t) => t.id === id) || PROFILE_DIR[id] || null;
 const initialsOf = (name) => (String(name || "?").trim().split(/\s+/).filter(Boolean).map((w) => w[0]).slice(0, 2).join("") || "?").toUpperCase();
@@ -43,6 +44,31 @@ const sysMsg = (text) => ({ id: uid(), senderId: null, kind: "system", body: tex
 /* ── Cloud (Supabase) ── posts are global when configured; everything falls back to local demo mode when not. */
 const CLOUD = Boolean(supabase);
 const DEMO_MODE = false;   // set true only for local demos without a database
+
+/* ---- Install state ---- */
+const isStandalone = () =>
+  window.matchMedia?.("(display-mode: standalone)").matches || window.navigator.standalone === true;
+const isIOS = () => /iphone|ipad|ipod/i.test(navigator.userAgent);
+
+/* ---- Device notifications ----
+   Shows a system notification when new activity arrives while the app is open or
+   backgrounded. For notifications when the app is fully closed, see PUSH-SETUP.md. */
+async function askNotificationPermission() {
+  if (!("Notification" in window)) return "unsupported";
+  if (Notification.permission === "granted") return "granted";
+  if (Notification.permission === "denied") return "denied";
+  try { return await Notification.requestPermission(); } catch { return "denied"; }
+}
+
+function showDeviceNotification(title, body, tag) {
+  try {
+    if (!("Notification" in window) || Notification.permission !== "granted") return;
+    if (document.visibilityState === "visible") return;   // don't nag while they're looking at it
+    navigator.serviceWorker?.ready
+      .then((reg) => reg.showNotification(title, { body, tag, icon: "/icon-192.png", badge: "/icon-192.png" }))
+      .catch(() => { new Notification(title, { body, tag }); });
+  } catch (e) {}
+}
 
 // wrap a Supabase write so failures are visible in the console instead of silent
 async function dbWrite(label, promise) {
@@ -707,7 +733,7 @@ const NAV = {
   guide: [{ id: "post", label: "Feed", Icon: Newspaper }, { id: "jobs", label: "Jobs", Icon: Briefcase }, { id: "trips", label: "Trips", Icon: Map }, { id: "chats", label: "Messages", Icon: MessageSquare }, { id: "profile", label: "Profile", Icon: User }],
   driver: [{ id: "post", label: "Feed", Icon: Newspaper }, { id: "jobs", label: "Jobs", Icon: Briefcase }, { id: "trips", label: "Trips", Icon: Map }, { id: "chats", label: "Messages", Icon: MessageSquare }, { id: "profile", label: "Profile", Icon: User }],
   operator: [{ id: "discover", label: "Discover", Icon: Search }, { id: "requests", label: "Jobs", Icon: Briefcase }, { id: "trips", label: "Trips", Icon: Map }, { id: "chats", label: "Messages", Icon: MessageSquare }, { id: "feed", label: "Feed", Icon: Newspaper }],
-  admin: [{ id: "review", label: "Review", Icon: ShieldCheck }, { id: "feed", label: "Feed", Icon: Newspaper }, { id: "users", label: "Users", Icon: Users }],
+  admin: [{ id: "review", label: "Review", Icon: ShieldCheck }, { id: "users", label: "Users", Icon: Users }, { id: "feed", label: "Feed", Icon: Newspaper }, { id: "discover", label: "Discover", Icon: Search }, { id: "chats", label: "Messages", Icon: MessageSquare }],
 };
 const DEFAULT_TAB = { guide: "post", driver: "post", operator: "discover", admin: "review" };
 
@@ -718,6 +744,23 @@ function Shell({ user, posts, jobs, trips, listings, actions, engagement, dm, di
   const [sharedPost, setSharedPost] = useState(null);
   const [searchTerm, setSearchTerm] = useState("");
   const [alertsOpen, setAlertsOpen] = useState(false);
+  const lastAlertCount = useRef(0);
+  const [notifyOn, setNotifyOn] = useState(typeof Notification !== "undefined" && Notification.permission === "granted");
+  const [installSheet, setInstallSheet] = useState(false);
+  const [installEvent, setInstallEvent] = useState(null);
+  const [installed, setInstalled] = useState(isStandalone());
+
+  useEffect(() => {
+    const onPrompt = (e) => { e.preventDefault(); setInstallEvent(e); };
+    const onInstalled = () => { setInstalled(true); setInstallSheet(false); };
+    window.addEventListener("beforeinstallprompt", onPrompt);
+    window.addEventListener("appinstalled", onInstalled);
+    // nudge once, a little after they've settled in
+    const t = setTimeout(() => {
+      if (!isStandalone() && !localStorage.getItem("bth_install_dismissed")) setInstallSheet(true);
+    }, 45000);
+    return () => { window.removeEventListener("beforeinstallprompt", onPrompt); window.removeEventListener("appinstalled", onInstalled); clearTimeout(t); };
+  }, []);
 
   const nav = NAV[user.kind];
   const actorId = user.talentId || user.id;
@@ -725,22 +768,68 @@ function Shell({ user, posts, jobs, trips, listings, actions, engagement, dm, di
 
   const alertItems = useMemo(() => {
     const out = [];
+    const seen = new Set();
+    const add = (o) => { if (!seen.has(o.id)) { seen.add(o.id); out.push(o); } };
+
+    // messages sent to me
     (dm?.dms || []).filter((m) => m.to === actorId && !m.read).forEach((m) =>
-      out.push({ id: `dm-${m.id}`, kind: "message", who: m.from, text: m.body, ts: m.ts }));
+      add({ id: `dm-${m.id}`, kind: m.sharedPostId ? "share" : "message", who: m.from, text: m.body, ts: m.ts }));
+
+    // likes and comments on my posts
     (engagement?.likes || []).forEach((l) => {
       const p = posts.find((x) => x.id === l.post_id && x.talentId === actorId);
-      if (p && l.liker_id !== actorId) out.push({ id: `like-${l.post_id}-${l.liker_id}`, kind: "like", who: l.liker_id, text: p.text || "your post", ts: p.createdAt });
+      if (p && l.liker_id !== actorId) add({ id: `like-${l.post_id}-${l.liker_id}`, kind: "like", who: l.liker_id, text: p.text || "your post", ts: p.createdAt });
     });
     (engagement?.comments || []).forEach((c) => {
       const p = posts.find((x) => x.id === c.post_id && x.talentId === actorId);
-      if (p && c.author_id !== actorId) out.push({ id: `cm-${c.id}`, kind: "comment", who: c.author_id, text: c.body, ts: c.ts });
+      if (p && c.author_id !== actorId) add({ id: `cm-${c.id}`, kind: "comment", who: c.author_id, text: c.body, ts: c.ts });
     });
+
+    // new followers
     (engagement?.follows || []).filter((f) => f.following === actorId).forEach((f) =>
-      out.push({ id: `fl-${f.follower}`, kind: "follow", who: f.follower, text: "started following you", ts: Date.now() }));
+      add({ id: `fl-${f.follower}`, kind: "follow", who: f.follower, text: "", ts: Date.now() }));
+
+    // direct job requests to me
     jobs.filter((j) => j.toTalentId === actorId && j.status === "pending").forEach((j) =>
-      out.push({ id: `job-${j.id}`, kind: "job", who: j.operatorId, text: j.title, ts: j.createdAt }));
-    return out.sort((a, b) => b.ts - a.ts).slice(0, 40);
-  }, [dm?.dms, engagement?.likes, engagement?.comments, engagement?.follows, jobs, posts, actorId]);
+      add({ id: `job-${j.id}`, kind: "job", who: j.operatorId, text: j.title, ts: j.createdAt }));
+
+    // open listings matching my role (guides see guide jobs, drivers see driver jobs)
+    if (user.kind === "guide" || user.kind === "driver") {
+      (listings || []).filter((l) => l.status === "open" && l.role === user.kind &&
+        !l.applicants.some((a) => a.talentId === actorId)).forEach((l) =>
+        add({ id: `lst-${l.id}`, kind: "listing", who: l.operatorId, text: l.title, ts: l.createdAt, urgent: l.urgent }));
+    }
+
+    // applicants on my listings (operators)
+    if (user.kind === "operator") {
+      (listings || []).filter((l) => (l.operatorId ? l.operatorId === actorId : l.operator === user.name))
+        .forEach((l) => l.applicants.filter((a) => a.status === "applied").forEach((a) =>
+          add({ id: `app-${l.id}-${a.talentId}`, kind: "applicant", who: a.talentId, text: l.title, ts: a.appliedAt })));
+    }
+
+    // new people joining the platform (last 7 days)
+    const weekAgo = Date.now() - 7 * 86400e3;
+    Object.values(PROFILE_DIR).forEach((p) => {
+      if (p.id !== actorId && p.joinedAt && p.joinedAt > weekAgo)
+        add({ id: `new-${p.id}`, kind: "joined", who: p.id, text: roleLabel(p.role), ts: p.joinedAt });
+    });
+
+    return out.sort((a, b) => b.ts - a.ts).slice(0, 50);
+  }, [dm?.dms, engagement?.likes, engagement?.comments, engagement?.follows, jobs, listings, posts, actorId, dirTick]);
+
+  // notify the device when something new arrives
+  useEffect(() => {
+    const n = alertItems.length;
+    if (n > lastAlertCount.current && lastAlertCount.current > 0) {
+      const latest = alertItems[0];
+      const who = talentById(latest.who)?.name || "Someone";
+      const verbs = { message: "sent you a message", share: "shared a post", like: "liked your post",
+        comment: "commented on your post", follow: "started following you", job: "sent a job request",
+        listing: "posted a job you can apply for", applicant: "applied to your job", joined: "joined the hub" };
+      showDeviceNotification("Bhutan Tourism Hub", `${who} ${verbs[latest.kind] || "sent you an update"}`, latest.id);
+    }
+    lastAlertCount.current = n;
+  }, [alertItems.length]);
   const myFollowing = (engagement?.follows || []).filter((f) => f.follower === actorId).map((f) => f.following);
   const unreadDm = (dm?.dms || []).filter((m) => m.to === actorId && !m.read).length;
 
@@ -793,8 +882,17 @@ function Shell({ user, posts, jobs, trips, listings, actions, engagement, dm, di
         <PostDetail items={[sharedPost]} index={0} author={talentById(sharedPost.talentId)} eng={eng} onClose={() => setSharedPost(null)} />
       )}
 
+      {installSheet && !installed && (
+        <InstallSheet installEvent={installEvent}
+          onClose={() => { setInstallSheet(false); try { localStorage.setItem("bth_install_dismissed", "1"); } catch (e) {} }} />
+      )}
+
       {alertsOpen && (
         <AlertsSheet items={alertItems} onClose={() => setAlertsOpen(false)}
+          notifyOn={notifyOn}
+          onEnableNotify={async () => { const r = await askNotificationPermission(); setNotifyOn(r === "granted"); }}
+          installed={installed}
+          onInstall={() => { setAlertsOpen(false); setInstallSheet(true); }}
           onOpenProfile={(id) => { setAlertsOpen(false); openProfile(id); }}
           onOpenMessages={() => { setAlertsOpen(false); setTab("chats"); }}
           onOpenJobs={() => { setAlertsOpen(false); setTab(user.kind === "operator" ? "requests" : "jobs"); }} />
@@ -1355,7 +1453,8 @@ function Review({ posts, onApprove, onReject, eng }) {
         })}
       </div>
       {list.length === 0 ? (
-        <Empty Icon={Check} title="All clear" body="New posts land here for review." />
+        <Empty Icon={Check} title={tab === "pending" ? "All clear" : "Nothing reviewed yet"}
+          body={tab === "pending" ? "New posts land here for review." : "Posts you approve or reject appear here."} />
       ) : (
         <div className="space-y-3">{list.map((p) => <ModCard key={p.id} post={p} onApprove={onApprove} onReject={onReject} eng={eng} />)}</div>
       )}
@@ -1379,6 +1478,19 @@ function ModCard({ post, onApprove, onReject, eng }) {
       <PostMedia media={post.media} />
       <PostLocation location={post.location} showMap />
       <PostEngagement post={post} eng={eng} />
+      {!pending && (
+        <div className="flex gap-2.5 mt-3.5">
+          {post.status !== "approved" && (
+            <button onClick={() => onApprove(post.id)} className="tap flex-1 h-10 rounded-xl text-[13px] font-semibold inline-flex items-center justify-center gap-1.5"
+              style={{ background: C.pineSoft, color: C.pine }}><Check size={15} /> Approve instead</button>
+          )}
+          {post.status !== "rejected" && (
+            <button onClick={() => onReject(post.id, "Changed on review")} className="tap flex-1 h-10 rounded-xl text-[13px] font-semibold inline-flex items-center justify-center gap-1.5"
+              style={{ background: C.maroonSoft, color: C.maroon }}><X size={15} /> Reject instead</button>
+          )}
+        </div>
+      )}
+
       {pending && !rejecting && (
         <div className="flex gap-2.5 mt-3.5">
           <button onClick={() => setRejecting(true)} className="tap flex-1 h-11 rounded-xl text-[14px] font-semibold inline-flex items-center justify-center gap-2" style={{ background: C.card, border: `1.5px solid ${C.maroon}`, color: C.maroon }}><X size={17} /> Reject</button>
@@ -4032,14 +4144,21 @@ function Stat({ n, label, onClick }) {
 }
 
 /* ============================== Notifications ============================= */
-function AlertsSheet({ items, onClose, onOpenProfile, onOpenMessages, onOpenJobs }) {
+function AlertsSheet({ items, onClose, onOpenProfile, onOpenMessages, onOpenJobs, notifyOn, onEnableNotify, installed, onInstall }) {
   const meta = {
-    message: { Icon: MessageCircle, bg: C.pineSoft, fg: C.pine, verb: "sent you a message" },
-    like:    { Icon: Heart,         bg: C.maroonSoft, fg: C.maroon, verb: "liked your post" },
-    comment: { Icon: MessageSquare, bg: C.goldSoft, fg: "#7a5a1e", verb: "commented" },
-    follow:  { Icon: UserPlus,      bg: C.pineSoft, fg: C.pine, verb: "started following you" },
-    job:     { Icon: Briefcase,     bg: C.goldSoft, fg: "#7a5a1e", verb: "sent you a job request" },
+    message:   { Icon: MessageCircle, bg: C.pineSoft,   fg: C.pine,     verb: "sent you a message" },
+    share:     { Icon: Share2,        bg: C.pineSoft,   fg: C.pine,     verb: "shared a post with you" },
+    like:      { Icon: Heart,         bg: C.maroonSoft, fg: C.maroon,   verb: "liked your post" },
+    comment:   { Icon: MessageSquare, bg: C.goldSoft,   fg: "#7a5a1e",  verb: "commented on your post" },
+    follow:    { Icon: UserPlus,      bg: C.pineSoft,   fg: C.pine,     verb: "started following you" },
+    job:       { Icon: Briefcase,     bg: C.goldSoft,   fg: "#7a5a1e",  verb: "sent you a job request" },
+    listing:   { Icon: Briefcase,     bg: C.goldSoft,   fg: "#7a5a1e",  verb: "posted a job you can apply for" },
+    applicant: { Icon: UserCheck,     bg: C.pineSoft,   fg: C.pine,     verb: "applied to your job" },
+    joined:    { Icon: UserPlus,      bg: C.goldSoft,   fg: "#7a5a1e",  verb: "joined Bhutan Tourism Hub" },
   };
+
+  const today = items.filter((a) => Date.now() - a.ts < 86400e3);
+  const earlier = items.filter((a) => Date.now() - a.ts >= 86400e3);
 
   return (
     <div className="fixed inset-0 flex items-end" style={{ background: "rgba(8,10,8,.55)", zIndex: 230 }} onClick={onClose}>
@@ -4050,6 +4169,21 @@ function AlertsSheet({ items, onClose, onOpenProfile, onOpenMessages, onOpenJobs
             <div className="text-[17px] font-semibold" style={{ color: C.ink }}>Notifications</div>
             <span className="text-[12.5px]" style={{ color: C.muted }}>{items.length}</span>
           </div>
+          {!notifyOn && (isIOS() && !installed ? (
+            <button onClick={onInstall} className="tap w-full rounded-xl px-3.5 py-2.5 mt-3 flex items-center gap-2.5 text-left" style={{ background: C.goldSoft }}>
+              <Smartphone size={16} color={C.gold} className="shrink-0" />
+              <span className="text-[12.5px] leading-snug" style={{ color: "#7a5a1e" }}>
+                <b>Add to Home Screen first</b> — on iPhone, alerts only work once the app is installed. Tap to see how.
+              </span>
+            </button>
+          ) : (
+            <button onClick={onEnableNotify} className="tap w-full rounded-xl px-3.5 py-2.5 mt-3 flex items-center gap-2.5 text-left" style={{ background: C.goldSoft }}>
+              <Bell size={16} color={C.gold} className="shrink-0" />
+              <span className="text-[12.5px] leading-snug" style={{ color: "#7a5a1e" }}>
+                <b>Turn on alerts</b> — get notified about jobs and messages even when the app isn't open.
+              </span>
+            </button>
+          ))}
         </div>
 
         <div className="flex-1 overflow-y-auto hidescroll px-4 pb-5" style={{ scrollbarWidth: "none" }}>
@@ -4059,33 +4193,138 @@ function AlertsSheet({ items, onClose, onOpenProfile, onOpenMessages, onOpenJobs
               <p className="text-[14px] font-semibold" style={{ color: C.ink }}>You're all caught up</p>
               <p className="text-[13px] mt-1" style={{ color: C.muted }}>Messages, likes, follows and job requests appear here.</p>
             </div>
-          ) : items.map((a) => {
-            const m = meta[a.kind] || meta.message;
-            const p = talentById(a.who);
-            const go = () => {
-              if (a.kind === "message") return onOpenMessages();
-              if (a.kind === "job") return onOpenJobs();
-              if (p) return onOpenProfile(a.who);
-            };
-            return (
-              <button key={a.id} onClick={go} className="tap w-full text-left flex items-start gap-3 py-3" style={{ borderBottom: `1px solid ${C.lineSoft}` }}>
-                <div className="relative shrink-0">
-                  <Avatar initials={p?.initials || "?"} size={40} />
-                  <span className="absolute -bottom-1 -right-1 w-5 h-5 rounded-full flex items-center justify-center" style={{ background: m.bg, border: `2px solid ${C.card}` }}>
-                    <m.Icon size={10} color={m.fg} />
-                  </span>
+          ) : (
+            <>
+              {[["New", today], ["Earlier", earlier]].map(([label, group]) => group.length === 0 ? null : (
+                <div key={label}>
+                  <div className="text-[11.5px] font-semibold tracking-[.12em] uppercase mt-3 mb-1" style={{ color: C.gold }}>{label}</div>
+                  {group.map((a) => {
+                    const m = meta[a.kind] || meta.message;
+                    const p = talentById(a.who);
+                    const go = () => {
+                      if (a.kind === "message" || a.kind === "share") return onOpenMessages();
+                      if (a.kind === "job" || a.kind === "listing" || a.kind === "applicant") return onOpenJobs();
+                      if (p) return onOpenProfile(a.who);
+                    };
+                    return (
+                      <button key={a.id} onClick={go} className="tap w-full text-left flex items-start gap-3 py-3" style={{ borderBottom: `1px solid ${C.lineSoft}` }}>
+                        <div className="relative shrink-0">
+                          <Avatar initials={p?.initials || "?"} size={42} />
+                          <span className="absolute -bottom-1 -right-1 w-5 h-5 rounded-full flex items-center justify-center" style={{ background: m.bg, border: `2px solid ${C.card}` }}>
+                            <m.Icon size={10} color={m.fg} />
+                          </span>
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="text-[13.5px] leading-snug" style={{ color: C.ink }}>
+                            <b>{p?.name || "Someone"}</b> <span style={{ color: C.muted }}>{m.verb}</span>
+                            {a.urgent && <span className="ml-1.5 text-[10px] font-bold rounded-full px-1.5 py-0.5" style={{ background: C.maroonSoft, color: C.maroon }}>URGENT</span>}
+                          </div>
+                          {a.text && a.kind !== "follow" && <div className="text-[12.5px] truncate mt-0.5" style={{ color: C.muted }}>{a.text}</div>}
+                          <div className="text-[11px] mt-0.5" style={{ color: C.muted }}>{relTime(a.ts)}</div>
+                        </div>
+                      </button>
+                    );
+                  })}
                 </div>
-                <div className="flex-1 min-w-0">
-                  <div className="text-[13.5px] leading-snug" style={{ color: C.ink }}>
-                    <b>{p?.name || "Someone"}</b> <span style={{ color: C.muted }}>{m.verb}</span>
-                  </div>
-                  {a.text && a.kind !== "follow" && <div className="text-[12.5px] truncate mt-0.5" style={{ color: C.muted }}>{a.text}</div>}
-                  <div className="text-[11px] mt-0.5" style={{ color: C.muted }}>{relTime(a.ts)}</div>
-                </div>
-              </button>
-            );
-          })}
+              ))}
+            </>
+          )}
         </div>
+      </div>
+    </div>
+  );
+}
+
+/* ============================ Install the app ============================= */
+function InstallSheet({ installEvent, onClose }) {
+  const ios = isIOS();
+  const [busy, setBusy] = useState(false);
+
+  const install = async () => {
+    if (!installEvent) return;
+    setBusy(true);
+    installEvent.prompt();
+    try { await installEvent.userChoice; } catch (e) {}
+    setBusy(false);
+    onClose();
+  };
+
+  return (
+    <div className="fixed inset-0 flex items-end" style={{ background: "rgba(8,10,8,.55)", zIndex: 230 }} onClick={onClose}>
+      <div className="w-full rounded-t-3xl p-5" style={{ background: C.card }} onClick={(e) => e.stopPropagation()}>
+        <div className="w-10 h-1 rounded-full mx-auto mb-4" style={{ background: C.line }} />
+
+        <div className="flex items-start gap-3 mb-4">
+          <div className="w-12 h-12 rounded-2xl flex items-center justify-center shrink-0" style={{ background: C.pine }}>
+            <Compass size={22} color={C.goldSoft} />
+          </div>
+          <div>
+            <div className="text-[17px] font-semibold" style={{ color: C.ink }}>Install Bhutan Tourism Hub</div>
+            <p className="text-[13px] mt-0.5" style={{ color: C.muted }}>Takes a second, and makes a real difference.</p>
+          </div>
+        </div>
+
+        <div className="space-y-2.5 mb-4">
+          <InstallReason Icon={Bell} title="Job alerts reach you"
+            body={ios ? "On iPhone, notifications only work once the app is installed — a browser tab gets none."
+                      : "Get notified about new jobs and messages without opening the app."} />
+          <InstallReason Icon={Navigation} title="Works with poor signal"
+            body="Opens instantly and keeps working on the road, where data is weak." />
+          <InstallReason Icon={Smartphone} title="Opens like a normal app"
+            body="Its own icon on your home screen — no browser bar, full screen." />
+        </div>
+
+        {ios ? (
+          <div className="rounded-xl p-4" style={{ background: C.bg, border: `1px solid ${C.line}` }}>
+            <div className="text-[13px] font-semibold mb-2" style={{ color: C.ink }}>On iPhone (Safari)</div>
+            <ol className="space-y-2">
+              {[["1", <>Tap the <b>Share</b> button <Share size={13} className="inline" /> at the bottom of Safari</>],
+                ["2", <>Scroll down and tap <b>Add to Home Screen</b></>],
+                ["3", <>Tap <b>Add</b> — then open it from your home screen</>]].map(([n, t]) => (
+                <li key={n} className="flex gap-2.5 items-start">
+                  <span className="w-5 h-5 rounded-full flex items-center justify-center shrink-0 text-[11px] font-bold" style={{ background: C.pine, color: "#fff" }}>{n}</span>
+                  <span className="text-[13px] leading-snug" style={{ color: C.ink }}>{t}</span>
+                </li>
+              ))}
+            </ol>
+          </div>
+        ) : installEvent ? (
+          <button onClick={install} disabled={busy} className="tap w-full h-12 rounded-xl text-[15px] font-semibold inline-flex items-center justify-center gap-2"
+            style={{ background: C.pine, color: "#fff" }}>
+            {busy ? <Loader2 size={18} className="animate-spin" /> : <><Plus size={17} strokeWidth={3} /> Install now</>}
+          </button>
+        ) : (
+          <div className="rounded-xl p-4" style={{ background: C.bg, border: `1px solid ${C.line}` }}>
+            <div className="text-[13px] font-semibold mb-2" style={{ color: C.ink }}>On Android (Chrome)</div>
+            <ol className="space-y-2">
+              {[["1", <>Tap the <b>⋮</b> menu, top right</>],
+                ["2", <>Tap <b>Add to Home screen</b> or <b>Install app</b></>],
+                ["3", <>Confirm — then open it from your home screen</>]].map(([n, t]) => (
+                <li key={n} className="flex gap-2.5 items-start">
+                  <span className="w-5 h-5 rounded-full flex items-center justify-center shrink-0 text-[11px] font-bold" style={{ background: C.pine, color: "#fff" }}>{n}</span>
+                  <span className="text-[13px] leading-snug" style={{ color: C.ink }}>{t}</span>
+                </li>
+              ))}
+            </ol>
+          </div>
+        )}
+
+        <button onClick={onClose} className="tap w-full h-11 rounded-xl text-[14px] font-semibold mt-2.5"
+          style={{ background: C.card, border: `1px solid ${C.line}`, color: C.muted }}>Maybe later</button>
+      </div>
+    </div>
+  );
+}
+
+function InstallReason({ Icon, title, body }) {
+  return (
+    <div className="flex gap-3">
+      <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 mt-0.5" style={{ background: C.goldSoft }}>
+        <Icon size={15} color={C.gold} />
+      </div>
+      <div>
+        <div className="text-[13.5px] font-semibold" style={{ color: C.ink }}>{title}</div>
+        <div className="text-[12.5px] leading-snug" style={{ color: C.muted }}>{body}</div>
       </div>
     </div>
   );
