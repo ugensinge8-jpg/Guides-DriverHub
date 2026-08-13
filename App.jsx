@@ -1,10 +1,11 @@
 import React, { useState, useRef, useMemo, useEffect } from "react";
+import { createPortal } from "react-dom";
 import {
   Compass, Car, Building2, ShieldCheck, ImagePlus, X, Check, Clock, Send,
   BadgeCheck, MapPin, Inbox, ChevronLeft, Star, Phone, Mail, Briefcase,
   Search, LogOut, Newspaper, User, CalendarCheck, MessageCircle,
   Map, MessageSquare, Users, Download, Mic, Video, Heart, Share2, Trash2, Maximize2, Upload, Loader2, ArrowRight,
-  Award, UserX, RefreshCw, FileCheck2, ExternalLink, UserPlus, Send as SendIcon, Lock, Eye, EyeOff, CalendarDays, UserCheck, Plus, CheckCheck, Camera, Navigation, Bell, Smartphone, Share,
+  Award, UserX, RefreshCw, FileCheck2, ExternalLink, UserPlus, Send as SendIcon, Lock, Eye, EyeOff, CalendarDays, UserCheck, Plus, CheckCheck, Camera, Navigation, Bell, Smartphone, Share, PhoneCall,
   ShieldAlert,
 } from "lucide-react";
 import mapImg from "./map.jpg";
@@ -620,6 +621,10 @@ export default function App() {
       <style>{`
         *{ font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Helvetica Neue", ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
         html, body { overscroll-behavior-y: none; }
+        :root { --sa-top: env(safe-area-inset-top, 0px); --sa-bottom: env(safe-area-inset-bottom, 0px); }
+        .safe-bottom { padding-bottom: env(safe-area-inset-bottom, 0px); }
+        .safe-top { padding-top: env(safe-area-inset-top, 0px); }
+        input, textarea, select { font-size: 16px; }   /* stops iOS zooming on focus */
         .hidescroll { -webkit-overflow-scrolling: touch; overscroll-behavior: contain; }
         img, video { -webkit-user-drag: none; }
         button, a { -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
@@ -634,7 +639,7 @@ export default function App() {
         textarea::placeholder, input::placeholder{ color:${C.muted}; opacity:.7; }
       `}</style>
 
-      <div className="w-full max-w-md flex flex-col" style={{ height: "100vh", color: C.ink }}>
+      <div className="w-full max-w-md flex flex-col" style={{ height: "100dvh", color: C.ink }}>
         {!user ? (
           <Login onPick={setAccountId} session={session} myProfile={myProfile} onAuthed={reloadMe} onBusy={setAuthBusy} />
         ) : (
@@ -973,7 +978,7 @@ function TopBar({ user, onLogout, onSearch, alerts, onOpenAlerts }) {
   const submit = () => { const t = q.trim(); if (t && onSearch) onSearch(t); };
 
   return (
-    <div className="shrink-0 h-14 px-2.5 flex items-center gap-2" style={{ background: C.bg, borderBottom: `1px solid ${C.lineSoft}` }}>
+    <div className="shrink-0 flex items-center gap-2 px-2.5" style={{ height: "calc(56px + var(--sa-top))", paddingTop: "var(--sa-top)", background: C.bg, borderBottom: `1px solid ${C.lineSoft}` }}>
       <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0" style={{ background: C.pine }}>
         <Compass size={16} color={C.goldSoft} />
       </div>
@@ -1005,7 +1010,7 @@ function TopBar({ user, onLogout, onSearch, alerts, onOpenAlerts }) {
 
 function BottomNav({ nav, tab, setTab, badges }) {
   return (
-    <div className="shrink-0 flex" style={{ background: C.card, borderTop: `1px solid ${C.line}`, position: "relative", zIndex: 240 }}>
+    <div className="shrink-0 flex safe-bottom" style={{ background: C.card, borderTop: `1px solid ${C.line}`, position: "relative", zIndex: 240 }}>
       {nav.map((n) => {
         const on = tab === n.id;
         const badge = badges[n.id] || 0;
@@ -1080,7 +1085,7 @@ function PostMedia({ media }) {
     <>
       <div className="relative rounded-xl overflow-hidden mt-3" style={{ border: `1px solid ${C.line}`, aspectRatio: "1 / 1", background: media.kind === "video" ? "#0c0e0c" : C.bg }}>
         {media.kind === "video" ? (
-          <video src={media.dataUri} controls className="absolute inset-0 w-full h-full" style={{ objectFit: "contain" }} />
+          <video src={media.dataUri} controls playsInline className="absolute inset-0 w-full h-full" style={{ objectFit: "contain" }} />
         ) : (
           <button onClick={() => setFull(true)} className="absolute inset-0 w-full h-full" aria-label="View photo full size">
             <img src={media.dataUri} alt="" className="absolute inset-0 w-full h-full" style={{ objectFit: "cover" }} />
@@ -1104,6 +1109,23 @@ function Empty({ Icon, title, body }) {
     </div>
   );
 }
+// Bhutan numbers: accept 17123456 / 77123456 / +975... and return a dialable +975 form
+function dialNumber(raw) {
+  if (!raw) return null;
+  const digits = String(raw).replace(/[^\d+]/g, "");
+  if (digits.startsWith("+")) return digits;
+  const bare = digits.replace(/^0+/, "");
+  if (bare.startsWith("975")) return "+" + bare;
+  if (bare.length === 8) return "+975" + bare;          // local mobile
+  return "+" + bare;
+}
+function prettyNumber(raw) {
+  const d = dialNumber(raw);
+  if (!d) return "";
+  if (d.startsWith("+975") && d.length === 12) return `+975 ${d.slice(4, 6)} ${d.slice(6, 9)} ${d.slice(9)}`;
+  return d;
+}
+
 const roleLabel = (r) => (r === "guide" ? "Guide" : r === "operator" ? "Tour Operator" : "Driver");
 
 /* ======================== Feed tab (guides & drivers) ===================== */
@@ -1212,7 +1234,7 @@ function Composer({ talent, onAdd }) {
       {media && (
         <div className="relative mt-3 rounded-xl overflow-hidden" style={{ border: `1px solid ${C.line}` }}>
           {media.kind === "video"
-            ? <video src={media.dataUri} controls className="w-full block" style={{ maxHeight: 240 }} />
+            ? <video src={media.dataUri} controls playsInline className="w-full block" style={{ maxHeight: 240 }} />
             : <img src={media.dataUri} alt="" className="w-full block" style={{ maxHeight: 240, objectFit: "cover" }} />}
           <button onClick={() => setMedia(null)} className="tap absolute top-2 right-2 w-8 h-8 rounded-full flex items-center justify-center" style={{ background: "rgba(0,0,0,.55)" }}><X size={16} color="#fff" /></button>
         </div>
@@ -1642,6 +1664,13 @@ function TalentProfile({ talent, posts, canRequest, self, contactOnly, eng, onRe
                 style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }}>
                 <MessageCircle size={15} /> Message
               </button>
+              {t.phone && (
+                <a href={`tel:${dialNumber(t.phone)}`}
+                  className="tap w-11 h-10 rounded-xl flex items-center justify-center shrink-0"
+                  style={{ background: C.pineSoft, border: `1px solid ${C.line}` }} aria-label="Call">
+                  <PhoneCall size={16} color={C.pine} />
+                </a>
+              )}
             </div>
           )}
         </div>
@@ -1704,9 +1733,38 @@ function TalentProfile({ talent, posts, canRequest, self, contactOnly, eng, onRe
 
         {(canRequest || self || contactOnly) && (
           <div className="mt-6"><SectionLabel>Contact</SectionLabel>
-            <div className="rounded-2xl divide-y" style={{ background: C.card, border: `1px solid ${C.line}`, borderColor: C.line }}>
-              <a href={`tel:${t.phone}`} className="flex items-center gap-3 px-4 py-3.5"><div className="w-9 h-9 rounded-lg flex items-center justify-center" style={{ background: C.goldSoft }}><Phone size={17} color={C.gold} /></div><span className="text-[14.5px] font-medium" style={{ color: C.ink }}>{t.phone}</span></a>
-              <a href={`mailto:${t.email}`} className="flex items-center gap-3 px-4 py-3.5"><div className="w-9 h-9 rounded-lg flex items-center justify-center" style={{ background: C.goldSoft }}><Mail size={17} color={C.gold} /></div><span className="text-[14.5px] font-medium truncate" style={{ color: C.ink }}>{t.email}</span></a>
+            <div className="rounded-2xl overflow-hidden" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+              {t.phone && (
+                <>
+                  <div className="px-4 pt-3.5 pb-2 flex items-center gap-3">
+                    <div className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0" style={{ background: C.goldSoft }}><Phone size={17} color={C.gold} /></div>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-[15px] font-semibold tracking-[0.01em]" style={{ color: C.ink }}>{prettyNumber(t.phone)}</div>
+                      <div className="text-[11.5px]" style={{ color: C.muted }}>Bhutan · +975</div>
+                    </div>
+                  </div>
+                  <div className="flex gap-2 px-4 pb-3.5">
+                    <a href={`tel:${dialNumber(t.phone)}`} className="tap flex-1 h-11 rounded-xl inline-flex items-center justify-center gap-2 text-[14px] font-semibold"
+                      style={{ background: C.pine, color: "#fff" }}>
+                      <PhoneCall size={16} /> Call
+                    </a>
+                    <a href={`https://wa.me/${dialNumber(t.phone).replace("+", "")}`} target="_blank" rel="noreferrer"
+                      className="tap flex-1 h-11 rounded-xl inline-flex items-center justify-center gap-2 text-[14px] font-semibold"
+                      style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }}>
+                      <MessageCircle size={16} /> WhatsApp
+                    </a>
+                  </div>
+                </>
+              )}
+              {t.email && (
+                <a href={`mailto:${t.email}`} className="flex items-center gap-3 px-4 py-3.5" style={{ borderTop: t.phone ? `1px solid ${C.lineSoft}` : "none" }}>
+                  <div className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0" style={{ background: C.goldSoft }}><Mail size={17} color={C.gold} /></div>
+                  <span className="text-[14px] font-medium truncate" style={{ color: C.ink }}>{t.email}</span>
+                </a>
+              )}
+              {!t.phone && !t.email && (
+                <div className="px-4 py-4 text-[13px]" style={{ color: C.muted }}>No contact details added yet.</div>
+              )}
             </div>
           </div>
         )}
@@ -2557,7 +2615,7 @@ function MapCinema({ location, photo }) {
         )}
 
         <div className="absolute left-2.5 bottom-2.5 flex items-center gap-1.5 rounded-full px-2.5 py-1"
-          style={{ background: "rgba(0,0,0,.45)", backdropFilter: "blur(4px)", opacity: zoomed ? 1 : 0, transition: "opacity .6s .5s" }}>
+          style={{ background: "rgba(0,0,0,.45)", backdropFilter: "blur(4px)", WebkitBackdropFilter: "blur(4px)", opacity: zoomed ? 1 : 0, transition: "opacity .6s .5s" }}>
           <MapPin size={12} color="#fff" />
           <span className="text-[11.5px] font-semibold text-white">{location.place ? (location.source === "viewpoint" ? location.place : `Near ${location.place}`) : "Bhutan"}</span>
         </div>
@@ -2579,7 +2637,7 @@ function MapCinema({ location, photo }) {
 }
 
 function Lightbox({ src, onClose }) {
-  return (
+  return createPortal((
     <div className="fixed inset-0 flex items-center justify-center" style={{ background: "rgba(8,10,8,.96)", zIndex: 210 }} onClick={onClose}>
       <img src={src} alt="" style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }} />
       <button className="absolute top-4 right-4 w-10 h-10 rounded-full flex items-center justify-center" style={{ background: "rgba(255,255,255,.15)" }} aria-label="Close">
@@ -2587,7 +2645,7 @@ function Lightbox({ src, onClose }) {
       </button>
       <div className="absolute bottom-5 left-0 right-0 text-center text-[12px]" style={{ color: "rgba(255,255,255,.55)" }}>Tap anywhere to close</div>
     </div>
-  );
+  ), document.body);
 }
 
 /* ====================== Profile gallery (Instagram grid) ================== */
@@ -2643,8 +2701,8 @@ function PostDetail({ items, index, author, eng, onShareStory, onClose }) {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  return (
-    <div className="fixed inset-0 flex flex-col" style={{ background: C.bg, zIndex: 200, height: "100dvh", paddingBottom: 62 }}>
+  return createPortal((
+    <div className="fixed inset-0 flex flex-col" style={{ background: C.bg, zIndex: 200, height: "100dvh", paddingBottom: "calc(62px + var(--sa-bottom))" }}>
       <div ref={scroller} className="flex-1 overflow-y-auto hidescroll" style={{ scrollbarWidth: "none" }}>
         <div className="h-14 px-3 flex items-center gap-3" style={{ background: C.card, borderBottom: `1px solid ${C.line}` }}>
           <button onClick={onClose} className="tap w-9 h-9 rounded-full flex items-center justify-center" style={{ border: `1px solid ${C.line}` }} aria-label="Back">
@@ -2663,7 +2721,7 @@ function PostDetail({ items, index, author, eng, onShareStory, onClose }) {
         <div className="py-10 text-center text-[12.5px]" style={{ color: C.muted }}>You're all caught up</div>
       </div>
     </div>
-  );
+  ), document.body);
 }
 
 function WallPost({ post: p, author, eng, onShareStory, onClose }) {
@@ -3195,7 +3253,14 @@ function Onboard({ mode: initialMode, session, onBack, onDone }) {
           <OInput value={name} onChange={(e) => setName(e.target.value)} placeholder="Your full name" />
           {role === "operator" && (<><OLabel>Agency name</OLabel><OInput value={company} onChange={(e) => setCompany(e.target.value)} placeholder="Your agency name" /></>)}
           <OLabel>Phone</OLabel>
-          <OInput value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="+975 17 00 00 00" inputMode="tel" />
+          <div className="relative mb-4">
+            <span className="absolute left-4 top-1/2 -translate-y-1/2 text-[15px] font-semibold" style={{ color: C.muted }}>+975</span>
+            <input value={phone} onChange={(e) => setPhone(e.target.value.replace(/[^\d]/g, "").slice(0, 8))}
+              placeholder="17 12 34 56" inputMode="tel"
+              className="w-full h-12 pl-[68px] pr-4 rounded-xl text-[15px]"
+              style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }} />
+          </div>
+          <p className="text-[12px] -mt-2 mb-4" style={{ color: C.muted }}>Operators call this number directly — make sure it's right.</p>
           {role !== "operator" && (<><OLabel>Home base</OLabel><OInput value={base} onChange={(e) => setBase(e.target.value)} placeholder="Paro" /></>)}
           <OCta disabled={name.trim().length < 2} onClick={() => setStep("details")}>Continue</OCta>
         </div>
@@ -3794,7 +3859,7 @@ function DmThread({ me, otherId, dm, posts, onOpenPost, onBack, onOpenProfile })
 
       {note && <div className="px-4 py-2 text-[12px] text-center" style={{ background: C.pineSoft, color: C.pine }}>{note}</div>}
 
-      <div className="shrink-0 px-2.5 py-2 flex items-end gap-1.5" style={{ background: C.card, borderTop: `1px solid ${C.line}` }}>
+      <div className="shrink-0 px-2.5 py-2 flex items-end gap-1.5 safe-bottom" style={{ background: C.card, borderTop: `1px solid ${C.line}` }}>
         <button onClick={() => fileRef.current?.click()} className="tap w-10 h-10 rounded-full flex items-center justify-center shrink-0" style={{ background: C.bg }} aria-label="Send photo">
           <Camera size={18} color={C.muted} />
         </button>
@@ -3863,9 +3928,9 @@ function SharePostSheet({ post, eng, onExternal, onClose, onSent }) {
     </button>
   );
 
-  return (
+  return createPortal((
     <div className="fixed inset-0 flex items-end" style={{ background: "rgba(8,10,8,.55)", zIndex: 220 }} onClick={onClose}>
-      <div className="w-full rounded-t-3xl flex flex-col" style={{ background: C.card, maxHeight: "88vh" }} onClick={(e) => e.stopPropagation()}>
+      <div className="w-full rounded-t-3xl flex flex-col safe-bottom" style={{ background: C.card, maxHeight: "88dvh" }} onClick={(e) => e.stopPropagation()}>
         <div className="p-5 pb-3 shrink-0">
           <div className="w-10 h-1 rounded-full mx-auto mb-4" style={{ background: C.line }} />
           <div className="text-[17px] font-semibold" style={{ color: C.ink }}>Send this post</div>
@@ -3910,7 +3975,7 @@ function SharePostSheet({ post, eng, onExternal, onClose, onSent }) {
         </div>
       </div>
     </div>
-  );
+  ), document.body);
 }
 
 /* ==================== Followers / Following list sheet =================== */
@@ -3922,9 +3987,9 @@ function FollowListSheet({ mode, talent, eng, onClose, onOpenProfile }) {
     : follows.filter((f) => f.follower === talent.id).map((f) => f.following);
   const people = ids.map((id) => talentById(id)).filter(Boolean);
 
-  return (
+  return createPortal((
     <div className="fixed inset-0 flex items-end" style={{ background: "rgba(8,10,8,.55)", zIndex: 220 }} onClick={onClose}>
-      <div className="w-full rounded-t-3xl flex flex-col" style={{ background: C.card, maxHeight: "80dvh" }} onClick={(e) => e.stopPropagation()}>
+      <div className="w-full rounded-t-3xl flex flex-col safe-bottom" style={{ background: C.card, maxHeight: "80dvh" }} onClick={(e) => e.stopPropagation()}>
         <div className="p-5 pb-2 shrink-0">
           <div className="w-10 h-1 rounded-full mx-auto mb-4" style={{ background: C.line }} />
           <div className="text-[17px] font-semibold" style={{ color: C.ink }}>
@@ -3963,7 +4028,7 @@ function FollowListSheet({ mode, talent, eng, onClose, onOpenProfile }) {
         </div>
       </div>
     </div>
-  );
+  ), document.body);
 }
 
 /* ===================== Verification status banner ===================== */
@@ -4092,8 +4157,8 @@ function StoryViewer({ stories, author, canDelete, onDelete, onClose }) {
     else onClose();
   };
 
-  return (
-    <div className="fixed inset-0 flex flex-col" style={{ background: "#08090880", backdropFilter: "blur(2px)", zIndex: 220 }}>
+  return createPortal((
+    <div className="fixed inset-0 flex flex-col" style={{ background: "#08090880", backdropFilter: "blur(2px)", WebkitBackdropFilter: "blur(2px)", zIndex: 220 }}>
       <div className="flex-1 flex flex-col" style={{ background: "#0b0d0b" }}>
         <div className="flex gap-1 px-3 pt-3">
           {stories.map((_, k) => (
@@ -4137,7 +4202,7 @@ function StoryViewer({ stories, author, canDelete, onDelete, onClose }) {
         </div>
       </div>
     </div>
-  );
+  ), document.body);
 }
 
 function AddStory({ onClose, onAdd }) {
@@ -4168,9 +4233,9 @@ function AddStory({ onClose, onAdd }) {
     onClose();
   };
 
-  return (
+  return createPortal((
     <div className="fixed inset-0 flex items-end" style={{ background: "rgba(8,10,8,.55)", zIndex: 220 }} onClick={onClose}>
-      <div className="w-full rounded-t-3xl p-5" style={{ background: C.card }} onClick={(e) => e.stopPropagation()}>
+      <div className="w-full rounded-t-3xl p-5 safe-bottom" style={{ background: C.card }} onClick={(e) => e.stopPropagation()}>
         <div className="w-10 h-1 rounded-full mx-auto mb-4" style={{ background: C.line }} />
         <div className="text-[17px] font-semibold mb-1" style={{ color: C.ink }}>Add to your story</div>
         <p className="text-[13px] mb-4" style={{ color: C.muted }}>Photo or short video. Disappears after 24 hours.</p>
@@ -4178,7 +4243,7 @@ function AddStory({ onClose, onAdd }) {
         {media ? (
           <div className="relative rounded-xl overflow-hidden mb-3" style={{ border: `1px solid ${C.line}` }}>
             {media.kind === "video"
-              ? <video src={media.dataUri} controls className="w-full block" style={{ maxHeight: 260 }} />
+              ? <video src={media.dataUri} controls playsInline className="w-full block" style={{ maxHeight: 260 }} />
               : <img src={media.dataUri} alt="" className="w-full block" style={{ maxHeight: 260, objectFit: "cover" }} />}
             <button onClick={() => setMedia(null)} className="tap absolute top-2 right-2 w-8 h-8 rounded-full flex items-center justify-center" style={{ background: "rgba(0,0,0,.55)" }}><X size={16} color="#fff" /></button>
           </div>
@@ -4202,14 +4267,14 @@ function AddStory({ onClose, onAdd }) {
         </button>
       </div>
     </div>
-  );
+  ), document.body);
 }
 
 function ConfirmShareStory({ post, onClose, onConfirm }) {
   const [busy, setBusy] = useState(false);
-  return (
+  return createPortal((
     <div className="fixed inset-0 flex items-end" style={{ background: "rgba(8,10,8,.55)", zIndex: 220 }} onClick={onClose}>
-      <div className="w-full rounded-t-3xl p-5" style={{ background: C.card }} onClick={(e) => e.stopPropagation()}>
+      <div className="w-full rounded-t-3xl p-5 safe-bottom" style={{ background: C.card }} onClick={(e) => e.stopPropagation()}>
         <div className="w-10 h-1 rounded-full mx-auto mb-4" style={{ background: C.line }} />
         <div className="text-[17px] font-semibold mb-1" style={{ color: C.ink }}>Share this post to your story?</div>
         <p className="text-[13px] mb-4" style={{ color: C.muted }}>It stays visible for 24 hours. Your original post is unchanged.</p>
@@ -4223,7 +4288,7 @@ function ConfirmShareStory({ post, onClose, onConfirm }) {
         <button onClick={onClose} className="tap w-full h-11 rounded-xl text-[14px] font-semibold mt-2" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.muted }}>Cancel</button>
       </div>
     </div>
-  );
+  ), document.body);
 }
 
 function Stat({ n, label, onClick }) {
@@ -4253,9 +4318,9 @@ function AlertsSheet({ items, onClose, onOpenProfile, onOpenMessages, onOpenJobs
   const today = items.filter((a) => Date.now() - a.ts < 86400e3);
   const earlier = items.filter((a) => Date.now() - a.ts >= 86400e3);
 
-  return (
+  return createPortal((
     <div className="fixed inset-0 flex items-end" style={{ background: "rgba(8,10,8,.55)", zIndex: 230 }} onClick={onClose}>
-      <div className="w-full rounded-t-3xl flex flex-col" style={{ background: C.card, maxHeight: "80dvh" }} onClick={(e) => e.stopPropagation()}>
+      <div className="w-full rounded-t-3xl flex flex-col safe-bottom" style={{ background: C.card, maxHeight: "80dvh" }} onClick={(e) => e.stopPropagation()}>
         <div className="p-5 pb-2 shrink-0">
           <div className="w-10 h-1 rounded-full mx-auto mb-4" style={{ background: C.line }} />
           <div className="flex items-center justify-between">
@@ -4325,7 +4390,7 @@ function AlertsSheet({ items, onClose, onOpenProfile, onOpenMessages, onOpenJobs
         </div>
       </div>
     </div>
-  );
+  ), document.body);
 }
 
 /* ============================ Install the app ============================= */
@@ -4342,9 +4407,9 @@ function InstallSheet({ installEvent, onClose }) {
     onClose();
   };
 
-  return (
+  return createPortal((
     <div className="fixed inset-0 flex items-end" style={{ background: "rgba(8,10,8,.55)", zIndex: 230 }} onClick={onClose}>
-      <div className="w-full rounded-t-3xl p-5" style={{ background: C.card }} onClick={(e) => e.stopPropagation()}>
+      <div className="w-full rounded-t-3xl p-5 safe-bottom" style={{ background: C.card }} onClick={(e) => e.stopPropagation()}>
         <div className="w-10 h-1 rounded-full mx-auto mb-4" style={{ background: C.line }} />
 
         <div className="flex items-start gap-3 mb-4">
@@ -4406,7 +4471,7 @@ function InstallSheet({ installEvent, onClose }) {
           style={{ background: C.card, border: `1px solid ${C.line}`, color: C.muted }}>Maybe later</button>
       </div>
     </div>
-  );
+  ), document.body);
 }
 
 function InstallReason({ Icon, title, body }) {
@@ -4467,7 +4532,7 @@ function Tutorial({ user, nav, setTab, onDone }) {
   const highlightLeft = navIndex >= 0 ? `${(navIndex / tabCount) * 100}%` : null;
   const highlightWidth = `${(1 / tabCount) * 100}%`;
 
-  return (
+  return createPortal((
     <div className="fixed inset-0" style={{ zIndex: 250 }}>
       {/* dim everything */}
       <div className="absolute inset-0" style={{ background: "rgba(8,10,8,.72)" }} onClick={next} />
@@ -4523,5 +4588,5 @@ function Tutorial({ user, nav, setTab, onDone }) {
         </div>
       </div>
     </div>
-  );
+  ), document.body);
 }
