@@ -117,7 +117,7 @@ async function uploadPostMedia(talentId, media) {
 const rowToPost = (r) => ({
   id: r.id, talentId: r.talent_id, text: r.body || "",
   media: r.media_url ? { kind: r.media_kind || "photo", dataUri: r.media_url, slides: r.media_slides || null, ratio: r.media_ratio || null } : null,
-  location: r.lat != null ? { lat: r.lat, lng: r.lng, place: r.place, description: r.loc_desc, source: r.loc_source, altitude: r.loc_altitude ?? null, bearing: r.loc_bearing ?? null, takenOn: r.loc_taken_on ?? null } : null,
+  location: r.lat != null ? { lat: r.lat, lng: r.lng, place: r.place, description: r.loc_desc, source: r.loc_source, altitude: r.loc_altitude ?? null, bearing: r.loc_bearing ?? null, takenOn: r.loc_taken_on ?? null, outside: r.loc_outside ?? false } : null,
   status: r.status, reason: r.reject_reason, createdAt: new Date(r.created_at).getTime(),
 });
 
@@ -420,6 +420,7 @@ export default function App() {
       lat: location?.lat ?? null, lng: location?.lng ?? null,
       place: location?.place ?? null, loc_desc: location?.description ?? null, loc_source: location?.source ?? null,
       loc_altitude: location?.altitude ?? null, loc_bearing: location?.bearing ?? null, loc_taken_on: location?.takenOn ?? null,
+      loc_outside: location?.outside ?? false,
     });
     if (postErr) console.error("posts.insert failed:", postErr.message);
     fetchPosts();
@@ -1295,13 +1296,19 @@ function Composer({ talent, onAdd }) {
       // read location from the first photo only
       if (!existing.length) readExifGps(imgs[0]).then((gps) => {
         if (gps && gps.lat != null) {
+          const inBT = insideBhutan(gps.lat, gps.lng);
           setLocation({
             lat: gps.lat, lng: gps.lng, place: nearestPlace(gps.lat, gps.lng), source: "photo",
+            outside: !inBT,
             altitude: gps.altitude ?? null, bearing: gps.bearing ?? null, takenOn: gps.takenOn ?? null,
           });
-          const bits = ["Location read from the photo"];
-          if (gps.altitude != null) bits.push(`${gps.altitude}m`);
-          flash(bits.join(" · "));
+          if (inBT) {
+            const bits = ["Location read from the photo"];
+            if (gps.altitude != null) bits.push(`${gps.altitude}m`);
+            flash(bits.join(" · "));
+          } else {
+            flash("This photo was taken outside Bhutan — it won't appear on the Bhutan map.");
+          }
         }
       });
     });
@@ -1321,7 +1328,7 @@ function Composer({ talent, onAdd }) {
     setText(""); setMedia(null); setLocation(null); setPicking(false); setManual(false);
   };
   const canPost = text.trim() || media;
-  const chipLabel = location ? (location.source === "viewpoint" ? location.place : (location.place ? `Near ${location.place}` : "Pinned")) : "";
+  const chipLabel = placeLabel(location);
 
   return (
     <div className="rounded-2xl p-4" style={{ background: C.card, border: `1px solid ${C.line}` }}>
@@ -2603,10 +2610,36 @@ function parseExifGps(view, tiff) {
   };
 }
 
+// Is this coordinate inside Bhutan? (small margin for border areas)
+function insideBhutan(lat, lng) {
+  const m = 0.05;
+  return lat >= BT.S - m && lat <= BT.N + m && lng >= BT.W - m && lng <= BT.E + m;
+}
+
+// Roughly how far apart, in km
+function kmBetween(aLat, aLng, bLat, bLng) {
+  const R = 6371, toRad = (d) => (d * Math.PI) / 180;
+  const dLat = toRad(bLat - aLat), dLng = toRad(bLng - aLng);
+  const x = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(aLat)) * Math.cos(toRad(bLat)) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(x));
+}
+
+function placeLabel(loc) {
+  if (!loc) return "";
+  if (loc.outside || !insideBhutan(loc.lat, loc.lng)) return "Outside Bhutan";
+  if (!loc.place) return "Pinned in Bhutan";
+  return loc.source === "viewpoint" ? loc.place : `Near ${loc.place}`;
+}
+
 function nearestPlace(lat, lng) {
+  if (!insideBhutan(lat, lng)) return null;         // never guess a Bhutanese name abroad
   let best = null, bd = Infinity;
-  for (const p of BT_PLACES) { const d = (p.lat - lat) ** 2 + (p.lng - lng) ** 2; if (d < bd) { bd = d; best = p; } }
-  return best ? best.n : null;
+  for (const p of BT_PLACES) {
+    const d = kmBetween(lat, lng, p.lat, p.lng);
+    if (d < bd) { bd = d; best = p; }
+  }
+  // only name it if genuinely close — otherwise say nothing rather than mislead
+  return best && bd <= 25 ? best.n : null;
 }
 
 function BhutanMap({ value, onPick, readOnly, pins, showMeta }) {
@@ -2671,6 +2704,35 @@ function BhutanMap({ value, onPick, readOnly, pins, showMeta }) {
 
   const zoomed = zoom > 1.02;
 
+  const outsideBT = points.length === 1 && points[0] && !insideBhutan(points[0].lat, points[0].lng);
+
+  if (outsideBT) {
+    const pt = points[0];
+    return (
+      <div className="relative">
+        <div className="rounded-xl overflow-hidden flex flex-col items-center justify-center text-center px-5 py-7"
+          style={{ background: C.card, border: `1px dashed ${C.line}`, aspectRatio: BT_MAP_AR }}>
+          <div className="w-12 h-12 rounded-2xl flex items-center justify-center mb-3" style={{ background: C.goldSoft }}>
+            <Navigation size={22} color={C.gold} />
+          </div>
+          <div className="text-[14px] font-semibold" style={{ color: C.ink }}>Outside Bhutan</div>
+          <p className="text-[12.5px] leading-snug mt-1 mb-3" style={{ color: C.muted }}>
+            This location isn't on the Bhutan map. View it on Google Maps instead.
+          </p>
+          <div className="text-[11.5px] font-mono mb-3" style={{ color: C.muted }}>
+            {Number(pt.lat).toFixed(5)}, {Number(pt.lng).toFixed(5)}
+          </div>
+          <a href={`https://www.google.com/maps/search/?api=1&query=${pt.lat},${pt.lng}`} target="_blank" rel="noreferrer"
+            className="tap inline-flex items-center gap-1.5 h-10 px-4 rounded-xl text-[13px] font-semibold"
+            style={{ background: C.pine, color: "#fff" }}>
+            <ExternalLink size={14} /> Open in Google Maps
+          </a>
+        </div>
+        {showMeta && <LocationMeta loc={pt} />}
+      </div>
+    );
+  }
+
   return (
     <div className="relative">
       <div ref={ref}
@@ -2732,6 +2794,7 @@ function LocationMeta({ loc }) {
     loc.altitude != null ? ["Elevation", `${loc.altitude} m`] : null,
     loc.bearing != null ? ["Camera faced", `${loc.bearing}° ${compassName(loc.bearing)}`] : null,
     loc.takenOn ? ["Taken on", loc.takenOn] : null,
+    ["Region", insideBhutan(loc.lat, loc.lng) ? (loc.place || "Bhutan") : "Outside Bhutan"],
     ["Source", loc.source === "photo" ? "Photo GPS metadata"
       : loc.source === "viewpoint" ? "Chosen viewpoint" : "Pinned on the map"],
   ].filter(Boolean);
@@ -2764,7 +2827,7 @@ function PostLocation({ location, showMap }) {
   return (
     <div className="mt-2.5">
       <span className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[12.5px] font-medium" style={{ background: C.goldSoft, color: "#7a5a1e" }}>
-        <MapPin size={13} color={C.gold} /> {location.place ? (location.source === "viewpoint" ? location.place : `Near ${location.place}`) : "Pinned in Bhutan"}
+        <MapPin size={13} color={C.gold} /> {placeLabel(location)}
       </span>
       {location.description && <p className="text-[12.5px] leading-snug mt-1.5" style={{ color: C.muted }}>{location.description}</p>}
       {showMap && <div className="mt-2.5"><BhutanMap readOnly value={location} showMeta /></div>}
@@ -3042,7 +3105,7 @@ function WallPost({ post: p, author, eng, onShareStory, onClose }) {
           <div className="mt-2.5">
             <button onClick={() => setShowMap((v) => !v)} className="tap inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[12.5px] font-semibold" style={{ background: C.goldSoft, color: "#7a5a1e" }}>
               <MapPin size={13} color={C.gold} />
-              {p.location.place ? (p.location.source === "viewpoint" ? p.location.place : `Near ${p.location.place}`) : "Pinned in Bhutan"}
+              {placeLabel(p.location)}
             </button>
             {p.location.description && <p className="text-[12.5px] leading-snug mt-2" style={{ color: C.muted }}>{p.location.description}</p>}
             {showMap && <div className="mt-2.5"><BhutanMap readOnly value={p.location} showMeta /></div>}
