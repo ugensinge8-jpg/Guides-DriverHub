@@ -241,7 +241,8 @@ export default function App() {
 
   const fetchDms = async () => {
     if (!CLOUD) return;
-    const { data } = await supabase.from("direct_messages").select("*").order("created_at", { ascending: true });
+    const { data, error } = await supabase.from("direct_messages").select("*").order("created_at", { ascending: true });
+    if (error) console.error("fetchDms failed:", error.message);
     if (data) setDms(data.map((r) => ({
       id: r.id, from: r.sender_id, to: r.recipient_id, body: r.body,
       sharedPostId: r.shared_post_id ?? null, photo: r.photo_url ?? null,
@@ -287,10 +288,16 @@ export default function App() {
       console.error("sendDm insert failed:", error.message, full);
       // a missing column shouldn't stop the message — retry with text only
       const retry = await supabase.from("direct_messages").insert(base);
-      if (retry.error) console.error("sendDm retry failed:", retry.error.message);
-      else console.warn("sendDm: sent without extras — run the column migration");
+      if (retry.error) {
+        console.error("sendDm retry failed:", retry.error.message);
+        setDms((D) => D.filter((m) => m.id !== tempId));    // drop the optimistic bubble
+        fetchDms();
+        return { ok: false, reason: retry.error.message };
+      }
+      console.warn("sendDm: sent without extras — run the column migration");
     }
     fetchDms();
+    return { ok: true };
   };
   const sharePostTo = async (recipients, post, note) => {
     for (const to of recipients) {
@@ -3626,16 +3633,28 @@ function TripChatView({ user, meId, trip, actions, onBack }) {
 
 function PickContact({ me, dirTick, onPick, onBack }) {
   const [q, setQ] = useState("");
-  const pool = useMemo(
-    () => [...TALENT, ...Object.values(PROFILE_DIR)].filter((p) => p.id !== me),
-    [me, dirTick]
-  );
-  const seen = new Set();
-  const list = pool.filter((p) => {
-    if (seen.has(p.id)) return false;
-    seen.add(p.id);
-    return `${p.name} ${p.base || ""} ${roleLabel(p.role)}`.toLowerCase().includes(q.toLowerCase());
-  });
+  const [people, setPeople] = useState(null);   // null = loading
+  const [err, setErr] = useState(null);
+
+  // fetch directly — never rely on cached module state for something this important
+  useEffect(() => {
+    let on = true;
+    (async () => {
+      if (!CLOUD) { setPeople(TALENT.filter((p) => p.id !== me)); return; }
+      const { data, error } = await supabase
+        .from("profiles").select("*").order("full_name", { ascending: true });
+      if (!on) return;
+      if (error) { console.error("PickContact load failed:", error.message); setErr(error.message); setPeople([]); return; }
+      const list = (data || []).map(profileToTalent).filter((p) => p.id !== me);
+      list.forEach((p) => { PROFILE_DIR[p.id] = p; });   // keep the cache warm too
+      setPeople(list);
+    })();
+    return () => { on = false; };
+  }, [me, dirTick]);
+
+  const list = (people || []).filter((p) =>
+    `${p.name} ${p.base || ""} ${roleLabel(p.role)}`.toLowerCase().includes(q.toLowerCase()));
+
   return (
     <div className="fade">
       <div className="h-14 px-4 flex items-center gap-3" style={{ borderBottom: `1px solid ${C.lineSoft}` }}>
@@ -3648,8 +3667,18 @@ function PickContact({ me, dirTick, onPick, onBack }) {
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search people"
             className="w-full h-11 pl-10 pr-4 rounded-xl text-[14px]" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }} />
         </div>
-        {list.length === 0 ? (
-          <Empty Icon={Users} title="Nobody found" body="Guides, drivers and operators appear here once they've signed up." />
+
+        {people === null ? (
+          <div className="flex items-center gap-2 justify-center py-10 text-[14px]" style={{ color: C.muted }}>
+            <Loader2 size={17} className="animate-spin" /> Loading people…
+          </div>
+        ) : err ? (
+          <div className="rounded-xl p-4 text-[13px]" style={{ background: C.maroonSoft, color: C.maroon }}>
+            Couldn't load people: {err}
+          </div>
+        ) : list.length === 0 ? (
+          <Empty Icon={Users} title={q ? "Nobody found" : "No one else yet"}
+            body={q ? "Try a different name." : "Guides, drivers and operators appear here once they've signed up."} />
         ) : (
           <div className="space-y-2.5">
             {list.map((p) => (
@@ -3676,6 +3705,7 @@ function DmThread({ me, otherId, dm, posts, onOpenPost, onBack, onOpenProfile })
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
   const [note, setNote] = useState(null);
+  const [failed, setFailed] = useState(null);
   const scrollRef = useRef();
   const fileRef = useRef();
   const p = talentById(otherId);
@@ -3693,8 +3723,13 @@ function DmThread({ me, otherId, dm, posts, onOpenPost, onBack, onOpenProfile })
     if (!t || sending) return;
     setText("");
     setSending(true);
-    await dm.sendDm(otherId, t);
+    const res = await dm.sendDm(otherId, t);
     setSending(false);
+    if (res && res.ok === false) {
+      setText(t);                       // give them their words back
+      setFailed(res.reason || "Message didn't send. Check your connection and try again.");
+      setTimeout(() => setFailed(null), 6000);
+    }
   };
 
   const sendPhoto = async (e) => {
@@ -3858,6 +3893,12 @@ function DmThread({ me, otherId, dm, posts, onOpenPost, onBack, onOpenProfile })
       </div>
 
       {note && <div className="px-4 py-2 text-[12px] text-center" style={{ background: C.pineSoft, color: C.pine }}>{note}</div>}
+      {failed && (
+        <div className="px-4 py-2.5 flex items-start gap-2" style={{ background: C.maroonSoft }}>
+          <ShieldAlert size={14} color={C.maroon} className="shrink-0 mt-0.5" />
+          <span className="text-[12px] leading-snug" style={{ color: C.maroon }}>{failed}</span>
+        </div>
+      )}
 
       <div className="shrink-0 px-2.5 py-2 flex items-end gap-1.5 safe-bottom" style={{ background: C.card, borderTop: `1px solid ${C.line}` }}>
         <button onClick={() => fileRef.current?.click()} className="tap w-10 h-10 rounded-full flex items-center justify-center shrink-0" style={{ background: C.bg }} aria-label="Send photo">
