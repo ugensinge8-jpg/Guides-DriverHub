@@ -168,7 +168,27 @@ class ErrorBoundary extends React.Component {
   }
 }
 
+// Check for a newer build and swap to it — stops stale caches serving old code
+function useAutoUpdate() {
+  useEffect(() => {
+    if (!("serviceWorker" in navigator)) return;
+    let reloading = false;
+    navigator.serviceWorker.addEventListener("controllerchange", () => {
+      if (reloading) return;
+      reloading = true;
+      window.location.reload();
+    });
+    const check = () => navigator.serviceWorker.getRegistration().then((r) => r && r.update()).catch(() => {});
+    check();
+    const iv = setInterval(check, 60 * 1000);
+    const onVis = () => { if (document.visibilityState === "visible") check(); };
+    document.addEventListener("visibilitychange", onVis);
+    return () => { clearInterval(iv); document.removeEventListener("visibilitychange", onVis); };
+  }, []);
+}
+
 export default function App() {
+  useAutoUpdate();
   const realUserRef = useRef(null);   // current signed-in id — set below, used by every action
   const [accountId, setAccountId] = useState(null);
   const [posts, setPosts] = useState(CLOUD ? [] : SEED_POSTS);
@@ -781,13 +801,13 @@ function Login({ onPick, session, myProfile, onAuthed, onBusy }) {
       </div>
 
       {/* map */}
-      <div className="relative w-full mt-5" style={{ aspectRatio: "5 / 2" }}>
+      <div className="relative w-full mt-5 mb-6" style={{ aspectRatio: "5 / 2" }}>
         <img src={mapImg} alt="Relief map of Bhutan" className="absolute inset-0 w-full h-full" style={{ objectFit: "cover", objectPosition: "center bottom" }} />
-        <div className="absolute inset-0" style={{ background: `linear-gradient(to bottom, ${C.bg} 0%, rgba(244,245,241,0) 26%, rgba(244,245,241,0) 70%, ${C.bg} 100%)` }} />
+        <div className="absolute inset-0 pointer-events-none" style={{ background: `linear-gradient(to bottom, ${C.bg} 0%, rgba(244,245,241,0) 30%, rgba(244,245,241,0) 68%, ${C.bg} 100%)` }} />
       </div>
 
-      {/* PRIMARY ACTION — centred */}
-      <div className="px-6 -mt-2">
+      {/* PRIMARY ACTION — centred, clear of the map */}
+      <div className="px-6">
         <button onClick={() => setAuthView("signup")} className="tap w-full rounded-2xl flex items-center justify-center gap-2 text-[16.5px] font-semibold"
           style={{ height: 56, background: C.pine, color: "#fff", boxShadow: `0 10px 24px ${C.pine}40` }}>
           Join the hub <ArrowRight size={19} strokeWidth={2.4} />
@@ -838,7 +858,7 @@ function Login({ onPick, session, myProfile, onAuthed, onBusy }) {
       </div>
 
       {/* honest about the stage */}
-      <div className="px-6 mt-7 pb-10">
+      <div className="px-6 mt-7 pb-16">
         <div className="rounded-2xl p-4" style={{ background: C.pineSoft }}>
           <div className="text-[13.5px] font-semibold mb-1.5" style={{ color: C.pine }}>Built in Bhutan, for Bhutan</div>
           <p className="text-[12.5px] leading-snug" style={{ color: C.pine, opacity: .9 }}>
