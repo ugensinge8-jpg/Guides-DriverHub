@@ -4,7 +4,7 @@ import {
   Compass, Car, Building2, ShieldCheck, ImagePlus, X, Check, Clock, Send,
   BadgeCheck, MapPin, Inbox, ChevronLeft, Star, Phone, Mail, Briefcase,
   Search, LogOut, Newspaper, User, CalendarCheck, MessageCircle,
-  Map, MessageSquare, Users, Download, Mic, Video, Heart, Share2, Trash2, Maximize2, Upload, Loader2, ArrowRight,
+  Map as MapIcon, MessageSquare, Users, Download, Mic, Video, Heart, Share2, Trash2, Maximize2, Upload, Loader2, ArrowRight,
   Award, UserX, RefreshCw, FileCheck2, ExternalLink, UserPlus, Send as SendIcon, Lock, Eye, EyeOff, CalendarDays, UserCheck, Plus, CheckCheck, Camera, Navigation, Bell, Smartphone, Share, PhoneCall,
   ShieldAlert,
 } from "lucide-react";
@@ -840,9 +840,9 @@ function WelcomeBullet({ Icon, title, body }) {
 
 /* ================================= Shell ================================== */
 const NAV = {
-  guide: [{ id: "post", label: "Feed", Icon: Newspaper }, { id: "jobs", label: "Jobs", Icon: Briefcase }, { id: "trips", label: "Trips", Icon: Map }, { id: "chats", label: "Messages", Icon: MessageSquare }, { id: "profile", label: "Profile", Icon: User }],
-  driver: [{ id: "post", label: "Feed", Icon: Newspaper }, { id: "jobs", label: "Jobs", Icon: Briefcase }, { id: "trips", label: "Trips", Icon: Map }, { id: "chats", label: "Messages", Icon: MessageSquare }, { id: "profile", label: "Profile", Icon: User }],
-  operator: [{ id: "discover", label: "Discover", Icon: Search }, { id: "requests", label: "Jobs", Icon: Briefcase }, { id: "trips", label: "Trips", Icon: Map }, { id: "chats", label: "Messages", Icon: MessageSquare }, { id: "feed", label: "Feed", Icon: Newspaper }],
+  guide: [{ id: "post", label: "Feed", Icon: Newspaper }, { id: "jobs", label: "Jobs", Icon: Briefcase }, { id: "trips", label: "Trips", Icon: MapIcon }, { id: "chats", label: "Messages", Icon: MessageSquare }, { id: "profile", label: "Profile", Icon: User }],
+  driver: [{ id: "post", label: "Feed", Icon: Newspaper }, { id: "jobs", label: "Jobs", Icon: Briefcase }, { id: "trips", label: "Trips", Icon: MapIcon }, { id: "chats", label: "Messages", Icon: MessageSquare }, { id: "profile", label: "Profile", Icon: User }],
+  operator: [{ id: "discover", label: "Discover", Icon: Search }, { id: "requests", label: "Jobs", Icon: Briefcase }, { id: "trips", label: "Trips", Icon: MapIcon }, { id: "chats", label: "Messages", Icon: MessageSquare }, { id: "feed", label: "Feed", Icon: Newspaper }],
   admin: [{ id: "review", label: "Review", Icon: ShieldCheck }, { id: "users", label: "Users", Icon: Users }, { id: "feed", label: "Feed", Icon: Newspaper }, { id: "discover", label: "Discover", Icon: Search }, { id: "chats", label: "Messages", Icon: MessageSquare }],
 };
 const DEFAULT_TAB = { guide: "post", driver: "post", operator: "discover", admin: "review" };
@@ -2679,7 +2679,7 @@ function MapCinema({ location, photo }) {
         {photo && showPhoto && (
           <>
             <button onClick={(e) => { e.stopPropagation(); setPhase(1); }} className="tap absolute right-2.5 top-2.5 w-8 h-8 rounded-full flex items-center justify-center" style={{ background: "rgba(0,0,0,.5)" }} aria-label="Show location on map">
-              <Map size={15} color="#fff" />
+              <MapIcon size={15} color="#fff" />
             </button>
             <div className="absolute right-2.5 bottom-2.5 w-7 h-7 rounded-full flex items-center justify-center pointer-events-none" style={{ background: "rgba(0,0,0,.45)" }}>
               <Maximize2 size={13} color="#fff" />
