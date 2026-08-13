@@ -72,6 +72,17 @@ function showDeviceNotification(title, body, tag) {
 }
 
 // wrap a Supabase write so failures are visible in the console instead of silent
+// Record admin actions for accountability. Never blocks the action itself.
+async function auditLog(actorId, action, targetId, detail) {
+  if (!CLOUD) return;
+  try {
+    await supabase.from("audit_log").insert({
+      actor_id: actorId, action, target_id: targetId || null,
+      detail: detail ? String(detail).slice(0, 500) : null,
+    });
+  } catch (e) { console.error("auditLog failed:", e); }
+}
+
 async function dbWrite(label, promise) {
   const { error } = await promise;
   if (error) console.error(`${label} failed:`, error.message);
@@ -401,11 +412,13 @@ export default function App() {
   };
   const approve = async (id) => {
     if (!CLOUD) { setPosts((p) => p.map((x) => (x.id === id ? { ...x, status: "approved", reason: null } : x))); return; }
+    auditLog(realUserRef.current, "post.approve", id);
     { const { error: _e } = await supabase.from("posts").update({ status: "approved", reject_reason: null }).eq("id", id); if (_e) console.error("posts.approve failed:", _e.message); }
     fetchPosts();
   };
   const reject = async (id, reason) => {
     if (!CLOUD) { setPosts((p) => p.map((x) => (x.id === id ? { ...x, status: "rejected", reason } : x))); return; }
+    auditLog(realUserRef.current, "post.reject", id, reason);
     { const { error: _e } = await supabase.from("posts").update({ status: "rejected", reject_reason: reason }).eq("id", id); if (_e) console.error("posts.reject failed:", _e.message); }
     fetchPosts();
   };
@@ -451,6 +464,7 @@ export default function App() {
     { const { error: _e } = await supabase.from("post_comments").delete().eq("id", id); if (_e) console.error("post_comments.delete failed:", _e.message); }
   };
   const deletePost = async (id) => {
+    auditLog(realUserRef.current, "post.delete", id);
     setPosts((P) => P.filter((p) => p.id !== id));
     setLikes((L) => L.filter((l) => l.post_id !== id));
     setComments((Cm) => Cm.filter((c) => c.post_id !== id));
@@ -988,7 +1002,7 @@ function Shell({ user, posts, jobs, trips, listings, actions, engagement, dm, di
             {tab === "requests" && <OperatorJobs user={user} jobs={jobs} listings={listings} posts={posts} actions={actions} eng={eng} onOpen={openProfile} />}
             {tab === "feed" && <Feed posts={posts} eng={eng} admin={user.kind === "admin"} onDelete={actions.deletePost} onOpenProfile={openProfile} following={myFollowing} />}
             {tab === "review" && <Review posts={posts} onApprove={actions.approve} onReject={actions.reject} eng={eng} />}
-            {tab === "users" && <AdminUsers onChanged={actions.reloadDirectory} />}
+            {tab === "users" && <AdminUsers onChanged={actions.reloadDirectory} currentAdminId={actorId} />}
           </div>
         )}
       </div>
@@ -1834,6 +1848,7 @@ function TalentProfile({ talent, posts, canRequest, self, contactOnly, eng, onRe
       )}
       {self && (
         <div className="px-5 mt-6"><div className="rounded-xl px-4 py-3 text-[13px] text-center" style={{ background: C.goldSoft, color: "#7a5a1e" }}>This is how operators see your profile.</div></div>
+        <div className="px-5 mt-4"><PrivacyPanel talent={t} /></div>
       )}
 
       {viewStories && myStories.length > 0 && (
@@ -2887,7 +2902,7 @@ function ProfileTabs({ cv, gallery, galleryCount }) {
 /* ============================ Admin · Users console ============================ */
 const SUPA_PROJECT_URL = "https://supabase.com/dashboard/project/nxnsdnayzimzfiwjrkvv";
 
-function AdminUsers({ onChanged }) {
+function AdminUsers({ onChanged, currentAdminId }) {
   const [rows, setRows] = useState(null);      // null = loading
   const [q, setQ] = useState("");
   const [filter, setFilter] = useState("all"); // all | submitted | verified | guide | driver | operator
@@ -2907,6 +2922,7 @@ function AdminUsers({ onChanged }) {
 
   const setStatus = async (id, status) => {
     setBusyId(id);
+    auditLog(currentAdminId, `licence.${status}`, id);
     const { error } = await supabase.from("profiles").update({ license_status: status }).eq("id", id);
     setBusyId(null);
     if (error) { flash("Update failed — check the admin policy is applied."); return; }
@@ -2917,6 +2933,7 @@ function AdminUsers({ onChanged }) {
 
   const removeUser = async (u) => {
     setBusyId(u.id);
+    auditLog(currentAdminId, "user.delete", u.id, u.email);
     // remove their content first so nothing is orphaned, then the profile
     { const { error: _e } = await supabase.from("post_comments").delete().eq("author_id", u.id); if (_e) console.error("post_comments.adminPurge failed:", _e.message); }
     await supabase.from("post_likes").delete().eq("liker_id", u.id);
@@ -3159,7 +3176,17 @@ function Onboard({ mode: initialMode, session, onBack, onDone }) {
     if (prof) onDone(); else { setUid(data.session.user.id); setStep("role"); }
   };
 
+  const pwStrength = (p) => {
+    if (!p || p.length < 8) return { ok: false, msg: "At least 8 characters." };
+    if (!/[0-9]/.test(p)) return { ok: false, msg: "Include at least one number." };
+    if (!/[a-zA-Z]/.test(p)) return { ok: false, msg: "Include at least one letter." };
+    if (/^(123456|password|12345678|qwerty|abc123)/i.test(p)) return { ok: false, msg: "That password is too common." };
+    return { ok: true, msg: "Strong enough." };
+  };
+
   const savePassword = async () => {
+    const st = pwStrength(pw);
+    if (!st.ok) { setErr(st.msg); return; }
     if (pw !== pw2) { setErr("The two passwords don't match."); return; }
     setBusy(true); setErr(null);
     const { error } = await supabase.auth.updateUser({ password: pw });
@@ -3475,12 +3502,12 @@ function Onboard({ mode: initialMode, session, onBack, onDone }) {
                   placeholder="Type it again" className="w-full pl-11 pr-4 rounded-2xl text-[16px]"
                   style={{ height: 52, background: C.card, border: `1px solid ${pw2 && pw !== pw2 ? C.maroon : C.line}`, color: C.ink }} />
               </div>
-              <p className="text-[12.5px] mb-4" style={{ color: pw.length >= 6 && pw === pw2 ? C.pine : C.muted }}>
-                {pw.length < 6 ? "6 characters or more." : pw2 && pw !== pw2 ? "Passwords don't match yet." : pw === pw2 && pw2 ? "Good to go." : "Type it again to confirm."}
+              <p className="text-[12.5px] mb-4" style={{ color: pwStrength(pw).ok && pw === pw2 ? C.pine : C.muted }}>
+                {!pwStrength(pw).ok ? pwStrength(pw).msg : pw2 && pw !== pw2 ? "Passwords don't match yet." : pw === pw2 && pw2 ? "Strong enough." : "Type it again to confirm."}
               </p>
 
               {err && <p className="text-[13px] mb-3" style={{ color: C.maroon }}>{err}</p>}
-              <OCta disabled={pw.length < 6 || pw !== pw2} busy={busy} onClick={savePassword}>{reset ? "Save new password" : "Continue"}</OCta>
+              <OCta disabled={!pwStrength(pw).ok || pw !== pw2} busy={busy} onClick={savePassword}>{reset ? "Save new password" : "Continue"}</OCta>
             </>
           )}
         </div>
@@ -4693,4 +4720,156 @@ function Tutorial({ user, nav, setTab, onDone }) {
       </div>
     </div>
   ), document.body);
+}
+
+/* ==================== Privacy, data rights & policy ===================== */
+function PrivacyPanel({ talent }) {
+  const [open, setOpen] = useState(null);   // 'privacy' | 'terms' | 'data' | null
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState(null);
+
+  const exportMyData = async () => {
+    setBusy(true);
+    try {
+      const me = talent.id;
+      const [prof, posts, dms, follows, stories] = await Promise.all([
+        supabase.from("profiles").select("*").eq("id", me).maybeSingle(),
+        supabase.from("posts").select("*").eq("talent_id", me),
+        supabase.from("direct_messages").select("*").or(`sender_id.eq.${me},recipient_id.eq.${me}`),
+        supabase.from("follows").select("*").or(`follower_id.eq.${me},following_id.eq.${me}`),
+        supabase.from("stories").select("*").eq("author_id", me),
+      ]);
+      const bundle = {
+        exported_at: new Date().toISOString(),
+        note: "Your data from Bhutan Tourism Hub. Licence documents are not included — request those from support.",
+        profile: prof.data || null,
+        posts: posts.data || [],
+        messages: dms.data || [],
+        follows: follows.data || [],
+        stories: stories.data || [],
+      };
+      const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = `my-data-${new Date().toISOString().slice(0,10)}.json`;
+      document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+      setNote("Downloaded to your device.");
+    } catch (e) {
+      console.error("export failed:", e);
+      setNote("Couldn't export right now — try again.");
+    }
+    setBusy(false);
+    setTimeout(() => setNote(null), 4000);
+  };
+
+  const requestDeletion = () => {
+    const subject = encodeURIComponent("Account deletion request");
+    const body = encodeURIComponent(
+      `I would like my account and all my data deleted from Bhutan Tourism Hub.\n\nName: ${talent.name}\nEmail: ${talent.email || ""}\n`
+    );
+    window.location.href = `mailto:support@bhutantourismhub.com?subject=${subject}&body=${body}`;
+  };
+
+  const Sheet = ({ title, children }) => createPortal((
+    <div className="fixed inset-0 flex items-end" style={{ background: "rgba(8,10,8,.55)", zIndex: 230 }} onClick={() => setOpen(null)}>
+      <div className="w-full rounded-t-3xl flex flex-col safe-bottom" style={{ background: C.card, maxHeight: "86dvh" }} onClick={(e) => e.stopPropagation()}>
+        <div className="p-5 pb-2 shrink-0">
+          <div className="w-10 h-1 rounded-full mx-auto mb-4" style={{ background: C.line }} />
+          <div className="text-[17px] font-semibold" style={{ color: C.ink }}>{title}</div>
+        </div>
+        <div className="flex-1 overflow-y-auto hidescroll px-5 pb-6" style={{ scrollbarWidth: "none" }}>{children}</div>
+      </div>
+    </div>
+  ), document.body);
+
+  const P = ({ children }) => <p className="text-[13.5px] leading-relaxed mb-3" style={{ color: C.muted }}>{children}</p>;
+  const H = ({ children }) => <div className="text-[14px] font-semibold mt-4 mb-1.5" style={{ color: C.ink }}>{children}</div>;
+
+  return (
+    <div className="rounded-2xl overflow-hidden" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+      <div className="px-4 pt-3.5 pb-1 flex items-center gap-2">
+        <ShieldCheck size={16} color={C.gold} />
+        <span className="text-[13.5px] font-semibold" style={{ color: C.ink }}>Privacy & your data</span>
+      </div>
+
+      {note && <div className="mx-4 mb-2 rounded-lg px-3 py-2 text-[12.5px]" style={{ background: C.pineSoft, color: C.pine }}>{note}</div>}
+
+      {[
+        ["Privacy policy", () => setOpen("privacy")],
+        ["Terms of use", () => setOpen("terms")],
+        ["What we store about you", () => setOpen("data")],
+        [busy ? "Preparing…" : "Download my data", exportMyData],
+        ["Request account deletion", requestDeletion],
+      ].map(([label, fn], i) => (
+        <button key={label} onClick={fn} disabled={busy}
+          className="tap w-full text-left px-4 py-3 flex items-center justify-between"
+          style={{ borderTop: `1px solid ${C.lineSoft}` }}>
+          <span className="text-[13.5px]" style={{ color: i === 4 ? C.maroon : C.ink }}>{label}</span>
+          <ChevronLeft size={16} color={C.muted} style={{ transform: "rotate(180deg)" }} />
+        </button>
+      ))}
+
+      {open === "privacy" && (
+        <Sheet title="Privacy policy">
+          <P>Last updated: August 2026. Bhutan Tourism Hub is operated by Expo Bhutan.</P>
+          <H>What we collect</H>
+          <P>Your name, email address, phone number, home base, role, years of experience, specialities, languages, and the licence document you upload. We also store what you post, your messages, and who you follow.</P>
+          <H>Why we collect it</H>
+          <P>To verify that you are a licensed professional, to let tour operators find and book you, and to run the platform. We do not sell your data or share it with advertisers.</P>
+          <H>Who can see what</H>
+          <P>Your profile, specialities, languages, approved posts and trip record are visible to other users of the platform. Your phone number and email are shown so operators can contact you for work. Your licence document is private — only you and our verification team can see it. Your direct messages are private to you and the person you are messaging.</P>
+          <H>Where it is stored</H>
+          <P>On Supabase servers, encrypted in transit and at rest. Email is sent through Resend. The site is served over HTTPS by Cloudflare.</P>
+          <H>How long we keep it</H>
+          <P>Your profile and posts remain until you ask us to delete them. Stories are deleted automatically after 24 hours. Trip chats are cleared after a trip ends.</P>
+          <H>Your rights</H>
+          <P>You may download everything we hold about you at any time using "Download my data" above, correct anything on your profile, or request full deletion. We will action a deletion request within 30 days.</P>
+          <H>Contact</H>
+          <P>support@bhutantourismhub.com</P>
+        </Sheet>
+      )}
+
+      {open === "terms" && (
+        <Sheet title="Terms of use">
+          <H>Who may use this platform</H>
+          <P>Bhutan Tourism Hub is for licensed guides, licensed drivers, and licensed tour operators working in Bhutan. You must hold a valid licence issued by the Department of Tourism or the Road Safety and Transport Authority, as applicable to your role.</P>
+          <H>Honest representation</H>
+          <P>You must provide accurate information about your licence, experience, skills and availability. Submitting a false or altered licence document will result in permanent removal, and may be reported to the relevant authority.</P>
+          <H>Conduct</H>
+          <P>Treat other members professionally. Do not post content that is misleading, offensive, or that infringes someone else's rights. Do not use another person's account.</P>
+          <H>Bookings and payment</H>
+          <P>Bhutan Tourism Hub connects professionals with operators. Any agreement, payment or contract for work is between you and the other party. We are not a party to it and do not process payments.</P>
+          <H>Verification</H>
+          <P>A Verified badge means our team has reviewed the licence document you submitted. It is not a guarantee of the quality of anyone's work, and it does not replace your own due diligence.</P>
+          <H>This is an early version</H>
+          <P>The platform is under active development. Features may change and occasional issues may occur. We will tell you about anything that materially affects you.</P>
+          <H>Ending your account</H>
+          <P>You may request deletion at any time. We may suspend an account that breaches these terms.</P>
+        </Sheet>
+      )}
+
+      {open === "data" && (
+        <Sheet title="What we store about you">
+          <div className="rounded-xl p-3.5 mb-3" style={{ background: C.bg, border: `1px solid ${C.line}` }}>
+            <div className="text-[12.5px] font-semibold mb-2" style={{ color: C.ink }}>Visible to other users</div>
+            {["Name and role", "Home base", "Specialities and languages", "Years of experience", "Approved posts and photos", "Trip record and reviews", "Availability status", "Phone number and email (so operators can contact you)"].map((x) => (
+              <div key={x} className="flex items-start gap-2 mb-1">
+                <Eye size={12} color={C.muted} className="shrink-0 mt-1" />
+                <span className="text-[12.5px]" style={{ color: C.muted }}>{x}</span>
+              </div>
+            ))}
+          </div>
+          <div className="rounded-xl p-3.5" style={{ background: C.pineSoft }}>
+            <div className="text-[12.5px] font-semibold mb-2" style={{ color: C.pine }}>Private — never shown to other users</div>
+            {["Your licence document", "Your direct messages", "Your password", "Your login history"].map((x) => (
+              <div key={x} className="flex items-start gap-2 mb-1">
+                <Lock size={12} color={C.pine} className="shrink-0 mt-1" />
+                <span className="text-[12.5px]" style={{ color: C.pine }}>{x}</span>
+              </div>
+            ))}
+          </div>
+        </Sheet>
+      )}
+    </div>
+  );
 }
