@@ -78,6 +78,13 @@ const sysMsg = (text) => ({ id: uid(), senderId: null, kind: "system", body: tex
 /* ── Cloud (Supabase) ── posts are global when configured; everything falls back to local demo mode when not. */
 const CLOUD = Boolean(supabase);
 
+// wrap a Supabase write so failures are visible in the console instead of silent
+async function dbWrite(label, promise) {
+  const { error } = await promise;
+  if (error) console.error(`${label} failed:`, error.message);
+  return !error;
+}
+
 async function shrinkImage(dataUri, maxW = 1280, quality = 0.82) {
   try {
     const img = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = dataUri; });
@@ -113,7 +120,6 @@ const rowToPost = (r) => ({
 const ACTOR_FALLBACK = { a_operator: { name: "Druk Journeys", initials: "DJ" }, a_admin: { name: "Admin", initials: "A" } };
 const actorName = (id) => talentById(id)?.name || ACTOR_FALLBACK[id]?.name || "Member";
 const actorInitials = (id) => talentById(id)?.initials || ACTOR_FALLBACK[id]?.initials || "?";
-
 
 const SEED_POSTS = [
   { id: uid(), talentId: "t_karma", text: "Clear skies over Jomolhari this morning — the whole group made base camp before the clouds rolled in.", media: null, location: { lat: 27.83, lng: 89.27, place: "Jomolhari" }, status: "approved", reason: null, createdAt: Date.now() - 5 * HOUR },
@@ -230,7 +236,7 @@ export default function App() {
       } catch (e) { return; }
     }
     if (!url) return;
-    await supabase.from("stories").insert({ author_id: me, kind, media_url: url, media_path: path, caption: caption || null });
+    await dbWrite("stories.insert", supabase.from("stories").insert({ author_id: me, kind, media_url: url, media_path: path, caption: caption || null }));
     fetchStories();
   };
 
@@ -261,18 +267,18 @@ export default function App() {
     setFollows((F) => (already ? F.filter((f) => !(f.follower === me && f.following === targetId)) : [...F, { follower: me, following: targetId }]));
     if (!CLOUD) return;
     if (already) await supabase.from("follows").delete().eq("follower_id", me).eq("following_id", targetId);
-    else await supabase.from("follows").insert({ follower_id: me, following_id: targetId });
+    else await dbWrite("follows.insert", supabase.from("follows").insert({ follower_id: me, following_id: targetId }));
     fetchFollows();
   };
 
   const setAvailability = async (status, from, note) => {
     const me = realUserRef.current;
     if (!CLOUD || !me) return;
-    await supabase.from("profiles").update({
+    await dbWrite("profiles.availability", supabase.from("profiles").update({
       availability: status,
       available_from: from || null,
       availability_note: note || null,
-    }).eq("id", me);
+    }).eq("id", me));
     reloadMe();
   };
 
@@ -610,10 +616,10 @@ export default function App() {
         if (!error) photoUrl = supabase.storage.from("post-media").getPublicUrl(path).data.publicUrl;
       } catch (e) {}
     }
-    await supabase.from("trip_messages").insert({
+    await dbWrite("trip_messages.insert", supabase.from("trip_messages").insert({
       trip_id: tripId, sender_id: msg.senderId, kind: msg.kind,
       body: msg.kind === "text" ? msg.body : null, photo_url: photoUrl,
-    });
+    }));
     fetchTrips();
   };
   const openChat = async (tripId) => {
@@ -806,6 +812,10 @@ function Shell({ user, posts, jobs, trips, listings, actions, engagement, dm, on
   const [searchTerm, setSearchTerm] = useState("");
   const [alertsOpen, setAlertsOpen] = useState(false);
 
+  const nav = NAV[user.kind];
+  const actorId = user.talentId || (user.kind === "operator" ? "a_operator" : "a_admin");
+  const eng = { ...engagement, me: actorId, isAdmin: user.kind === "admin", sharePostTo: dm?.sharePostTo };
+
   const alertItems = useMemo(() => {
     const out = [];
     (dm?.dms || []).filter((m) => m.to === actorId && !m.read).forEach((m) =>
@@ -824,9 +834,6 @@ function Shell({ user, posts, jobs, trips, listings, actions, engagement, dm, on
       out.push({ id: `job-${j.id}`, kind: "job", who: j.operatorId, text: j.title, ts: j.createdAt }));
     return out.sort((a, b) => b.ts - a.ts).slice(0, 40);
   }, [dm?.dms, engagement?.likes, engagement?.comments, engagement?.follows, jobs, posts, actorId]);
-  const nav = NAV[user.kind];
-  const actorId = user.talentId || (user.kind === "operator" ? "a_operator" : "a_admin");
-  const eng = { ...engagement, me: actorId, isAdmin: user.kind === "admin", sharePostTo: dm?.sharePostTo };
   const myFollowing = (engagement?.follows || []).filter((f) => f.follower === actorId).map((f) => f.following);
   const unreadDm = (dm?.dms || []).filter((m) => m.to === actorId && !m.read).length;
 
