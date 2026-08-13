@@ -116,7 +116,7 @@ async function uploadPostMedia(talentId, media) {
 
 const rowToPost = (r) => ({
   id: r.id, talentId: r.talent_id, text: r.body || "",
-  media: r.media_url ? { kind: r.media_kind || "photo", dataUri: r.media_url, slides: r.media_slides || null } : null,
+  media: r.media_url ? { kind: r.media_kind || "photo", dataUri: r.media_url, slides: r.media_slides || null, ratio: r.media_ratio || null } : null,
   location: r.lat != null ? { lat: r.lat, lng: r.lng, place: r.place, description: r.loc_desc, source: r.loc_source, altitude: r.loc_altitude ?? null, bearing: r.loc_bearing ?? null, takenOn: r.loc_taken_on ?? null } : null,
   status: r.status, reason: r.reject_reason, createdAt: new Date(r.created_at).getTime(),
 });
@@ -416,7 +416,7 @@ export default function App() {
     const { error: postErr } = await supabase.from("posts").insert({
       talent_id: talentId, body: text || null,
       media_url: up.media_url, media_kind: up.media_kind,
-      media_slides: slideUrls.length > 1 ? slideUrls : null,
+      media_slides: slideUrls.length > 1 ? slideUrls : null, media_ratio: media?.ratio || null,
       lat: location?.lat ?? null, lng: location?.lng ?? null,
       place: location?.place ?? null, loc_desc: location?.description ?? null, loc_source: location?.source ?? null,
       loc_altitude: location?.altitude ?? null, loc_bearing: location?.bearing ?? null, loc_taken_on: location?.takenOn ?? null,
@@ -1252,7 +1252,8 @@ function PostTab({ user, posts, onAdd, eng, onOpenProfile }) {
 
 function Composer({ talent, onAdd }) {
   const [text, setText] = useState("");
-  const [media, setMedia] = useState(null);       // { kind:'photo'|'video', dataUri }
+  const [media, setMedia] = useState(null);       // { kind:'photo'|'video', dataUri, slides, ratio }
+  const [cropping, setCropping] = useState(null);  // slides currently being reframed
   const [location, setLocation] = useState(null); // { lat, lng, place, description?, source? }
   const [picking, setPicking] = useState(false);
   const [manual, setManual] = useState(false);
@@ -1289,7 +1290,8 @@ function Composer({ talent, onAdd }) {
       r.readAsDataURL(f);
     }))).then((uris) => {
       const slides = [...existing, ...uris];
-      setMedia({ kind: "photo", dataUri: slides[0], slides });
+      setMedia({ kind: "photo", dataUri: slides[0], slides, ratio: media?.ratio || "4 / 5" });
+      setCropping(slides);
       // read location from the first photo only
       if (!existing.length) readExifGps(imgs[0]).then((gps) => {
         if (gps && gps.lat != null) {
@@ -1362,12 +1364,27 @@ function Composer({ talent, onAdd }) {
                   <span className="text-[10.5px] mt-1" style={{ color: C.muted }}>Add more</span>
                 </button>
               </div>
-              {(media.slides || []).length > 1 && (
-                <p className="text-[11.5px] mt-1.5" style={{ color: C.muted }}>{media.slides.length} photos · swipe through them in the post</p>
-              )}
+              <div className="flex items-center justify-between mt-2">
+                <button onClick={() => setCropping(media.slides || [media.dataUri])}
+                  className="tap inline-flex items-center gap-1.5 text-[12.5px] font-semibold" style={{ color: C.pine }}>
+                  <Maximize2 size={13} /> Reframe · {RATIOS.find((r) => r.id === (media.ratio || "4 / 5"))?.label}
+                </button>
+                {(media.slides || []).length > 1 && (
+                  <span className="text-[11.5px]" style={{ color: C.muted }}>{media.slides.length} photos</span>
+                )}
+              </div>
             </>
           )}
         </div>
+      )}
+
+      {cropping && (
+        <CropEditor slides={cropping} initialRatio={media?.ratio || "4 / 5"}
+          onClose={() => setCropping(null)}
+          onDone={(cropped, ratio) => {
+            setMedia({ kind: "photo", dataUri: cropped[0], slides: cropped, ratio });
+            setCropping(null);
+          }} />
       )}
 
       {note && <div className="mt-2 inline-flex items-center gap-1.5 text-[12.5px] font-medium rounded-full px-2.5 py-1" style={{ background: C.pineSoft, color: C.pine }}><MapPin size={12} color={C.pine} /> {note}</div>}
@@ -5092,6 +5109,7 @@ function MediaCarousel({ media, rounded }) {
 
   const slides = media.slides && media.slides.length ? media.slides : [media.dataUri];
   const many = slides.length > 1;
+  const ratio = media.ratio || "4 / 5";   // one shape for the whole post, Instagram-style
 
   const onStart = (e) => { startX.current = (e.touches ? e.touches[0] : e).clientX; };
   const onEnd = (e) => {
@@ -5105,11 +5123,11 @@ function MediaCarousel({ media, rounded }) {
   return (
     <div className="relative w-full overflow-hidden" style={{ background: C.bg, borderRadius: rounded ? 12 : 0 }}
       onTouchStart={onStart} onTouchEnd={onEnd}>
-      <div className="flex" style={{ transform: `translateX(-${i * 100}%)`, transition: "transform .3s cubic-bezier(.22,.61,.36,1)" }}>
+      <div className="flex" style={{ transform: `translateX(-${i * 100}%)`, transition: "transform .34s cubic-bezier(.22,.61,.36,1)" }}>
         {slides.map((src, k) => (
-          <div key={k} className="shrink-0 w-full flex items-center justify-center" style={{ maxHeight: "62dvh" }}>
-            <img src={src} alt="" loading={k === 0 ? "eager" : "lazy"} decoding="async" className="block w-full"
-              style={{ maxHeight: "62dvh", objectFit: "contain" }} />
+          <div key={k} className="shrink-0 w-full relative overflow-hidden" style={{ aspectRatio: ratio, background: C.bg }}>
+            <img src={src} alt="" loading={k === 0 ? "eager" : "lazy"} decoding="async"
+              className="absolute inset-0 w-full h-full" style={{ objectFit: "cover" }} />
           </div>
         ))}
       </div>
@@ -5145,4 +5163,156 @@ function MediaCarousel({ media, rounded }) {
       )}
     </div>
   );
+}
+
+/* ======================= Crop & reframe (Instagram-style) ================= */
+const RATIOS = [
+  { id: "1 / 1",  label: "Square",    w: 1,    h: 1,    hint: "1:1" },
+  { id: "4 / 5",  label: "Portrait",  w: 4,    h: 5,    hint: "4:5" },
+  { id: "16 / 9", label: "Landscape", w: 16,   h: 9,    hint: "16:9" },
+];
+
+function CropEditor({ slides, initialRatio, onDone, onClose }) {
+  const [ratio, setRatio] = useState(initialRatio || "4 / 5");
+  const [idx, setIdx] = useState(0);
+  const [frames, setFrames] = useState(() => slides.map(() => ({ zoom: 1, x: 0, y: 0 })));
+  const [busy, setBusy] = useState(false);
+  const boxRef = useRef(null);
+  const drag = useRef(null);
+  const pinch = useRef(null);
+
+  const f = frames[idx] || { zoom: 1, x: 0, y: 0 };
+  const setF = (patch) => setFrames((F) => F.map((v, i) => (i === idx ? { ...v, ...patch } : v)));
+
+  const onStart = (e) => {
+    if (e.touches && e.touches.length === 2) {
+      const [a, b] = e.touches;
+      pinch.current = { d: Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY), zoom: f.zoom };
+      return;
+    }
+    const t = e.touches ? e.touches[0] : e;
+    drag.current = { sx: t.clientX, sy: t.clientY, ox: f.x, oy: f.y };
+  };
+  const onMove = (e) => {
+    if (e.touches && e.touches.length === 2 && pinch.current) {
+      const [a, b] = e.touches;
+      const d = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+      setF({ zoom: Math.min(4, Math.max(1, pinch.current.zoom * (d / pinch.current.d))) });
+      return;
+    }
+    if (!drag.current) return;
+    const t = e.touches ? e.touches[0] : e;
+    const r = boxRef.current?.getBoundingClientRect();
+    if (!r) return;
+    const lim = ((f.zoom - 1) / 2) * 100;
+    const nx = drag.current.ox + ((t.clientX - drag.current.sx) / r.width) * 100;
+    const ny = drag.current.oy + ((t.clientY - drag.current.sy) / r.height) * 100;
+    setF({ x: Math.max(-lim, Math.min(lim, nx)), y: Math.max(-lim, Math.min(lim, ny)) });
+  };
+  const onEnd = () => { drag.current = null; pinch.current = null; };
+
+  // render each photo into the chosen frame, at the chosen position
+  const apply = async () => {
+    setBusy(true);
+    const [rw, rh] = ratio.split("/").map((v) => parseFloat(v.trim()));
+    const outW = 1280;
+    const outH = Math.round((outW * rh) / rw);
+
+    const done = [];
+    for (let i = 0; i < slides.length; i++) {
+      const fr = frames[i] || { zoom: 1, x: 0, y: 0 };
+      const img = await new Promise((res, rej) => {
+        const im = new Image();
+        im.onload = () => res(im);
+        im.onerror = rej;
+        im.src = slides[i];
+      });
+      const cv = document.createElement("canvas");
+      cv.width = outW; cv.height = outH;
+      const ctx = cv.getContext("2d");
+      ctx.fillStyle = "#F4F5F1";
+      ctx.fillRect(0, 0, outW, outH);
+
+      // cover the frame, then apply the user's zoom and offset
+      const scale = Math.max(outW / img.width, outH / img.height) * fr.zoom;
+      const dw = img.width * scale, dh = img.height * scale;
+      const dx = (outW - dw) / 2 + (fr.x / 100) * outW;
+      const dy = (outH - dh) / 2 + (fr.y / 100) * outH;
+      ctx.imageSmoothingQuality = "high";
+      ctx.drawImage(img, dx, dy, dw, dh);
+      done.push(cv.toDataURL("image/jpeg", 0.88));
+    }
+    setBusy(false);
+    onDone(done, ratio);
+  };
+
+  return createPortal((
+    <div className="fixed inset-0 flex flex-col" style={{ background: "#0b0d0b", zIndex: 240, height: "100dvh" }}>
+      <div className="shrink-0 h-14 px-3 flex items-center justify-between" style={{ borderBottom: "1px solid rgba(255,255,255,.12)" }}>
+        <button onClick={onClose} className="tap w-9 h-9 rounded-full flex items-center justify-center" style={{ background: "rgba(255,255,255,.12)" }}>
+          <X size={18} color="#fff" />
+        </button>
+        <span className="text-[15px] font-semibold text-white">Reframe</span>
+        <button onClick={apply} disabled={busy} className="tap h-9 px-4 rounded-full text-[14px] font-semibold" style={{ background: C.gold, color: "#fff" }}>
+          {busy ? <Loader2 size={16} className="animate-spin" /> : "Done"}
+        </button>
+      </div>
+
+      <div className="flex-1 flex items-center justify-center px-4">
+        <div ref={boxRef}
+          onTouchStart={onStart} onTouchMove={onMove} onTouchEnd={onEnd}
+          onMouseDown={onStart} onMouseMove={onMove} onMouseUp={onEnd} onMouseLeave={onEnd}
+          className="relative w-full overflow-hidden rounded-xl"
+          style={{ aspectRatio: ratio, background: "#000", touchAction: "none", maxHeight: "56dvh", cursor: "grab" }}>
+          <img src={slides[idx]} alt="" draggable="false" className="absolute inset-0 w-full h-full"
+            style={{ objectFit: "cover", transform: `translate(${f.x}%, ${f.y}%) scale(${f.zoom})`, transition: drag.current || pinch.current ? "none" : "transform .15s" }} />
+          {/* rule-of-thirds guides */}
+          <div className="absolute inset-0 pointer-events-none" style={{ opacity: .35 }}>
+            <div className="absolute" style={{ left: "33.33%", top: 0, bottom: 0, width: 1, background: "#fff" }} />
+            <div className="absolute" style={{ left: "66.66%", top: 0, bottom: 0, width: 1, background: "#fff" }} />
+            <div className="absolute" style={{ top: "33.33%", left: 0, right: 0, height: 1, background: "#fff" }} />
+            <div className="absolute" style={{ top: "66.66%", left: 0, right: 0, height: 1, background: "#fff" }} />
+          </div>
+        </div>
+      </div>
+
+      <div className="shrink-0 px-4 pb-4 safe-bottom">
+        {/* zoom slider */}
+        <div className="flex items-center gap-3 mb-3">
+          <span className="text-[11px] text-white opacity-60">1×</span>
+          <input type="range" min="1" max="4" step="0.01" value={f.zoom}
+            onChange={(e) => setF({ zoom: parseFloat(e.target.value) })}
+            className="flex-1" style={{ accentColor: C.gold }} />
+          <span className="text-[11px] text-white opacity-60">4×</span>
+        </div>
+
+        {/* shape picker — applies to every photo in the post */}
+        <div className="flex gap-2 mb-3">
+          {RATIOS.map((r) => (
+            <button key={r.id} onClick={() => setRatio(r.id)}
+              className="tap flex-1 h-11 rounded-xl text-[13px] font-semibold flex flex-col items-center justify-center"
+              style={{ background: ratio === r.id ? C.gold : "rgba(255,255,255,.12)", color: "#fff" }}>
+              {r.label}
+              <span className="text-[10px] opacity-70">{r.hint}</span>
+            </button>
+          ))}
+        </div>
+
+        {slides.length > 1 && (
+          <div className="flex gap-2 overflow-x-auto hidescroll" style={{ scrollbarWidth: "none" }}>
+            {slides.map((src, k) => (
+              <button key={k} onClick={() => setIdx(k)} className="tap relative shrink-0 rounded-lg overflow-hidden"
+                style={{ width: 56, height: 56, border: k === idx ? `2.5px solid ${C.gold}` : "2.5px solid transparent", opacity: k === idx ? 1 : .55 }}>
+                <img src={src} alt="" className="w-full h-full" style={{ objectFit: "cover" }} />
+              </button>
+            ))}
+          </div>
+        )}
+
+        <p className="text-center text-[11.5px] mt-2.5" style={{ color: "rgba(255,255,255,.55)" }}>
+          Drag to reposition · pinch or slide to zoom{slides.length > 1 ? " · tap a photo to reframe it" : ""}
+        </p>
+      </div>
+    </div>
+  ), document.body);
 }
