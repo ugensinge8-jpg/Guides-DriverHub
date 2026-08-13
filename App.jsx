@@ -116,8 +116,8 @@ async function uploadPostMedia(talentId, media) {
 
 const rowToPost = (r) => ({
   id: r.id, talentId: r.talent_id, text: r.body || "",
-  media: r.media_url ? { kind: r.media_kind || "photo", dataUri: r.media_url } : null,
-  location: r.lat != null ? { lat: r.lat, lng: r.lng, place: r.place, description: r.loc_desc, source: r.loc_source } : null,
+  media: r.media_url ? { kind: r.media_kind || "photo", dataUri: r.media_url, slides: r.media_slides || null } : null,
+  location: r.lat != null ? { lat: r.lat, lng: r.lng, place: r.place, description: r.loc_desc, source: r.loc_source, altitude: r.loc_altitude ?? null, bearing: r.loc_bearing ?? null, takenOn: r.loc_taken_on ?? null } : null,
   status: r.status, reason: r.reject_reason, createdAt: new Date(r.created_at).getTime(),
 });
 
@@ -400,12 +400,26 @@ export default function App() {
       setPosts((p) => [{ id: uid(), talentId, text, media: media || null, location: location || null, status: "pending", reason: null, createdAt: Date.now() }, ...p]);
       return;
     }
-    const up = media ? await uploadPostMedia(talentId, media) : { media_url: null, media_kind: null };
+    let up = { media_url: null, media_kind: null };
+    let slideUrls = [];
+    if (media) {
+      if (media.kind === "photo" && media.slides && media.slides.length > 1) {
+        for (const slide of media.slides) {
+          const r = await uploadPostMedia(talentId, { kind: "photo", dataUri: slide });
+          if (r.media_url) slideUrls.push(r.media_url);
+        }
+        up = { media_url: slideUrls[0] || null, media_kind: "photo" };
+      } else {
+        up = await uploadPostMedia(talentId, media);
+      }
+    }
     const { error: postErr } = await supabase.from("posts").insert({
       talent_id: talentId, body: text || null,
       media_url: up.media_url, media_kind: up.media_kind,
+      media_slides: slideUrls.length > 1 ? slideUrls : null,
       lat: location?.lat ?? null, lng: location?.lng ?? null,
       place: location?.place ?? null, loc_desc: location?.description ?? null, loc_source: location?.source ?? null,
+      loc_altitude: location?.altitude ?? null, loc_bearing: location?.bearing ?? null, loc_taken_on: location?.takenOn ?? null,
     });
     if (postErr) console.error("posts.insert failed:", postErr.message);
     fetchPosts();
@@ -1149,24 +1163,12 @@ function StatusBadge({ status, reason }) {
   );
 }
 function PostMedia({ media }) {
-  const [full, setFull] = useState(false);
   if (!media) return null;
   return (
     <>
-      <div className="relative rounded-xl overflow-hidden mt-3" style={{ border: `1px solid ${C.line}`, aspectRatio: "1 / 1", background: media.kind === "video" ? "#0c0e0c" : C.bg }}>
-        {media.kind === "video" ? (
-          <video src={media.dataUri} controls playsInline className="absolute inset-0 w-full h-full" style={{ objectFit: "contain" }} />
-        ) : (
-          <button onClick={() => setFull(true)} className="absolute inset-0 w-full h-full" aria-label="View photo full size">
-            <img src={media.dataUri} alt="" className="absolute inset-0 w-full h-full" style={{ objectFit: "cover" }} />
-            <span className="absolute right-2.5 bottom-2.5 w-7 h-7 rounded-full flex items-center justify-center" style={{ background: "rgba(0,0,0,.45)" }}>
-              <Maximize2 size={13} color="#fff" />
-            </span>
-          </button>
-        )}
+      <div className="mt-3 rounded-xl overflow-hidden" style={{ border: `1px solid ${C.line}` }}>
+        <MediaCarousel media={media} />
       </div>
-      {full && media.kind !== "video" && <Lightbox src={media.dataUri} onClose={() => setFull(false)} />}
-    </>
   );
 }
 
@@ -1261,17 +1263,46 @@ function Composer({ talent, onAdd }) {
   const flash = (m) => { setNote(m); setTimeout(() => setNote(null), 3200); };
 
   const pick = (e) => {
-    const f = e.target.files?.[0]; e.target.value = "";
-    if (!f) return;
-    const isImage = f.type.startsWith("image/");
-    const isVideo = f.type.startsWith("video/");
-    if (!isImage && !isVideo) return setError("Upload a photo or a video.");
-    if (isImage && f.size > 6 * 1024 * 1024) return setError("That image is over 6 MB — pick a smaller one.");
-    if (isVideo && f.size > 25 * 1024 * 1024) return setError("That video is over 25 MB — trim it or pick a shorter clip.");
+    const files = Array.from(e.target.files || []); e.target.value = "";
+    if (!files.length) return;
+    const existing = media && media.kind === "photo" ? (media.slides || [media.dataUri]) : [];
+    if (files.length + existing.length > 10) return setError("Up to 10 photos per post.");
+
+    const vid = files.find((f) => f.type.startsWith("video/"));
+    if (vid) {
+      if (vid.size > 25 * 1024 * 1024) return setError("That video is over 25 MB — trim it or pick a shorter clip.");
+      setError(null);
+      const r = new FileReader();
+      r.onload = () => setMedia({ kind: "video", dataUri: r.result });
+      r.readAsDataURL(vid);
+      return;
+    }
+
+    const imgs = files.filter((f) => f.type.startsWith("image/"));
+    if (!imgs.length) return setError("Upload photos or a video.");
+    if (imgs.some((f) => f.size > 6 * 1024 * 1024)) return setError("Each photo must be under 6 MB.");
     setError(null);
-    const r = new FileReader();
-    r.onload = () => setMedia({ kind: isVideo ? "video" : "photo", dataUri: r.result });
-    r.readAsDataURL(f);
+
+    Promise.all(imgs.map((f) => new Promise((res) => {
+      const r = new FileReader();
+      r.onload = () => res(r.result);
+      r.readAsDataURL(f);
+    }))).then((uris) => {
+      const slides = [...existing, ...uris];
+      setMedia({ kind: "photo", dataUri: slides[0], slides });
+      // read location from the first photo only
+      if (!existing.length) readExifGps(imgs[0]).then((gps) => {
+        if (gps && gps.lat != null) {
+          setLocation({
+            lat: gps.lat, lng: gps.lng, place: nearestPlace(gps.lat, gps.lng), source: "photo",
+            altitude: gps.altitude ?? null, bearing: gps.bearing ?? null, takenOn: gps.takenOn ?? null,
+          });
+          const bits = ["Location read from the photo"];
+          if (gps.altitude != null) bits.push(`${gps.altitude}m`);
+          flash(bits.join(" · "));
+        }
+      });
+    });
     if (isImage) {
       readExifGps(f).then((gps) => {
         if (gps && gps.lat != null) {
@@ -1302,11 +1333,40 @@ function Composer({ talent, onAdd }) {
         className="w-full px-3.5 py-3 rounded-xl text-[15px] leading-relaxed resize-none" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
 
       {media && (
-        <div className="relative mt-3 rounded-xl overflow-hidden" style={{ border: `1px solid ${C.line}` }}>
-          {media.kind === "video"
-            ? <video src={media.dataUri} controls playsInline className="w-full block" style={{ maxHeight: 240 }} />
-            : <img src={media.dataUri} alt="" className="w-full block" style={{ maxHeight: 240, objectFit: "cover" }} />}
-          <button onClick={() => setMedia(null)} className="tap absolute top-2 right-2 w-8 h-8 rounded-full flex items-center justify-center" style={{ background: "rgba(0,0,0,.55)" }}><X size={16} color="#fff" /></button>
+        <div className="mt-3">
+          {media.kind === "video" ? (
+            <div className="relative rounded-xl overflow-hidden" style={{ border: `1px solid ${C.line}` }}>
+              <video src={media.dataUri} controls playsInline className="w-full block" style={{ maxHeight: 240 }} />
+              <button onClick={() => setMedia(null)} className="tap absolute top-2 right-2 w-8 h-8 rounded-full flex items-center justify-center" style={{ background: "rgba(0,0,0,.55)" }}><X size={16} color="#fff" /></button>
+            </div>
+          ) : (
+            <>
+              <div className="flex gap-2 overflow-x-auto hidescroll pb-1" style={{ scrollbarWidth: "none" }}>
+                {(media.slides || [media.dataUri]).map((src, i) => (
+                  <div key={i} className="relative rounded-xl overflow-hidden shrink-0" style={{ width: 104, height: 104, border: `1px solid ${C.line}` }}>
+                    <img src={src} alt="" className="w-full h-full" style={{ objectFit: "cover" }} />
+                    <button onClick={() => {
+                      const rest = (media.slides || [media.dataUri]).filter((_, k) => k !== i);
+                      setMedia(rest.length ? { kind: "photo", dataUri: rest[0], slides: rest } : null);
+                    }} className="tap absolute top-1 right-1 w-6 h-6 rounded-full flex items-center justify-center" style={{ background: "rgba(0,0,0,.6)" }}>
+                      <X size={12} color="#fff" />
+                    </button>
+                    {i === 0 && (media.slides || []).length > 1 && (
+                      <span className="absolute left-1 bottom-1 text-[9.5px] font-bold rounded px-1.5 py-0.5" style={{ background: "rgba(0,0,0,.6)", color: "#fff" }}>COVER</span>
+                    )}
+                  </div>
+                ))}
+                <button onClick={() => inputRef.current?.click()} className="tap shrink-0 rounded-xl flex flex-col items-center justify-center"
+                  style={{ width: 104, height: 104, background: C.bg, border: `1.5px dashed ${C.line}` }}>
+                  <Plus size={20} color={C.gold} strokeWidth={2.6} />
+                  <span className="text-[10.5px] mt-1" style={{ color: C.muted }}>Add more</span>
+                </button>
+              </div>
+              {(media.slides || []).length > 1 && (
+                <p className="text-[11.5px] mt-1.5" style={{ color: C.muted }}>{media.slides.length} photos · swipe through them in the post</p>
+              )}
+            </>
+          )}
         </div>
       )}
 
@@ -1357,7 +1417,7 @@ function Composer({ talent, onAdd }) {
         <button onClick={() => inputRef.current?.click()} className="tap inline-flex items-center gap-1.5 rounded-xl px-3 py-2 text-[13px] font-semibold" style={{ background: C.goldSoft, color: "#7a5a1e" }}>
           <ImagePlus size={16} /> {media ? "Change" : "Photo / video"}
         </button>
-        <input ref={inputRef} type="file" accept="image/*,video/*" onChange={pick} className="hidden" />
+        <input ref={inputRef} type="file" accept="image/*,video/*" multiple onChange={pick} className="hidden" />
         {!location && (
           <button onClick={() => setPicking(true)} className="tap inline-flex items-center gap-1.5 rounded-xl px-3 py-2 text-[13px] font-semibold" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }}>
             <MapPin size={16} color={C.gold} /> Pin
@@ -1952,7 +2012,7 @@ function TripsTab({ user, trips, actions }) {
     <div className="px-5 py-4">
       <SectionLabel trailing={`${mine.length}`}>Trips</SectionLabel>
       {mine.length === 0 ? (
-        <Empty Icon={Map} title="No trips yet" body="When a job request is accepted, the trip and its group chat appear here." />
+        <Empty Icon={MapIcon} title="No trips yet" body="When a job request is accepted, the trip and its group chat appear here." />
       ) : (
         <div className="space-y-3">{mine.map((tr) => <TripCard key={tr.id} trip={tr} onOpen={() => setOpenId(tr.id)} />)}</div>
       )}
@@ -2493,7 +2553,7 @@ function parseExifGps(view, tiff) {
   for (let i = 0; i < n0; i++) { const e = ifd0 + 2 + i * 12; if (u16(e) === 0x8825) { gps = tiff + u32(e + 8); break; } }
   if (!gps) return null;
   const rat = (e, count) => { const v = tiff + u32(e + 8); const out = []; for (let i = 0; i < count; i++) { const num = u32(v + i * 8), den = u32(v + i * 8 + 4); out.push(den ? num / den : 0); } return out; };
-  let latRef, lngRef, lat, lng;
+  let latRef, lngRef, lat, lng, altRef = 0, alt = null, bearing = null, dateStamp = null;
   const n = u16(gps);
   for (let i = 0; i < n; i++) {
     const e = gps + 2 + i * 12, tag = u16(e);
@@ -2501,13 +2561,29 @@ function parseExifGps(view, tiff) {
     else if (tag === 3) lngRef = String.fromCharCode(view.getUint8(e + 8));
     else if (tag === 2) lat = rat(e, 3);
     else if (tag === 4) lng = rat(e, 3);
+    else if (tag === 5) altRef = view.getUint8(e + 8);          // 0 above sea level, 1 below
+    else if (tag === 6) { const a = rat(e, 1); alt = a && a[0] != null ? a[0] : null; }
+    else if (tag === 17) { const b = rat(e, 1); bearing = b && b[0] != null ? b[0] : null; }  // direction the camera faced
+    else if (tag === 29) {                                       // GPS date stamp, "YYYY:MM:DD"
+      try {
+        const off = tiff + u32(e + 8);
+        let str = "";
+        for (let k = 0; k < 10; k++) str += String.fromCharCode(view.getUint8(off + k));
+        dateStamp = str;
+      } catch (err) {}
+    }
   }
   if (!lat || !lng) return null;
   const dec = (d) => d[0] + d[1] / 60 + d[2] / 3600;
   let la = dec(lat), lo = dec(lng);
   if (latRef === "S") la = -la;
   if (lngRef === "W") lo = -lo;
-  return { lat: +la.toFixed(6), lng: +lo.toFixed(6) };
+  return {
+    lat: +la.toFixed(6), lng: +lo.toFixed(6),
+    altitude: alt != null ? Math.round(altRef === 1 ? -alt : alt) : null,
+    bearing: bearing != null ? Math.round(bearing) : null,
+    takenOn: dateStamp && /^\d{4}:\d{2}:\d{2}$/.test(dateStamp) ? dateStamp.replace(/:/g, "-") : null,
+  };
 }
 
 function nearestPlace(lat, lng) {
@@ -2516,30 +2592,154 @@ function nearestPlace(lat, lng) {
   return best ? best.n : null;
 }
 
-function BhutanMap({ value, onPick, readOnly, pins }) {
+function BhutanMap({ value, onPick, readOnly, pins, showMeta }) {
   const ref = useRef();
   const points = pins || (value ? [value] : []);
-  const handle = (e) => {
-    if (readOnly || !onPick) return;
-    const r = ref.current.getBoundingClientRect();
-    const fx = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
-    const fy = Math.min(1, Math.max(0, (e.clientY - r.top) / r.height));
-    const lng = BT.W + fx * (BT.E - BT.W);
-    const lat = BT.N - fy * (BT.N - BT.S);
-    onPick({ lat: +lat.toFixed(4), lng: +lng.toFixed(4), place: nearestPlace(lat, lng) });
-  };
-  return (
-    <div ref={ref} onClick={handle} className="relative rounded-xl overflow-hidden select-none"
-      style={{ aspectRatio: BT_MAP_AR, background: "#eef1ee", cursor: readOnly ? "default" : "crosshair" }}>
-      <img src={mapImg} alt="Relief map of Bhutan" draggable="false" className="absolute inset-0 w-full h-full pointer-events-none" style={{ objectFit: "cover" }} />
+  const [zoom, setZoom] = useState(1);
+  const [origin, setOrigin] = useState({ x: 50, y: 50 });
+  const pressTimer = useRef(null);
+  const pinchStart = useRef(null);
+  const moved = useRef(false);
 
-      {points.map((pt, i) => (
-        <div key={i} className="absolute pointer-events-none" style={{ left: `${btPctX(pt.lng)}%`, top: `${btPctY(pt.lat)}%`, transform: "translate(-50%, -100%)" }}>
-          <MapPin size={pins && pins.length > 1 ? 20 : 26} color={C.maroon} fill={C.maroon} strokeWidth={1.4} style={{ filter: "drop-shadow(0 1px 2px rgba(0,0,0,.4))" }} />
+  const toLatLng = (clientX, clientY) => {
+    const r = ref.current.getBoundingClientRect();
+    // account for the current zoom so a tap lands where the user sees it
+    const fxView = Math.min(1, Math.max(0, (clientX - r.left) / r.width));
+    const fyView = Math.min(1, Math.max(0, (clientY - r.top) / r.height));
+    const fx = Math.min(1, Math.max(0, origin.x / 100 + (fxView - origin.x / 100) / zoom));
+    const fy = Math.min(1, Math.max(0, origin.y / 100 + (fyView - origin.y / 100) / zoom));
+    return { lat: BT.N - fy * (BT.N - BT.S), lng: BT.W + fx * (BT.E - BT.W) };
+  };
+
+  const handleTap = (e) => {
+    if (moved.current) { moved.current = false; return; }
+    if (readOnly || !onPick) return;
+    const { lat, lng } = toLatLng(e.clientX, e.clientY);
+    onPick({ lat: +lat.toFixed(6), lng: +lng.toFixed(6), place: nearestPlace(lat, lng) });
+  };
+
+  // long press to zoom in at that point; long press again to zoom out
+  const startPress = (e) => {
+    const t = e.touches ? e.touches[0] : e;
+    if (e.touches && e.touches.length === 2) {
+      const [a, b] = e.touches;
+      pinchStart.current = { dist: Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY), zoom };
+      clearTimeout(pressTimer.current);
+      return;
+    }
+    const r = ref.current.getBoundingClientRect();
+    const ox = ((t.clientX - r.left) / r.width) * 100;
+    const oy = ((t.clientY - r.top) / r.height) * 100;
+    pressTimer.current = setTimeout(() => {
+      moved.current = true;
+      setOrigin({ x: ox, y: oy });
+      setZoom((z) => (z > 1.6 ? 1 : 3));
+      if (navigator.vibrate) navigator.vibrate(12);
+    }, 420);
+  };
+
+  const movePress = (e) => {
+    if (e.touches && e.touches.length === 2 && pinchStart.current) {
+      const [a, b] = e.touches;
+      const d = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+      const next = Math.min(6, Math.max(1, pinchStart.current.zoom * (d / pinchStart.current.dist)));
+      setZoom(next);
+      moved.current = true;
+      return;
+    }
+    clearTimeout(pressTimer.current);
+  };
+
+  const endPress = () => { clearTimeout(pressTimer.current); pinchStart.current = null; };
+
+  const zoomed = zoom > 1.02;
+
+  return (
+    <div className="relative">
+      <div ref={ref}
+        onClick={handleTap}
+        onTouchStart={startPress} onTouchMove={movePress} onTouchEnd={endPress}
+        onMouseDown={startPress} onMouseMove={movePress} onMouseUp={endPress} onMouseLeave={endPress}
+        className="relative rounded-xl overflow-hidden select-none"
+        style={{ aspectRatio: BT_MAP_AR, background: "#eef1ee", cursor: readOnly ? "default" : "crosshair", touchAction: "none" }}>
+
+        <div className="absolute inset-0" style={{
+          transform: `scale(${zoom})`, transformOrigin: `${origin.x}% ${origin.y}%`,
+          transition: pinchStart.current ? "none" : "transform .45s cubic-bezier(.22,.61,.36,1)",
+        }}>
+          <img src={mapImg} alt="Relief map of Bhutan" draggable="false"
+            className="absolute inset-0 w-full h-full pointer-events-none" style={{ objectFit: "cover" }} />
+
+          {points.map((pt, i) => (
+            <div key={i} className="absolute pointer-events-none"
+              style={{ left: `${btPctX(pt.lng)}%`, top: `${btPctY(pt.lat)}%`, transform: `translate(-50%, -100%) scale(${1 / Math.max(1, zoom * 0.75)})`, transformOrigin: "50% 100%" }}>
+              <MapPin size={pins && pins.length > 1 ? 20 : 26} color={C.maroon} fill={C.maroon} strokeWidth={1.4}
+                style={{ filter: "drop-shadow(0 1px 2px rgba(0,0,0,.4))" }} />
+              {pt.bearing != null && (
+                <div className="absolute left-1/2 top-0" style={{ transform: `translate(-50%,-118%) rotate(${pt.bearing}deg)` }}>
+                  <Navigation size={13} color={C.pine} fill={C.pine} style={{ filter: "drop-shadow(0 1px 2px rgba(0,0,0,.35))" }} />
+                </div>
+              )}
+            </div>
+          ))}
         </div>
-      ))}
+
+        {zoomed && (
+          <button onClick={(e) => { e.stopPropagation(); moved.current = true; setZoom(1); }}
+            className="tap absolute top-2 right-2 rounded-full px-2.5 py-1 text-[11px] font-bold"
+            style={{ background: "rgba(0,0,0,.55)", color: "#fff" }}>
+            {zoom.toFixed(1)}× · reset
+          </button>
+        )}
+
+        {!zoomed && !readOnly && (
+          <span className="absolute bottom-2 left-2 rounded-full px-2 py-1 text-[10.5px]"
+            style={{ background: "rgba(0,0,0,.45)", color: "#fff" }}>Tap to pin · long press to zoom</span>
+        )}
+        {!zoomed && readOnly && points.length > 0 && (
+          <span className="absolute bottom-2 left-2 rounded-full px-2 py-1 text-[10.5px]"
+            style={{ background: "rgba(0,0,0,.45)", color: "#fff" }}>Long press or pinch to zoom</span>
+        )}
+      </div>
+
+      {showMeta && points.length === 1 && points[0] && (
+        <LocationMeta loc={points[0]} />
+      )}
     </div>
   );
+}
+
+function LocationMeta({ loc }) {
+  const rows = [
+    ["Coordinates", `${Number(loc.lat).toFixed(6)}, ${Number(loc.lng).toFixed(6)}`],
+    loc.altitude != null ? ["Elevation", `${loc.altitude} m`] : null,
+    loc.bearing != null ? ["Camera faced", `${loc.bearing}° ${compassName(loc.bearing)}`] : null,
+    loc.takenOn ? ["Taken on", loc.takenOn] : null,
+    ["Source", loc.source === "photo" ? "Photo GPS metadata"
+      : loc.source === "viewpoint" ? "Chosen viewpoint" : "Pinned on the map"],
+  ].filter(Boolean);
+
+  return (
+    <div className="mt-2 rounded-xl overflow-hidden" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+      {rows.map(([k, v], i) => (
+        <div key={k} className="flex items-center justify-between px-3.5 py-2"
+          style={{ borderTop: i ? `1px solid ${C.lineSoft}` : "none" }}>
+          <span className="text-[12px]" style={{ color: C.muted }}>{k}</span>
+          <span className="text-[12px] font-medium" style={{ color: C.ink, fontFamily: k === "Coordinates" ? "monospace" : "inherit" }}>{v}</span>
+        </div>
+      ))}
+      <a href={`https://www.google.com/maps/search/?api=1&query=${loc.lat},${loc.lng}`} target="_blank" rel="noreferrer"
+        className="tap flex items-center justify-center gap-1.5 py-2.5 text-[12.5px] font-semibold"
+        style={{ borderTop: `1px solid ${C.lineSoft}`, color: C.pine }}>
+        <ExternalLink size={13} /> Open in Google Maps
+      </a>
+    </div>
+  );
+}
+
+function compassName(deg) {
+  const dirs = ["N","NE","E","SE","S","SW","W","NW"];
+  return dirs[Math.round(((deg % 360) / 45)) % 8];
 }
 
 function PostLocation({ location, showMap }) {
@@ -2550,7 +2750,7 @@ function PostLocation({ location, showMap }) {
         <MapPin size={13} color={C.gold} /> {location.place ? (location.source === "viewpoint" ? location.place : `Near ${location.place}`) : "Pinned in Bhutan"}
       </span>
       {location.description && <p className="text-[12.5px] leading-snug mt-1.5" style={{ color: C.muted }}>{location.description}</p>}
-      {showMap && <div className="mt-2.5"><BhutanMap readOnly value={location} /></div>}
+      {showMap && <div className="mt-2.5"><BhutanMap readOnly value={location} showMeta /></div>}
     </div>
   );
 }
@@ -2737,6 +2937,11 @@ function PhotoGrid({ items, author, eng, onShareStory }) {
                     <MapPin size={10} color="#fff" />
                   </span>
                 )}
+                {p.media?.slides?.length > 1 && (
+                  <span className="absolute right-1 top-1 text-[9.5px] font-bold rounded px-1.5 py-0.5" style={{ background: "rgba(0,0,0,.5)", color: "#fff" }}>
+                    {p.media.slides.length}
+                  </span>
+                )}
                 {(likes > 0 || comments > 0) && (
                   <span className="absolute left-1 right-1 bottom-1 flex items-center justify-center gap-2.5 rounded-md py-0.5" style={{ background: "rgba(0,0,0,.42)" }}>
                     {likes > 0 && <span className="inline-flex items-center gap-1 text-[10.5px] font-bold text-white"><Heart size={10} color="#fff" fill="#fff" /> {likes}</span>}
@@ -2811,10 +3016,7 @@ function WallPost({ post: p, author, eng, onShareStory, onClose }) {
         </div>
       </div>
 
-      {/* image — fits the frame, never overflows */}
-      <div className="relative w-full flex items-center justify-center overflow-hidden" style={{ background: "#0d100d", maxHeight: "62dvh" }}>
-        <img src={p.media.dataUri} alt="" loading="lazy" decoding="async" className="block" style={{ maxWidth: "100%", maxHeight: "62dvh", width: "auto", height: "auto", objectFit: "contain" }} />
-      </div>
+      <MediaCarousel media={p.media} />
 
       <div className="px-4 pt-3 pb-4">
         {p.text && <p className="text-[15px] leading-relaxed" style={{ color: C.ink }}>{p.text}</p>}
@@ -2826,7 +3028,7 @@ function WallPost({ post: p, author, eng, onShareStory, onClose }) {
               {p.location.place ? (p.location.source === "viewpoint" ? p.location.place : `Near ${p.location.place}`) : "Pinned in Bhutan"}
             </button>
             {p.location.description && <p className="text-[12.5px] leading-snug mt-2" style={{ color: C.muted }}>{p.location.description}</p>}
-            {showMap && <div className="mt-2.5"><BhutanMap readOnly value={p.location} /></div>}
+            {showMap && <div className="mt-2.5"><BhutanMap readOnly value={p.location} showMeta /></div>}
           </div>
         )}
 
@@ -4385,7 +4587,7 @@ function AddStory({ onClose, onAdd }) {
             <div className="text-[12.5px] mt-0.5" style={{ color: C.muted }}>Video up to 30 MB</div>
           </button>
         )}
-        <input ref={inputRef} type="file" accept="image/*,video/*" onChange={pick} className="hidden" />
+        <input ref={inputRef} type="file" accept="image/*,video/*" multiple onChange={pick} className="hidden" />
 
         <input value={caption} onChange={(e) => setCaption(e.target.value)} maxLength={120} placeholder="Add a caption (optional)"
           className="w-full h-11 px-3.5 rounded-xl text-[14px] mb-3" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
@@ -4869,6 +5071,77 @@ function PrivacyPanel({ talent }) {
             ))}
           </div>
         </Sheet>
+      )}
+    </div>
+  );
+}
+
+/* ====================== Media carousel (multi-photo posts) ================= */
+function MediaCarousel({ media, rounded }) {
+  const [i, setI] = useState(0);
+  const startX = useRef(null);
+  if (!media) return null;
+
+  if (media.kind === "video") {
+    return (
+      <div className="w-full" style={{ background: "#0c0e0c", borderRadius: rounded ? 12 : 0, overflow: "hidden" }}>
+        <video src={media.dataUri} controls playsInline className="w-full block" style={{ maxHeight: "62dvh" }} />
+      </div>
+    );
+  }
+
+  const slides = media.slides && media.slides.length ? media.slides : [media.dataUri];
+  const many = slides.length > 1;
+
+  const onStart = (e) => { startX.current = (e.touches ? e.touches[0] : e).clientX; };
+  const onEnd = (e) => {
+    if (startX.current == null || !many) return;
+    const dx = (e.changedTouches ? e.changedTouches[0] : e).clientX - startX.current;
+    if (dx < -45 && i < slides.length - 1) setI(i + 1);
+    if (dx > 45 && i > 0) setI(i - 1);
+    startX.current = null;
+  };
+
+  return (
+    <div className="relative w-full overflow-hidden" style={{ background: C.bg, borderRadius: rounded ? 12 : 0 }}
+      onTouchStart={onStart} onTouchEnd={onEnd}>
+      <div className="flex" style={{ transform: `translateX(-${i * 100}%)`, transition: "transform .3s cubic-bezier(.22,.61,.36,1)" }}>
+        {slides.map((src, k) => (
+          <div key={k} className="shrink-0 w-full flex items-center justify-center" style={{ maxHeight: "62dvh" }}>
+            <img src={src} alt="" loading={k === 0 ? "eager" : "lazy"} decoding="async" className="block w-full"
+              style={{ maxHeight: "62dvh", objectFit: "contain" }} />
+          </div>
+        ))}
+      </div>
+
+      {many && (
+        <>
+          <span className="absolute top-2.5 right-2.5 text-[11px] font-bold rounded-full px-2 py-1"
+            style={{ background: "rgba(0,0,0,.55)", color: "#fff" }}>{i + 1}/{slides.length}</span>
+
+          {i > 0 && (
+            <button onClick={() => setI(i - 1)} className="tap absolute left-2 top-1/2 -translate-y-1/2 w-9 h-9 rounded-full flex items-center justify-center"
+              style={{ background: "rgba(0,0,0,.45)" }} aria-label="Previous photo">
+              <ChevronLeft size={18} color="#fff" />
+            </button>
+          )}
+          {i < slides.length - 1 && (
+            <button onClick={() => setI(i + 1)} className="tap absolute right-2 top-1/2 -translate-y-1/2 w-9 h-9 rounded-full flex items-center justify-center"
+              style={{ background: "rgba(0,0,0,.45)" }} aria-label="Next photo">
+              <ChevronLeft size={18} color="#fff" style={{ transform: "rotate(180deg)" }} />
+            </button>
+          )}
+
+          <div className="absolute left-0 right-0 bottom-2.5 flex items-center justify-center gap-1.5">
+            {slides.map((_, k) => (
+              <span key={k} className="rounded-full" style={{
+                width: k === i ? 7 : 5, height: k === i ? 7 : 5,
+                background: k === i ? "#fff" : "rgba(255,255,255,.55)",
+                boxShadow: "0 0 3px rgba(0,0,0,.5)", transition: "all .2s",
+              }} />
+            ))}
+          </div>
+        </>
       )}
     </div>
   );
