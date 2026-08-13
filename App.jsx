@@ -648,68 +648,120 @@ export default function App() {
 
 /* ================================ Welcome ================================= */
 function Login({ onPick, session, myProfile, onAuthed, onBusy }) {
-  const [authView, setAuthView] = useState(null); // 'signup' | 'signin' | 'complete'
+  const [authView, setAuthView] = useState(null);
   useEffect(() => { onBusy && onBusy(!!authView); return () => onBusy && onBusy(false); }, [authView]);
-  useEffect(() => {
-    if (session && myProfile === false && !authView) setAuthView("complete");
-  }, [session, myProfile]);
   if (authView) {
     return (
       <div className="flex-1 overflow-y-auto hidescroll fade" style={{ scrollbarWidth: "none" }}>
-        <Onboard mode={authView} session={session} onBack={() => { setAuthView(null); onBusy && onBusy(false); }} onDone={() => { onBusy && onBusy(false); setAuthView(null); onAuthed(); }} />
+        <Onboard mode={authView} session={session}
+          onBack={() => { setAuthView(null); onBusy && onBusy(false); }}
+          onDone={() => { onBusy && onBusy(false); setAuthView(null); onAuthed(); }} />
       </div>
     );
   }
+
   return (
     <div className="flex-1 overflow-y-auto hidescroll fade" style={{ scrollbarWidth: "none" }}>
-      {/* brand row */}
-      <div className="px-6 pt-6 flex items-center gap-2.5">
-        <div className="w-9 h-9 rounded-xl flex items-center justify-center" style={{ background: C.pine, boxShadow: `0 6px 14px ${C.pine}33` }}>
-          <Compass size={18} color={C.goldSoft} strokeWidth={1.9} />
+      {/* brand */}
+      <div className="px-6 pt-7 flex items-center gap-2.5">
+        <div className="w-10 h-10 rounded-xl flex items-center justify-center" style={{ background: C.pine, boxShadow: `0 6px 14px ${C.pine}33` }}>
+          <Compass size={20} color={C.goldSoft} strokeWidth={1.9} />
         </div>
-        <span className="leading-none">
-          <span className="block text-[17px] font-semibold tracking-[-0.01em]" style={{ color: C.ink }}>Bhutan Tourism Hub</span>
-          <span className="block text-[10px] font-semibold tracking-[.14em] uppercase mt-0.5" style={{ color: C.gold }}>Guides · Drivers · Operators</span>
-        </span>
+        <div>
+          <div className="text-[17px] font-semibold tracking-[-0.01em] leading-none" style={{ color: C.ink }}>Bhutan Tourism Hub</div>
+          <div className="text-[10px] font-semibold tracking-[.14em] uppercase mt-1" style={{ color: C.gold }}>Guides · Drivers · Operators</div>
+        </div>
       </div>
 
-      {/* hero — the relief map of Bhutan */}
-      <div className="relative w-full mt-4" style={{ aspectRatio: "5 / 2" }}>
-        <img src={mapImg} alt="Relief map of Bhutan" className="absolute inset-0 w-full h-full" style={{ objectFit: "cover", objectPosition: "center bottom" }} />
-        <div className="absolute inset-0" style={{ background: `linear-gradient(to bottom, ${C.bg} 0%, rgba(244,245,241,0) 24%, rgba(244,245,241,0) 72%, ${C.bg} 100%)` }} />
+      {/* prototype badge */}
+      <div className="px-6 mt-5">
+        <div className="inline-flex items-center gap-2 rounded-full pl-2.5 pr-3 py-1.5" style={{ background: C.goldSoft }}>
+          <span className="w-2 h-2 rounded-full" style={{ background: C.gold }} />
+          <span className="text-[11.5px] font-bold tracking-[.08em] uppercase" style={{ color: "#7a5a1e" }}>Early access · Prototype</span>
+        </div>
       </div>
 
-      {/* story */}
-      <div className="px-6 -mt-1">
-        <div className="text-[11.5px] font-semibold tracking-[.16em] uppercase mb-2.5" style={{ color: C.gold }}>
-          Bhutan · Guides · Drivers · Operators
-        </div>
-        <h1 className="text-[30px] leading-[1.12] font-semibold tracking-[-0.02em]" style={{ color: C.ink }}>
-          Your work, vouched for.
+      {/* hero */}
+      <div className="px-6 mt-4">
+        <h1 className="text-[32px] leading-[1.1] font-semibold tracking-[-0.02em]" style={{ color: C.ink }}>
+          Be one of the first<br />guides on the hub.
         </h1>
-        <p className="mt-3 text-[15px] leading-relaxed" style={{ color: C.muted }}>
-          A living portfolio for Bhutan's licensed guides and drivers — and the
-          marketplace where tour operators find, vet and book them.
+        <p className="mt-3.5 text-[15px] leading-relaxed" style={{ color: C.muted }}>
+          We're building Bhutan's verified marketplace for licensed guides and drivers — where
+          tour operators find you by your <b style={{ color: C.ink }}>skills</b>, not by who they
+          already know.
         </p>
+      </div>
 
-        <div className="mt-6 space-y-3.5">
-          <WelcomeBullet Icon={BadgeCheck} title="Verified, not just listed" body="Licenses checked with the Department of Tourism and RSTA." />
-          <WelcomeBullet Icon={Star} title="A trip record that travels with you" body="Reliability, punctuality and awareness — graded by operators after every trip." />
-          <WelcomeBullet Icon={MapPin} title="Proof of where you've worked" body="Photos pinned to the exact spot on the map of Bhutan." />
-          <WelcomeBullet Icon={MessageSquare} title="One hub per trip" body="Crew chat that opens before departure and clears itself after." />
+      {/* map */}
+      <div className="relative w-full mt-5" style={{ aspectRatio: "5 / 2" }}>
+        <img src={mapImg} alt="Relief map of Bhutan" className="absolute inset-0 w-full h-full" style={{ objectFit: "cover", objectPosition: "center bottom" }} />
+        <div className="absolute inset-0" style={{ background: `linear-gradient(to bottom, ${C.bg} 0%, rgba(244,245,241,0) 26%, rgba(244,245,241,0) 70%, ${C.bg} 100%)` }} />
+      </div>
+
+      {/* PRIMARY ACTION — centred */}
+      <div className="px-6 -mt-2">
+        <button onClick={() => setAuthView("signup")} className="tap w-full rounded-2xl flex items-center justify-center gap-2 text-[16.5px] font-semibold"
+          style={{ height: 56, background: C.pine, color: "#fff", boxShadow: `0 10px 24px ${C.pine}40` }}>
+          Join the hub <ArrowRight size={19} strokeWidth={2.4} />
+        </button>
+        <button onClick={() => setAuthView("signin")} className="tap w-full rounded-2xl text-[15px] font-semibold mt-2.5"
+          style={{ height: 50, background: C.card, border: `1.5px solid ${C.pine}`, color: C.pine }}>
+          I already have an account
+        </button>
+        <p className="text-center text-[12.5px] mt-3" style={{ color: C.muted }}>
+          Free for licensed guides, drivers and tour operators.
+        </p>
+      </div>
+
+      {/* onboarding in batches — honest framing */}
+      <div className="px-6 mt-6">
+        <div className="rounded-2xl p-4" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+          <div className="flex items-start gap-3">
+            <div className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0" style={{ background: C.goldSoft }}>
+              <Clock size={17} color={C.gold} />
+            </div>
+            <div>
+              <div className="text-[14px] font-semibold" style={{ color: C.ink }}>We're onboarding in small batches</div>
+              <p className="text-[13px] leading-snug mt-1" style={{ color: C.muted }}>
+                Only <b style={{ color: C.ink }}>30 verification codes</b> are sent each hour while we
+                grow carefully. If your code doesn't arrive, wait an hour and try again — your place
+                isn't lost. The earlier you build your profile, the more jobs you'll be matched to.
+              </p>
+            </div>
+          </div>
         </div>
       </div>
 
-      {CLOUD && (
-        <div className="px-6 mt-8">
-          <button onClick={() => setAuthView("signin")} className="tap w-full rounded-2xl flex items-center justify-center gap-2 text-[16px] font-semibold"
-            style={{ height: 54, background: C.pine, color: "#fff", boxShadow: `0 8px 20px ${C.pine}38` }}>
-            Sign in or create account <ArrowRight size={18} strokeWidth={2.4} />
-          </button>
-          <p className="text-center text-[12.5px] mt-2.5" style={{ color: C.muted }}>Free for guides, drivers and operators in Bhutan.</p>
+      {/* what you get */}
+      <div className="px-6 mt-7">
+        <div className="text-[11.5px] font-semibold tracking-[.14em] uppercase mb-3.5" style={{ color: C.gold }}>What you get</div>
+        <div className="space-y-4">
+          <WelcomeBullet Icon={BadgeCheck} title="Verified, not just listed"
+            body="Every licence is checked before anyone can be booked. Operators know exactly who they're hiring." />
+          <WelcomeBullet Icon={Award} title="A profile that proves your skill"
+            body="Culture and dzong, alpine trekking, birding, spiritual routes — plus languages and years of experience." />
+          <WelcomeBullet Icon={Star} title="A trip record you own"
+            body="Reliability, punctuality and awareness, graded by operators after every trip. It follows you through your career." />
+          <WelcomeBullet Icon={MapPin} title="Proof of where you've worked"
+            body="Photos pinned to the exact spot in Bhutan. Your portfolio, not a line on a list." />
+          <WelcomeBullet Icon={Briefcase} title="Work that finds you"
+            body="Operators post jobs and you apply — including short-notice work when someone drops out." />
         </div>
-      )}
+      </div>
 
+      {/* honest about the stage */}
+      <div className="px-6 mt-7 pb-10">
+        <div className="rounded-2xl p-4" style={{ background: C.pineSoft }}>
+          <div className="text-[13.5px] font-semibold mb-1.5" style={{ color: C.pine }}>Built in Bhutan, for Bhutan</div>
+          <p className="text-[12.5px] leading-snug" style={{ color: C.pine, opacity: .9 }}>
+            This is an early version, and it will grow with the people who use it. We're working
+            towards recognition with the Department of Tourism and the Guides Association so that a
+            profile here becomes a trusted mark of a licensed professional. Tell us what you need —
+            we'll build it.
+          </p>
+        </div>
+      </div>
     </div>
   );
 }
@@ -747,6 +799,9 @@ function Shell({ user, posts, jobs, trips, listings, actions, engagement, dm, di
   const lastAlertCount = useRef(0);
   const [notifyOn, setNotifyOn] = useState(typeof Notification !== "undefined" && Notification.permission === "granted");
   const [installSheet, setInstallSheet] = useState(false);
+  const [firstRun, setFirstRun] = useState(() => {
+    try { return CLOUD && !localStorage.getItem("bth_seen_intro_" + (user.talentId || user.id)); } catch (e) { return false; }
+  });
   const [installEvent, setInstallEvent] = useState(null);
   const [installed, setInstalled] = useState(isStandalone());
 
@@ -880,6 +935,17 @@ function Shell({ user, posts, jobs, trips, listings, actions, engagement, dm, di
 
       {sharedPost && (
         <PostDetail items={[sharedPost]} index={0} author={talentById(sharedPost.talentId)} eng={eng} onClose={() => setSharedPost(null)} />
+      )}
+
+      {firstRun && (
+        <FirstRunSheet user={user} onClose={() => {
+          setFirstRun(false);
+          try { localStorage.setItem("bth_seen_intro_" + (user.talentId || user.id), "1"); } catch (e) {}
+        }} onGo={(t) => {
+          setFirstRun(false);
+          try { localStorage.setItem("bth_seen_intro_" + (user.talentId || user.id), "1"); } catch (e) {}
+          setTab(t);
+        }} />
       )}
 
       {installSheet && !installed && (
@@ -3081,17 +3147,47 @@ function Onboard({ mode: initialMode, session, onBack, onDone }) {
             <button onClick={() => { setMode("signin"); setStep("auth"); setErr(null); }} className="relative flex-1 py-2.5 text-[14.5px] font-semibold" style={{ color: C.muted }}>Sign in</button>
             <button className="relative flex-1 py-2.5 text-[14.5px] font-semibold" style={{ color: C.ink }}>Create account</button>
           </div>
+
           <h2 className="text-[26px] font-semibold tracking-[-0.02em] mb-1" style={{ color: C.ink }}>How do you work with tours?</h2>
-          <p className="text-[14.5px] mb-5" style={{ color: C.muted }}>Pick one — it shapes the rest of your setup.</p>
-          {[["guide", "Guide", "Lead trips and share Bhutan", Compass], ["driver", "Driver", "Move guests safely on the road", Car], ["operator", "Tour Operator", "Find and book the crew", Building2]].map(([id, label, subT, Icon]) => (
-            <button key={id} onClick={() => { setRole(id); setStep("about"); }} className="tap w-full text-left rounded-2xl p-4 flex items-center gap-3.5 mb-2.5"
-              style={{ background: C.card, border: `1px solid ${role === id ? C.pine : C.line}` }}>
-              <div className="w-11 h-11 rounded-xl flex items-center justify-center shrink-0" style={{ background: C.pine }}><Icon size={20} color={C.goldSoft} /></div>
-              <div className="flex-1"><div className="text-[15.5px] font-semibold" style={{ color: C.ink }}>{label}</div>
-                <div className="text-[13px]" style={{ color: C.muted }}>{subT}</div></div>
-              <ArrowRight size={17} color={C.muted} />
+          <p className="text-[14.5px] mb-5" style={{ color: C.muted }}>This shapes your whole profile — pick the one that fits.</p>
+
+          {[
+            { id: "guide", label: "Guide", sub: "I lead trips and share Bhutan", Icon: Compass,
+              points: ["Show your specialities and languages", "Build a trip record operators trust", "Apply for jobs and short-notice work"] },
+            { id: "driver", label: "Driver", sub: "I drive guests on tour", Icon: Car,
+              points: ["List your vehicle and the routes you know", "Get found for airport runs and long hauls", "Freelance owner-drivers welcome"] },
+            { id: "operator", label: "Tour Operator", sub: "I book guides and drivers", Icon: Building2,
+              points: ["Search verified guides and drivers", "Post jobs and hire in minutes", "Run every trip in one place"] },
+          ].map(({ id, label, sub: subT, Icon, points }) => (
+            <button key={id} onClick={() => { setRole(id); setStep("about"); }} className="tap w-full text-left rounded-2xl p-4 mb-3"
+              style={{ background: C.card, border: `1.5px solid ${role === id ? C.pine : C.line}` }}>
+              <div className="flex items-center gap-3.5">
+                <div className="w-12 h-12 rounded-xl flex items-center justify-center shrink-0" style={{ background: C.pine }}>
+                  <Icon size={22} color={C.goldSoft} strokeWidth={1.9} />
+                </div>
+                <div className="flex-1">
+                  <div className="text-[16px] font-semibold" style={{ color: C.ink }}>{label}</div>
+                  <div className="text-[13px]" style={{ color: C.muted }}>{subT}</div>
+                </div>
+                <ArrowRight size={18} color={C.muted} />
+              </div>
+              <div className="mt-3 pl-[62px] space-y-1.5">
+                {points.map((p) => (
+                  <div key={p} className="flex items-start gap-2">
+                    <Check size={13} color={C.gold} strokeWidth={3} className="shrink-0 mt-[3px]" />
+                    <span className="text-[12.5px] leading-snug" style={{ color: C.muted }}>{p}</span>
+                  </div>
+                ))}
+              </div>
             </button>
           ))}
+
+          <div className="rounded-xl p-3.5 flex gap-2.5 mt-1" style={{ background: C.goldSoft }}>
+            <ShieldCheck size={16} color={C.maroon} className="shrink-0 mt-0.5" />
+            <p className="text-[12px] leading-snug" style={{ color: "#5a4a2e" }}>
+              You'll upload your licence at the end. Nothing is visible to operators until our team verifies it.
+            </p>
+          </div>
         </div>
       )}
 
@@ -4325,6 +4421,78 @@ function InstallReason({ Icon, title, body }) {
       <div>
         <div className="text-[13.5px] font-semibold" style={{ color: C.ink }}>{title}</div>
         <div className="text-[12.5px] leading-snug" style={{ color: C.muted }}>{body}</div>
+      </div>
+    </div>
+  );
+}
+
+/* =========================== First-run welcome =========================== */
+function FirstRunSheet({ user, onClose, onGo }) {
+  const talent = user.kind === "guide" || user.kind === "driver";
+  const steps = talent
+    ? [
+        { Icon: ImagePlus, title: "Post from your trips", body: "Photos pinned to where you took them. This becomes your portfolio.", tab: "post", cta: "Share your first post" },
+        { Icon: Briefcase, title: "Find work", body: "Operators post jobs — apply to the ones that fit your skills.", tab: "jobs", cta: "See open jobs" },
+        { Icon: User, title: "Finish your profile", body: "Set your availability so operators know when you're free.", tab: "profile", cta: "Open my profile" },
+      ]
+    : [
+        { Icon: Search, title: "Find verified crew", body: "Filter guides and drivers by speciality, language and availability.", tab: "discover", cta: "Browse guides & drivers" },
+        { Icon: Briefcase, title: "Post a job", body: "Let qualified people apply, including at short notice.", tab: "requests", cta: "Post a job" },
+        { Icon: Map, title: "Run your trips", body: "Every booking becomes a trip with its own crew chat.", tab: "trips", cta: "See my trips" },
+      ];
+
+  return (
+    <div className="fixed inset-0 flex items-end" style={{ background: "rgba(8,10,8,.55)", zIndex: 235 }} onClick={onClose}>
+      <div className="w-full rounded-t-3xl p-5" style={{ background: C.card, maxHeight: "88dvh", overflowY: "auto" }} onClick={(e) => e.stopPropagation()}>
+        <div className="w-10 h-1 rounded-full mx-auto mb-4" style={{ background: C.line }} />
+
+        <div className="text-center mb-5">
+          <div className="w-14 h-14 rounded-2xl flex items-center justify-center mx-auto mb-3" style={{ background: C.pine }}>
+            <Compass size={26} color={C.goldSoft} strokeWidth={1.8} />
+          </div>
+          <div className="text-[21px] font-semibold tracking-[-0.01em]" style={{ color: C.ink }}>
+            Welcome, {(user.name || "").split(" ")[0]}
+          </div>
+          <p className="text-[13.5px] mt-1.5 px-2" style={{ color: C.muted }}>
+            You're one of the first on the hub. Here's how to get the most from it.
+          </p>
+        </div>
+
+        <div className="space-y-2.5 mb-4">
+          {steps.map((st, i) => (
+            <button key={st.title} onClick={() => onGo(st.tab)} className="tap w-full text-left rounded-2xl p-3.5 flex items-start gap-3"
+              style={{ background: C.bg, border: `1px solid ${C.line}` }}>
+              <div className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0" style={{ background: C.goldSoft }}>
+                <st.Icon size={17} color={C.gold} />
+              </div>
+              <div className="flex-1">
+                <div className="text-[14px] font-semibold" style={{ color: C.ink }}>{i + 1}. {st.title}</div>
+                <div className="text-[12.5px] leading-snug mt-0.5" style={{ color: C.muted }}>{st.body}</div>
+                <div className="text-[12.5px] font-semibold mt-1.5" style={{ color: C.pine }}>{st.cta} →</div>
+              </div>
+            </button>
+          ))}
+        </div>
+
+        {talent && user.licenseStatus === "submitted" && (
+          <div className="rounded-xl p-3.5 flex gap-2.5 mb-3" style={{ background: C.goldSoft }}>
+            <Clock size={16} color={C.gold} className="shrink-0 mt-0.5" />
+            <p className="text-[12.5px] leading-snug" style={{ color: "#7a5a1e" }}>
+              Your licence is with our review team. You can use everything meanwhile — your
+              <b> Verified</b> badge appears once it clears.
+            </p>
+          </div>
+        )}
+
+        <div className="rounded-xl p-3.5 mb-3" style={{ background: C.pineSoft }}>
+          <p className="text-[12.5px] leading-snug" style={{ color: C.pine }}>
+            This is an early version and it's still growing. If something's missing or wrong,
+            tell us — we're building this with Bhutan's guides, not for them.
+          </p>
+        </div>
+
+        <button onClick={onClose} className="tap w-full h-12 rounded-xl text-[15px] font-semibold"
+          style={{ background: C.pine, color: "#fff" }}>Start exploring</button>
       </div>
     </div>
   );
