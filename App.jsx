@@ -1312,14 +1312,6 @@ function Composer({ talent, onAdd }) {
         }
       });
     });
-    if (isImage) {
-      readExifGps(f).then((gps) => {
-        if (gps && gps.lat != null) {
-          setLocation({ lat: gps.lat, lng: gps.lng, place: nearestPlace(gps.lat, gps.lng), source: "photo" });
-          flash("Location read from the photo’s GPS.");
-        }
-      });
-    }
   };
 
   const post = () => {
@@ -1338,8 +1330,11 @@ function Composer({ talent, onAdd }) {
           <div className="text-[12px]" style={{ color: C.muted }}>Share a trip highlight</div></div>
       </div>
 
-      <textarea value={text} onChange={(e) => setText(e.target.value)} rows={3} maxLength={400} placeholder="What made today's trip special?"
-        className="w-full px-3.5 py-3 rounded-xl text-[15px] leading-relaxed resize-none" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
+      <textarea value={text} onChange={(e) => setText(e.target.value)} rows={4} maxLength={300} placeholder="Write a caption — what made this trip special?"
+        className="w-full px-3.5 py-3 rounded-xl text-[15px] leading-relaxed resize-none" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink, minHeight: 92 }} />
+      <div className="flex justify-end mt-1">
+        <span className="text-[11px]" style={{ color: text.length > 270 ? C.maroon : C.muted }}>{text.length}/300</span>
+      </div>
 
       {media && (
         <div className="mt-3">
@@ -1368,17 +1363,38 @@ function Composer({ talent, onAdd }) {
                 <button onClick={() => inputRef.current?.click()} className="tap shrink-0 rounded-xl flex flex-col items-center justify-center"
                   style={{ width: 104, height: 104, background: C.bg, border: `1.5px dashed ${C.line}` }}>
                   <Plus size={20} color={C.gold} strokeWidth={2.6} />
-                  <span className="text-[10.5px] mt-1" style={{ color: C.muted }}>Add more</span>
+                  <span className="text-[10.5px] mt-1 font-semibold" style={{ color: C.ink }}>Add more</span>
+                  <span className="text-[9.5px]" style={{ color: C.muted }}>up to 10</span>
                 </button>
               </div>
-              <div className="flex items-center justify-between mt-2">
+              <div className="mt-3">
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="text-[11.5px] font-semibold tracking-[.1em] uppercase" style={{ color: C.gold }}>Shape</span>
+                  {(media.slides || []).length > 1 && (
+                    <span className="text-[11.5px]" style={{ color: C.muted }}>{media.slides.length} photos · swipeable</span>
+                  )}
+                </div>
+                <div className="flex gap-2">
+                  {RATIOS.map((r) => {
+                    const on = (media.ratio || "4 / 5") === r.id;
+                    return (
+                      <button key={r.id} onClick={() => setCropping(media.slides || [media.dataUri])}
+                        className="tap flex-1 h-14 rounded-xl flex flex-col items-center justify-center gap-1"
+                        style={{ background: on ? C.pine : C.card, border: `1px solid ${on ? C.pine : C.line}` }}>
+                        <span className="rounded-sm" style={{
+                          width: r.w >= r.h ? 20 : 20 * (r.w / r.h), height: r.h >= r.w ? 20 : 20 * (r.h / r.w),
+                          border: `1.5px solid ${on ? "#fff" : C.muted}`,
+                        }} />
+                        <span className="text-[10.5px] font-semibold" style={{ color: on ? "#fff" : C.ink }}>{r.label}</span>
+                      </button>
+                    );
+                  })}
+                </div>
                 <button onClick={() => setCropping(media.slides || [media.dataUri])}
-                  className="tap inline-flex items-center gap-1.5 text-[12.5px] font-semibold" style={{ color: C.pine }}>
-                  <Maximize2 size={13} /> Reframe · {RATIOS.find((r) => r.id === (media.ratio || "4 / 5"))?.label}
+                  className="tap w-full h-10 rounded-xl mt-2 inline-flex items-center justify-center gap-1.5 text-[13px] font-semibold"
+                  style={{ background: C.goldSoft, color: "#7a5a1e" }}>
+                  <Maximize2 size={14} /> Crop & reposition
                 </button>
-                {(media.slides || []).length > 1 && (
-                  <span className="text-[11.5px]" style={{ color: C.muted }}>{media.slides.length} photos</span>
-                )}
               </div>
             </>
           )}
@@ -1439,7 +1455,7 @@ function Composer({ talent, onAdd }) {
 
       <div className="flex items-center gap-2 mt-3">
         <button onClick={() => inputRef.current?.click()} className="tap inline-flex items-center gap-1.5 rounded-xl px-3 py-2 text-[13px] font-semibold" style={{ background: C.goldSoft, color: "#7a5a1e" }}>
-          <ImagePlus size={16} /> {media ? "Change" : "Photo / video"}
+          <ImagePlus size={16} /> {media ? "Change" : "Add photos"}
         </button>
         <input ref={inputRef} type="file" accept="image/*,video/*" multiple onChange={pick} className="hidden" />
         {!location && (
@@ -4667,7 +4683,7 @@ function AddStory({ onClose, onAdd }) {
             <div className="text-[12.5px] mt-0.5" style={{ color: C.muted }}>Video up to 30 MB</div>
           </button>
         )}
-        <input ref={inputRef} type="file" accept="image/*,video/*" multiple onChange={pick} className="hidden" />
+        <input ref={inputRef} type="file" accept="image/*,video/*" onChange={pick} className="hidden" />
 
         <input value={caption} onChange={(e) => setCaption(e.target.value)} maxLength={120} placeholder="Add a caption (optional)"
           className="w-full h-11 px-3.5 rounded-xl text-[14px] mb-3" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
