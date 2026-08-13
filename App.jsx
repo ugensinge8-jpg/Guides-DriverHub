@@ -938,14 +938,11 @@ function Shell({ user, posts, jobs, trips, listings, actions, engagement, dm, di
       )}
 
       {firstRun && (
-        <FirstRunSheet user={user} onClose={() => {
-          setFirstRun(false);
-          try { localStorage.setItem("bth_seen_intro_" + (user.talentId || user.id), "1"); } catch (e) {}
-        }} onGo={(t) => {
-          setFirstRun(false);
-          try { localStorage.setItem("bth_seen_intro_" + (user.talentId || user.id), "1"); } catch (e) {}
-          setTab(t);
-        }} />
+        <Tutorial user={user} nav={nav} setTab={setTab}
+          onDone={() => {
+            setFirstRun(false);
+            try { localStorage.setItem("bth_seen_intro_" + (user.talentId || user.id), "1"); } catch (e) {}
+          }} />
       )}
 
       {installSheet && !installed && (
@@ -4426,73 +4423,104 @@ function InstallReason({ Icon, title, body }) {
   );
 }
 
-/* =========================== First-run welcome =========================== */
-function FirstRunSheet({ user, onClose, onGo }) {
+/* ============================ First-run tutorial ========================== */
+function Tutorial({ user, nav, setTab, onDone }) {
+  const [i, setI] = useState(0);
   const talent = user.kind === "guide" || user.kind === "driver";
+  const first = (user.name || "").split(" ")[0];
+
+  // steps point at real tabs; tabIndex tells the highlight which nav item to ring
   const steps = talent
     ? [
-        { Icon: ImagePlus, title: "Post from your trips", body: "Photos pinned to where you took them. This becomes your portfolio.", tab: "post", cta: "Share your first post" },
-        { Icon: Briefcase, title: "Find work", body: "Operators post jobs — apply to the ones that fit your skills.", tab: "jobs", cta: "See open jobs" },
-        { Icon: User, title: "Finish your profile", body: "Set your availability so operators know when you're free.", tab: "profile", cta: "Open my profile" },
+        { kind: "intro", title: `Welcome, ${first}`, body: "You're one of the first on the hub. Two minutes and you'll know your way around." },
+        { kind: "tab", tab: "post", title: "Your Feed", body: "Share photos from your trips, pinned to where you took them. Every approved post builds your portfolio." },
+        { kind: "tab", tab: "jobs", title: "Jobs", body: "Operators post work here. Apply to anything matching your skills — including short-notice jobs when someone drops out." },
+        { kind: "tab", tab: "trips", title: "Trips", body: "Once you're hired, the trip appears here with its itinerary and meeting point." },
+        { kind: "tab", tab: "chats", title: "Messages", body: "Crew chat for each trip, plus direct messages with operators and other guides." },
+        { kind: "tab", tab: "profile", title: "Your Profile", body: "Set your availability, add specialities and languages. This is what operators see before booking you." },
+        { kind: "top", title: "Search & alerts", body: "Search anyone by name, and tap the bell for jobs, messages and follows." },
+        { kind: "outro", title: "One last thing", body: user.licenseStatus === "submitted"
+            ? "Your licence is with our review team. Everything works meanwhile — your Verified badge appears once it clears."
+            : "Add your licence from your profile to get the Verified badge. Operators prioritise verified guides and drivers." },
       ]
     : [
-        { Icon: Search, title: "Find verified crew", body: "Filter guides and drivers by speciality, language and availability.", tab: "discover", cta: "Browse guides & drivers" },
-        { Icon: Briefcase, title: "Post a job", body: "Let qualified people apply, including at short notice.", tab: "requests", cta: "Post a job" },
-        { Icon: Map, title: "Run your trips", body: "Every booking becomes a trip with its own crew chat.", tab: "trips", cta: "See my trips" },
+        { kind: "intro", title: `Welcome, ${first}`, body: "You're one of the first operators here. Quick tour so you can start booking." },
+        { kind: "tab", tab: "discover", title: "Discover", body: "Every verified guide and driver, filtered by speciality, language and who's available right now." },
+        { kind: "tab", tab: "requests", title: "Jobs", body: "Post a job and let qualified people apply, or send a request directly to someone you want." },
+        { kind: "tab", tab: "trips", title: "Trips", body: "Every confirmed booking becomes a trip — crew, itinerary and meeting point in one place." },
+        { kind: "tab", tab: "chats", title: "Messages", body: "A chat channel per trip, plus direct messages with any guide or driver." },
+        { kind: "tab", tab: "feed", title: "Feed", body: "Recent posts from guides and drivers — a good way to spot people worth booking." },
+        { kind: "top", title: "Search & alerts", body: "Search people by name, and tap the bell when someone applies to your job." },
+        { kind: "outro", title: "You're set", body: "Post your first job and see who applies. Tell us what's missing — we're still building." },
       ];
 
+  const step = steps[i];
+  const navIndex = step.kind === "tab" ? nav.findIndex((n) => n.id === step.tab) : -1;
+
+  // move the app to the tab being explained
+  useEffect(() => { if (step.kind === "tab") setTab(step.tab); }, [i]);
+
+  const next = () => { if (i < steps.length - 1) setI(i + 1); else onDone(); };
+  const back = () => { if (i > 0) setI(i - 1); };
+
+  const tabCount = nav.length;
+  const highlightLeft = navIndex >= 0 ? `${(navIndex / tabCount) * 100}%` : null;
+  const highlightWidth = `${(1 / tabCount) * 100}%`;
+
   return (
-    <div className="fixed inset-0 flex items-end" style={{ background: "rgba(8,10,8,.55)", zIndex: 235 }} onClick={onClose}>
-      <div className="w-full rounded-t-3xl p-5" style={{ background: C.card, maxHeight: "88dvh", overflowY: "auto" }} onClick={(e) => e.stopPropagation()}>
-        <div className="w-10 h-1 rounded-full mx-auto mb-4" style={{ background: C.line }} />
+    <div className="fixed inset-0" style={{ zIndex: 250 }}>
+      {/* dim everything */}
+      <div className="absolute inset-0" style={{ background: "rgba(8,10,8,.72)" }} onClick={next} />
 
-        <div className="text-center mb-5">
-          <div className="w-14 h-14 rounded-2xl flex items-center justify-center mx-auto mb-3" style={{ background: C.pine }}>
-            <Compass size={26} color={C.goldSoft} strokeWidth={1.8} />
-          </div>
-          <div className="text-[21px] font-semibold tracking-[-0.01em]" style={{ color: C.ink }}>
-            Welcome, {(user.name || "").split(" ")[0]}
-          </div>
-          <p className="text-[13.5px] mt-1.5 px-2" style={{ color: C.muted }}>
-            You're one of the first on the hub. Here's how to get the most from it.
-          </p>
+      {/* ring around the tab being explained */}
+      {navIndex >= 0 && (
+        <div className="absolute" style={{ left: highlightLeft, width: highlightWidth, bottom: 0, height: 62, pointerEvents: "none" }}>
+          <div className="absolute inset-1 rounded-2xl" style={{ border: `2.5px solid ${C.gold}`, boxShadow: `0 0 0 4px ${C.gold}33`, background: "rgba(255,255,255,.10)" }} />
         </div>
+      )}
 
-        <div className="space-y-2.5 mb-4">
-          {steps.map((st, i) => (
-            <button key={st.title} onClick={() => onGo(st.tab)} className="tap w-full text-left rounded-2xl p-3.5 flex items-start gap-3"
-              style={{ background: C.bg, border: `1px solid ${C.line}` }}>
-              <div className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0" style={{ background: C.goldSoft }}>
-                <st.Icon size={17} color={C.gold} />
-              </div>
-              <div className="flex-1">
-                <div className="text-[14px] font-semibold" style={{ color: C.ink }}>{i + 1}. {st.title}</div>
-                <div className="text-[12.5px] leading-snug mt-0.5" style={{ color: C.muted }}>{st.body}</div>
-                <div className="text-[12.5px] font-semibold mt-1.5" style={{ color: C.pine }}>{st.cta} →</div>
-              </div>
+      {/* ring around the top bar */}
+      {step.kind === "top" && (
+        <div className="absolute left-2 right-2 rounded-2xl" style={{ top: 4, height: 52, border: `2.5px solid ${C.gold}`, boxShadow: `0 0 0 4px ${C.gold}33`, pointerEvents: "none" }} />
+      )}
+
+      {/* card */}
+      <div className="absolute left-0 right-0 px-5" style={{ bottom: navIndex >= 0 ? 86 : "auto", top: step.kind === "top" ? 70 : "auto",
+        ...(step.kind === "intro" || step.kind === "outro" ? { top: "50%", transform: "translateY(-50%)" } : {}) }}>
+        <div className="rounded-2xl p-5" style={{ background: C.card, boxShadow: "0 20px 40px rgba(0,0,0,.35)" }}>
+          {(step.kind === "intro" || step.kind === "outro") && (
+            <div className="w-12 h-12 rounded-2xl flex items-center justify-center mb-3" style={{ background: C.pine }}>
+              <Compass size={22} color={C.goldSoft} strokeWidth={1.8} />
+            </div>
+          )}
+
+          <div className="text-[18px] font-semibold tracking-[-0.01em]" style={{ color: C.ink }}>{step.title}</div>
+          <p className="text-[14px] leading-relaxed mt-1.5" style={{ color: C.muted }}>{step.body}</p>
+
+          {/* progress dots */}
+          <div className="flex items-center gap-1.5 mt-4 mb-4">
+            {steps.map((_, k) => (
+              <span key={k} className="rounded-full" style={{ width: k === i ? 16 : 6, height: 6,
+                background: k <= i ? C.pine : C.lineSoft, transition: "width .25s" }} />
+            ))}
+          </div>
+
+          <div className="flex items-center gap-2">
+            {i > 0 && (
+              <button onClick={back} className="tap h-11 px-4 rounded-xl text-[14px] font-semibold"
+                style={{ background: C.card, border: `1px solid ${C.line}`, color: C.muted }}>Back</button>
+            )}
+            <button onClick={next} className="tap flex-1 h-11 rounded-xl text-[15px] font-semibold inline-flex items-center justify-center gap-2"
+              style={{ background: C.pine, color: "#fff" }}>
+              {i === steps.length - 1 ? "Start using the hub" : "Next"}
+              {i < steps.length - 1 && <ArrowRight size={17} strokeWidth={2.4} />}
             </button>
-          ))}
-        </div>
-
-        {talent && user.licenseStatus === "submitted" && (
-          <div className="rounded-xl p-3.5 flex gap-2.5 mb-3" style={{ background: C.goldSoft }}>
-            <Clock size={16} color={C.gold} className="shrink-0 mt-0.5" />
-            <p className="text-[12.5px] leading-snug" style={{ color: "#7a5a1e" }}>
-              Your licence is with our review team. You can use everything meanwhile — your
-              <b> Verified</b> badge appears once it clears.
-            </p>
           </div>
-        )}
 
-        <div className="rounded-xl p-3.5 mb-3" style={{ background: C.pineSoft }}>
-          <p className="text-[12.5px] leading-snug" style={{ color: C.pine }}>
-            This is an early version and it's still growing. If something's missing or wrong,
-            tell us — we're building this with Bhutan's guides, not for them.
-          </p>
+          {i < steps.length - 1 && (
+            <button onClick={onDone} className="tap w-full text-[12.5px] font-medium mt-2.5" style={{ color: C.muted }}>Skip the tour</button>
+          )}
         </div>
-
-        <button onClick={onClose} className="tap w-full h-12 rounded-xl text-[15px] font-semibold"
-          style={{ background: C.pine, color: "#fff" }}>Start exploring</button>
       </div>
     </div>
   );
