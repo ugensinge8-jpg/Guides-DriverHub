@@ -125,6 +125,38 @@ const SEED_LISTINGS = [];
 const LANG_OPTIONS = ["English", "Hindi", "Japanese", "Mandarin", "German", "French"];
 
 /* ================================== App =================================== */
+/* ===== Error boundary — shows crashes on screen instead of a blank page ===== */
+class ErrorBoundary extends React.Component {
+  constructor(p) { super(p); this.state = { err: null, info: null }; }
+  static getDerivedStateFromError(err) { return { err }; }
+  componentDidCatch(err, info) { this.setState({ info }); console.error("App crashed:", err, info); }
+  render() {
+    if (!this.state.err) return this.props.children;
+    const msg = String(this.state.err?.message || this.state.err);
+    const stack = String(this.state.info?.componentStack || "").split("\n").slice(0, 6).join("\n");
+    return (
+      <div style={{ padding: 20, fontFamily: "system-ui", background: "#F4F5F1", minHeight: "100dvh" }}>
+        <div style={{ background: "#fff", border: "1px solid #E4E7E0", borderRadius: 16, padding: 18 }}>
+          <div style={{ fontSize: 17, fontWeight: 600, color: "#7A2E2E", marginBottom: 8 }}>Something went wrong</div>
+          <p style={{ fontSize: 13.5, color: "#6E7A72", marginBottom: 12 }}>
+            Please screenshot this and send it to support — it tells us exactly what to fix.
+          </p>
+          <div style={{ background: "#F7E9E7", borderRadius: 10, padding: 12, fontSize: 12.5, color: "#7A2E2E", wordBreak: "break-word", fontFamily: "monospace" }}>
+            {msg}
+          </div>
+          {stack && (
+            <pre style={{ marginTop: 10, background: "#F4F5F1", borderRadius: 10, padding: 12, fontSize: 11, color: "#6E7A72", overflowX: "auto", whiteSpace: "pre-wrap" }}>{stack}</pre>
+          )}
+          <button onClick={() => window.location.reload()}
+            style={{ marginTop: 14, width: "100%", height: 46, borderRadius: 12, border: "none", background: "#21402F", color: "#fff", fontSize: 15, fontWeight: 600 }}>
+            Reload the app
+          </button>
+        </div>
+      </div>
+    );
+  }
+}
+
 export default function App() {
   const realUserRef = useRef(null);   // current signed-in id — set below, used by every action
   const [accountId, setAccountId] = useState(null);
@@ -226,7 +258,7 @@ export default function App() {
     const already = follows.some((f) => f.follower === me && f.following === targetId);
     setFollows((F) => (already ? F.filter((f) => !(f.follower === me && f.following === targetId)) : [...F, { follower: me, following: targetId }]));
     if (!CLOUD) return;
-    if (already) await supabase.from("follows").delete().eq("follower_id", me).eq("following_id", targetId);
+    if (already) await dbWrite("follows.delete", supabase.from("follows").delete().eq("follower_id", me).eq("following_id", targetId));
     else await dbWrite("follows.insert", supabase.from("follows").insert({ follower_id: me, following_id: targetId }));
     fetchFollows();
   };
@@ -636,6 +668,7 @@ export default function App() {
   };
 
   return (
+    <ErrorBoundary>
     <div className="min-h-screen w-full flex justify-center" style={{ background: C.bg }}>
       <style>{`
         *{ font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Helvetica Neue", ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
@@ -667,6 +700,7 @@ export default function App() {
         )}
       </div>
     </div>
+    </ErrorBoundary>
   );
 }
 
@@ -846,6 +880,7 @@ function Shell({ user, posts, jobs, trips, listings, actions, engagement, dm, di
   const eng = { ...engagement, me: actorId, isAdmin: user.kind === "admin", sharePostTo: dm?.sharePostTo };
 
   const alertItems = useMemo(() => {
+    try {
     const out = [];
     const seen = new Set();
     const add = (o) => { if (!seen.has(o.id)) { seen.add(o.id); out.push(o); } };
@@ -856,11 +891,11 @@ function Shell({ user, posts, jobs, trips, listings, actions, engagement, dm, di
 
     // likes and comments on my posts
     (engagement?.likes || []).forEach((l) => {
-      const p = posts.find((x) => x.id === l.post_id && x.talentId === actorId);
+      const p = (posts || []).find((x) => x && x.id === l.post_id && x.talentId === actorId);
       if (p && l.liker_id !== actorId) add({ id: `like-${l.post_id}-${l.liker_id}`, kind: "like", who: l.liker_id, text: p.text || "your post", ts: p.createdAt });
     });
     (engagement?.comments || []).forEach((c) => {
-      const p = posts.find((x) => x.id === c.post_id && x.talentId === actorId);
+      const p = (posts || []).find((x) => x && x.id === c.post_id && x.talentId === actorId);
       if (p && c.author_id !== actorId) add({ id: `cm-${c.id}`, kind: "comment", who: c.author_id, text: c.body, ts: c.ts });
     });
 
@@ -869,20 +904,20 @@ function Shell({ user, posts, jobs, trips, listings, actions, engagement, dm, di
       add({ id: `fl-${f.follower}`, kind: "follow", who: f.follower, text: "", ts: Date.now() }));
 
     // direct job requests to me
-    jobs.filter((j) => j.toTalentId === actorId && j.status === "pending").forEach((j) =>
+    (jobs || []).filter((j) => j && j.toTalentId === actorId && j.status === "pending").forEach((j) =>
       add({ id: `job-${j.id}`, kind: "job", who: j.operatorId, text: j.title, ts: j.createdAt }));
 
     // open listings matching my role (guides see guide jobs, drivers see driver jobs)
     if (user.kind === "guide" || user.kind === "driver") {
-      (listings || []).filter((l) => l.status === "open" && l.role === user.kind &&
-        !l.applicants.some((a) => a.talentId === actorId)).forEach((l) =>
+      (listings || []).filter((l) => l && l.status === "open" && l.role === user.kind &&
+        !(l.applicants || []).some((a) => a && a.talentId === actorId)).forEach((l) =>
         add({ id: `lst-${l.id}`, kind: "listing", who: l.operatorId, text: l.title, ts: l.createdAt, urgent: l.urgent }));
     }
 
     // applicants on my listings (operators)
     if (user.kind === "operator") {
-      (listings || []).filter((l) => (l.operatorId ? l.operatorId === actorId : l.operator === user.name))
-        .forEach((l) => l.applicants.filter((a) => a.status === "applied").forEach((a) =>
+      (listings || []).filter((l) => l && (l.operatorId ? l.operatorId === actorId : l.operator === user.name))
+        .forEach((l) => (l.applicants || []).filter((a) => a && a.status === "applied").forEach((a) =>
           add({ id: `app-${l.id}-${a.talentId}`, kind: "applicant", who: a.talentId, text: l.title, ts: a.appliedAt })));
     }
 
@@ -893,7 +928,8 @@ function Shell({ user, posts, jobs, trips, listings, actions, engagement, dm, di
         add({ id: `new-${p.id}`, kind: "joined", who: p.id, text: roleLabel(p.role), ts: p.joinedAt });
     });
 
-    return out.sort((a, b) => b.ts - a.ts).slice(0, 50);
+    return out.sort((a, b) => (b.ts || 0) - (a.ts || 0)).slice(0, 50);
+    } catch (e) { console.error('alertItems failed:', e); return []; }
   }, [dm?.dms, engagement?.likes, engagement?.comments, engagement?.follows, jobs, listings, posts, actorId, dirTick]);
 
   // notify the device when something new arrives
@@ -1058,6 +1094,7 @@ function Avatar({ initials, size = 40 }) {
   );
 }
 function relTime(ts) {
+  if (!ts || isNaN(ts)) return "";
   const s = Math.floor((Date.now() - ts) / 1000);
   if (s < 60) return "just now";
   if (s < 3600) return `${Math.floor(s / 60)}m ago`;
@@ -3723,8 +3760,8 @@ function DmThread({ me, otherId, dm, posts, onOpenPost, onBack, onOpenProfile })
   const fileRef = useRef();
   const p = talentById(otherId);
   const thread = (dm?.dms || [])
-    .filter((m) => (m.from === me && m.to === otherId) || (m.from === otherId && m.to === me))
-    .sort((a, b) => a.ts - b.ts);
+    .filter((m) => m && ((m.from === me && m.to === otherId) || (m.from === otherId && m.to === me)))
+    .sort((a, b) => (a.ts || 0) - (b.ts || 0));
 
   useEffect(() => { dm?.markRead && dm.markRead(otherId); }, [otherId, thread.length]);
   useEffect(() => { if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight; }, [thread.length]);
@@ -3786,7 +3823,8 @@ function DmThread({ me, otherId, dm, posts, onOpenPost, onBack, onOpenProfile })
 
   // group by day
   const dayLabel = (ts) => {
-    const d = new Date(ts), now = new Date();
+    const d = new Date(ts || Date.now()), now = new Date();
+    if (isNaN(d.getTime())) return "";
     const same = (a, b) => a.toDateString() === b.toDateString();
     if (same(d, now)) return "Today";
     const y = new Date(now); y.setDate(now.getDate() - 1);
@@ -3823,7 +3861,7 @@ function DmThread({ me, otherId, dm, posts, onOpenPost, onBack, onOpenProfile })
           const mine = m.from === me;
           const prev = thread[idx - 1];
           const next = thread[idx + 1];
-          const label = dayLabel(m.ts);
+          const label = dayLabel(m.ts || Date.now());
           const showDay = label !== lastDay;
           lastDay = label;
           const grouped = prev && prev.from === m.from && m.ts - prev.ts < 4 * 60000;
@@ -3894,7 +3932,7 @@ function DmThread({ me, otherId, dm, posts, onOpenPost, onBack, onOpenProfile })
 
                   {lastOfGroup && (
                     <div className={`flex items-center gap-1 text-[10.5px] mt-0.5 ${mine ? "justify-end mr-1" : "ml-1"}`} style={{ color: C.muted }}>
-                      {relTime(m.ts)}
+                      {relTime(m.ts || Date.now())}
                       {mine && (m.sending ? <Clock size={11} /> : m.read ? <CheckCheck size={12} color={C.pine} /> : <Check size={11} />)}
                     </div>
                   )}
