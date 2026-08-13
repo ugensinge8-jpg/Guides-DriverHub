@@ -18,45 +18,10 @@ const C = {
 };
 
 /* ------------------------------ Seed data -------------------------------- */
-const TALENT = [
-  { id: "t_karma", role: "guide", name: "Karma Wangchuk", base: "Paro", initials: "KW", years: 9, trips: 37, rating: 4.9, verified: true,
-    grades: { Reliability: 5.0, Punctuality: 4.8, Awareness: 4.9 },
-    tags: ["Culture & Dzong", "Alpine Trekking", "Birdwatching"],
-    languages: [{ n: "Dzongkha", l: "Native" }, { n: "English", l: "Fluent" }, { n: "Hindi", l: "Conversational" }, { n: "Japanese", l: "Basic" }],
-    phone: "+975 17 11 22 33", email: "karma.w@example.bt",
-    pitch: "Fourth-generation Paro guide. I read weather and altitude by instinct." },
-  { id: "t_pema", role: "guide", name: "Pema Choden", base: "Bumthang", initials: "PC", years: 12, trips: 54, rating: 4.8, verified: true,
-    grades: { Reliability: 4.9, Punctuality: 4.7, Awareness: 4.9 },
-    tags: ["Alpine Trekking", "Adventure", "Birdwatching"],
-    languages: [{ n: "Dzongkha", l: "Native" }, { n: "English", l: "Fluent" }, { n: "German", l: "Conversational" }, { n: "French", l: "Basic" }],
-    phone: "+975 17 44 55 66", email: "pema.c@example.bt",
-    pitch: "Twelve seasons on the Snowman route. Calm at altitude, meticulous on logistics." },
-  { id: "t_tashi", role: "guide", name: "Tashi Yangzom", base: "Thimphu", initials: "TY", years: 6, trips: 28, rating: 4.7, verified: true,
-    grades: { Reliability: 4.8, Punctuality: 4.6, Awareness: 4.7 },
-    tags: ["Culture & Dzong", "Spiritual & Meditation"],
-    languages: [{ n: "Dzongkha", l: "Native" }, { n: "English", l: "Fluent" }, { n: "Mandarin", l: "Conversational" }],
-    phone: "+975 17 77 88 99", email: "tashi.y@example.bt",
-    pitch: "Specialist in monastery history and meditation retreats for quieter, slower tours." },
-  { id: "t_sonam", role: "driver", name: "Sonam Dorji", base: "Thimphu", initials: "SD", years: 8, trips: 61, rating: 4.8, verified: true,
-    grades: { Reliability: 4.9, Punctuality: 4.8, Awareness: 4.7 },
-    tags: ["Long-distance", "Mountain passes", "Airport transfers"], vehicle: "SUV · Toyota Prado",
-    languages: [{ n: "Dzongkha", l: "Native" }, { n: "Hindi", l: "Fluent" }, { n: "English", l: "Conversational" }],
-    phone: "+975 17 22 33 44", email: "sonam.d@example.bt",
-    pitch: "Eight years on Bhutan's mountain roads. Smooth, unhurried, never late." },
-  { id: "t_dorji", role: "driver", name: "Dorji Tshering", base: "Paro", initials: "DT", years: 5, trips: 33, rating: 4.6, verified: true,
-    grades: { Reliability: 4.7, Punctuality: 4.6, Awareness: 4.5 },
-    tags: ["Excursion trips", "Airport transfers"], vehicle: "Hiace Van · 11 seats",
-    languages: [{ n: "Dzongkha", l: "Native" }, { n: "English", l: "Basic" }],
-    phone: "+975 17 55 66 77", email: "dorji.t@example.bt",
-    pitch: "Group excursions and airport runs across the western valleys." },
-];
+const TALENT = [];
 
-const ACCOUNTS = [
-  { id: "a_guide", kind: "guide", talentId: "t_karma", name: "Karma Wangchuk", initials: "KW", Icon: Compass, sub: "Guide · Paro" },
-  { id: "a_driver", kind: "driver", talentId: "t_sonam", name: "Sonam Dorji", initials: "SD", Icon: Car, sub: "Driver · Thimphu" },
-  { id: "a_operator", kind: "operator", name: "Druk Journeys", initials: "DJ", Icon: Building2, sub: "Tour operator" },
-  { id: "a_admin", kind: "admin", name: "Admin", initials: "A", Icon: ShieldCheck, sub: "Moderator" },
-];
+const ACCOUNTS = [];
+
 
 const HOUR = 3600e3;
 const uid = () => (crypto?.randomUUID ? crypto.randomUUID() : String(Date.now() + Math.random()));
@@ -77,6 +42,7 @@ const sysMsg = (text) => ({ id: uid(), senderId: null, kind: "system", body: tex
 
 /* ── Cloud (Supabase) ── posts are global when configured; everything falls back to local demo mode when not. */
 const CLOUD = Boolean(supabase);
+const DEMO_MODE = false;   // set true only for local demos without a database
 
 // wrap a Supabase write so failures are visible in the console instead of silent
 async function dbWrite(label, promise) {
@@ -117,53 +83,17 @@ const rowToPost = (r) => ({
   status: r.status, reason: r.reject_reason, createdAt: new Date(r.created_at).getTime(),
 });
 
-const ACTOR_FALLBACK = { a_operator: { name: "Druk Journeys", initials: "DJ" }, a_admin: { name: "Admin", initials: "A" } };
+const ACTOR_FALLBACK = {};
 const actorName = (id) => talentById(id)?.name || ACTOR_FALLBACK[id]?.name || "Member";
 const actorInitials = (id) => talentById(id)?.initials || ACTOR_FALLBACK[id]?.initials || "?";
 
-const SEED_POSTS = [
-  { id: uid(), talentId: "t_karma", text: "Clear skies over Jomolhari this morning — the whole group made base camp before the clouds rolled in.", media: null, location: { lat: 27.83, lng: 89.27, place: "Jomolhari" }, status: "approved", reason: null, createdAt: Date.now() - 5 * HOUR },
-  { id: uid(), talentId: "t_sonam", text: "Dochula Pass was glorious today. All 108 chortens out of the mist by 9am.", media: null, location: { lat: 27.49, lng: 89.75, place: "Dochula" }, status: "pending", reason: null, createdAt: Date.now() - 1 * HOUR },
-];
+const SEED_POSTS = [];
 
-const SEED_JOBS = [
-  { id: uid(), operator: "Druk Journeys", toTalentId: "t_karma", title: "7-day Western Cultural Tour — lead guide", role: "guide",
-    start: "2026-04-12", end: "2026-04-18", languages: ["English"], notes: "Group of 6 from Germany. Paro–Thimphu–Punakha loop.", status: "pending", createdAt: Date.now() - 2 * HOUR },
-];
+const SEED_JOBS = [];
 
-const SEED_TRIPS = [
-  {
-    id: uid(), operator: "Druk Journeys", title: "Paro Valley Cultural Tour",
-    start: isoDay(-1), end: isoDay(3), meetingPoint: "Paro International Airport — arrivals hall",
-    members: [
-      { id: "a_operator", name: "Druk Journeys", initials: "DJ", roleInTrip: "operator" },
-      { id: "t_karma", name: "Karma Wangchuk", initials: "KW", roleInTrip: "guide" },
-      { id: "t_sonam", name: "Sonam Dorji", initials: "SD", roleInTrip: "driver" },
-    ],
-    itinerary: [
-      { day: 1, title: "Arrival & Rinpung Dzong" },
-      { day: 2, title: "Tiger's Nest (Taktsang) hike" },
-      { day: 3, title: "Kyichu Lhakhang & valley drive" },
-    ],
-    chat: {
-      state: "active",
-      messages: [
-        sysMsg("Trip chat is live."),
-        { id: uid(), senderId: "a_operator", kind: "text", body: "Guests land at 2:15pm tomorrow. Sonam, can you be at arrivals by 1:45?", photo: null, ts: Date.now() - 3 * HOUR },
-        { id: uid(), senderId: "t_sonam", kind: "text", body: "Will be there with the Prado, boards ready.", photo: null, ts: Date.now() - 2.5 * HOUR },
-        { id: uid(), senderId: "t_karma", kind: "text", body: "I'll meet everyone at the hotel for the 4pm dzong walk.", photo: null, ts: Date.now() - 2 * HOUR },
-      ],
-    },
-    createdAt: Date.now() - 4 * HOUR,
-  },
-];
+const SEED_TRIPS = [];
 
-const SEED_LISTINGS = [
-  { id: uid(), operator: "Snow Lion Expeditions", title: "Guide — Paro pickup + 2 days, Japanese preferred", role: "guide", start: isoDay(1), end: isoDay(3), languages: ["English", "Japanese"], notes: "Guests arrive Tuesday. Short notice — airport pickup then two days in the valley.", urgent: true, status: "open", applicants: [], createdAt: Date.now() - 2 * HOUR },
-  { id: uid(), operator: "Himalaya Trails", title: "Driver for 5-day eastern circuit", role: "driver", start: isoDay(6), end: isoDay(11), languages: ["English"], notes: "Group of 4, Trashigang & Mongar. Comfortable SUV preferred.", urgent: false, status: "open", applicants: [], createdAt: Date.now() - 6 * HOUR },
-  { id: uid(), operator: "Druk Journeys", title: "Trekking guide — 4-day Druk Path", role: "guide", start: isoDay(5), end: isoDay(9), languages: ["English"], notes: "Fit group of 3, camping. Alpine experience needed.", urgent: false, status: "open",
-    applicants: [{ talentId: "t_pema", name: "Pema Choden", initials: "PC", rating: 4.8, message: "Twelve seasons on this route — happy to lead.", status: "applied", appliedAt: Date.now() - 1 * HOUR }], createdAt: Date.now() - 3 * HOUR },
-];
+const SEED_LISTINGS = [];
 
 const LANG_OPTIONS = ["English", "Hindi", "Japanese", "Mandarin", "German", "French"];
 
@@ -364,9 +294,10 @@ export default function App() {
 
   const realUser = CLOUD && !authBusy && session && myProfile && typeof myProfile === "object"
     ? { id: session.user.id, kind: myProfile.role, talentId: session.user.id, name: myProfile.full_name,
-        initials: initialsOf(myProfile.full_name || "?"), licenseStatus: myProfile.license_status || "none" }
+        initials: initialsOf(myProfile.full_name || "?"), licenseStatus: myProfile.license_status || "none",
+        isAdmin: myProfile.role === "admin" }
     : null;
-  const user = realUser || ACCOUNTS.find((a) => a.id === accountId) || null;
+  const user = realUser || (DEMO_MODE ? ACCOUNTS.find((a) => a.id === accountId) : null) || null;
   realUserRef.current = user ? (user.talentId || user.id) : null;
 
   const fetchPosts = async () => {
@@ -585,7 +516,7 @@ export default function App() {
       return [{
         id: uid(), jobId: job.id, operator: job.operator, title: job.title,
         start: job.start, end: job.end, meetingPoint: "To be set by operator",
-        members: [{ id: "a_operator", name: job.operator, initials: initialsOf(job.operator), roleInTrip: "operator" }, talentMember],
+        members: [{ id: job.operatorId || "operator", name: job.operator, initials: initialsOf(job.operator), roleInTrip: "operator" }, talentMember],
         itinerary: [],
         chat: {
           state: scheduled ? "scheduled" : "active",
@@ -681,7 +612,7 @@ export default function App() {
         {!user ? (
           <Login onPick={setAccountId} session={session} myProfile={myProfile} onAuthed={reloadMe} onBusy={setAuthBusy} />
         ) : (
-          <Shell key={user.id} user={user} posts={posts} jobs={jobs} trips={trips} listings={listings}
+          <Shell key={user.id} user={user} posts={posts} jobs={jobs} trips={trips} listings={listings} dirTick={dirTick}
             actions={{ addPost, approve, reject, deletePost, reloadDirectory: loadProfiles, setAvailability, toggleFollow, sendJob, setJobStatus, postChat, openChat, postListing, applyToListing, setApplicant, hireApplicant }} engagement={{ likes, comments, toggleLike, addComment, deleteComment, follows, toggleFollow, stories, addStory, deleteStory }} dm={{ dms, sendDm, markRead, sharePostTo }} onLogout={() => { if (session) supabase.auth.signOut(); setAccountId(null); }} />
         )}
       </div>
@@ -753,30 +684,6 @@ function Login({ onPick, session, myProfile, onAuthed, onBusy }) {
         </div>
       )}
 
-      {/* demo accounts */}
-      <div className="px-6 mt-8 pb-8">
-        <div className="flex items-center justify-between mb-1">
-          <div className="text-[12px] font-semibold tracking-[.14em] uppercase" style={{ color: C.gold }}>Explore the demo</div>
-          <span className="text-[10.5px] font-bold rounded-full px-2 py-0.5" style={{ background: C.goldSoft, color: "#7a5a1e" }}>SAMPLE DATA</span>
-        </div>
-        <p className="text-[13px] mb-3.5" style={{ color: C.muted }}>Pick a seat — each account shows the app from a different side.</p>
-        <div className="space-y-2.5">
-          {ACCOUNTS.map((a) => (
-            <button key={a.id} onClick={() => onPick(a.id)} className="tap w-full text-left rounded-2xl p-4 flex items-center gap-3.5"
-              style={{ background: C.card, border: `1px solid ${C.line}` }}>
-              <div className="w-11 h-11 rounded-xl flex items-center justify-center shrink-0" style={{ background: C.pine }}>
-                <a.Icon size={20} color={C.goldSoft} strokeWidth={1.9} />
-              </div>
-              <div className="flex-1">
-                <div className="text-[15.5px] font-semibold" style={{ color: C.ink }}>{a.name}</div>
-                <div className="text-[13px]" style={{ color: C.muted }}>{a.sub}</div>
-              </div>
-              <ChevronLeft size={18} color={C.muted} style={{ transform: "rotate(180deg)" }} />
-            </button>
-          ))}
-        </div>
-        <p className="text-[12px] mt-4 text-center" style={{ color: C.muted }}>{CLOUD ? "Demo accounts — posts are live and shared with everyone. Other data still resets on reload." : "Demo preview — accounts and data reset when the page reloads."}</p>
-      </div>
     </div>
   );
 }
@@ -804,7 +711,7 @@ const NAV = {
 };
 const DEFAULT_TAB = { guide: "post", driver: "post", operator: "discover", admin: "review" };
 
-function Shell({ user, posts, jobs, trips, listings, actions, engagement, dm, onLogout }) {
+function Shell({ user, posts, jobs, trips, listings, actions, engagement, dm, dirTick, onLogout }) {
   const [tab, setTab] = useState(DEFAULT_TAB[user.kind]);
   const [overlay, setOverlay] = useState(null); // {type:'profile'|'request', talentId}
   const [dmWith, setDmWith] = useState(null);
@@ -813,7 +720,7 @@ function Shell({ user, posts, jobs, trips, listings, actions, engagement, dm, on
   const [alertsOpen, setAlertsOpen] = useState(false);
 
   const nav = NAV[user.kind];
-  const actorId = user.talentId || (user.kind === "operator" ? "a_operator" : "a_admin");
+  const actorId = user.talentId || user.id;
   const eng = { ...engagement, me: actorId, isAdmin: user.kind === "admin", sharePostTo: dm?.sharePostTo };
 
   const alertItems = useMemo(() => {
@@ -871,9 +778,9 @@ function Shell({ user, posts, jobs, trips, listings, actions, engagement, dm, on
             {tab === "post" && <PostTab user={user} posts={posts} onAdd={actions.addPost} eng={eng} onOpenProfile={openProfile} />}
             {tab === "jobs" && <JobsHub user={user} jobs={jobs} listings={listings} actions={actions} />}
             {tab === "trips" && <TripsTab user={user} trips={trips} actions={actions} />}
-            {tab === "chats" && <ChatsTab user={user} me={actorId} dm={dm} trips={trips} actions={actions} posts={posts} onOpenPost={setSharedPost} openWith={dmWith} onOpened={() => setDmWith(null)} onOpenProfile={openProfile} />}
+            {tab === "chats" && <ChatsTab user={user} me={actorId} dm={dm} trips={trips} actions={actions} posts={posts} dirTick={dirTick} onOpenPost={setSharedPost} openWith={dmWith} onOpened={() => setDmWith(null)} onOpenProfile={openProfile} />}
             {tab === "profile" && <TalentProfile talent={talentById(user.talentId)} posts={posts} eng={eng} self onSetAvailability={actions.setAvailability} onOpenProfile={openProfile} onBack={null} />}
-            {tab === "discover" && <Discover onOpen={openProfile} initialQuery={searchTerm} />}
+            {tab === "discover" && <Discover onOpen={openProfile} initialQuery={searchTerm} dirTick={dirTick} />}
             {tab === "requests" && <OperatorJobs user={user} jobs={jobs} listings={listings} posts={posts} actions={actions} eng={eng} onOpen={openProfile} />}
             {tab === "feed" && <Feed posts={posts} eng={eng} admin={user.kind === "admin"} onDelete={actions.deletePost} onOpenProfile={openProfile} following={myFollowing} />}
             {tab === "review" && <Review posts={posts} onApprove={actions.approve} onReject={actions.reject} eng={eng} />}
@@ -1255,14 +1162,14 @@ function Pill({ Icon, children }) {
 }
 
 /* ============================ Discover (operator) ========================= */
-function Discover({ onOpen, initialQuery }) {
+function Discover({ onOpen, initialQuery, dirTick }) {
   const [q, setQ] = useState(initialQuery || "");
   useEffect(() => { if (initialQuery) setQ(initialQuery); }, [initialQuery]);
   const [role, setRole] = useState("all");
   const [lang, setLang] = useState(null);
   const [onlyFree, setOnlyFree] = useState(false);
 
-  const POOL = [...TALENT, ...Object.values(PROFILE_DIR).filter((p) => p.role === "guide" || p.role === "driver")];
+  const POOL = useMemo(() => [...TALENT, ...Object.values(PROFILE_DIR).filter((p) => p.role === "guide" || p.role === "driver")], [dirTick]);
   const list = POOL.filter((t) => (role === "all" || t.role === role))
     .filter((t) => (!onlyFree || (t.availability || "open") === "open"))
     .filter((t) => (!lang || t.languages.some((l) => l.n === lang)))
@@ -1732,7 +1639,7 @@ function CrewAvatars({ members, size = 26 }) {
 
 function TripsTab({ user, trips, actions }) {
   const [openId, setOpenId] = useState(null);
-  const meId = user.kind === "operator" ? "a_operator" : user.talentId;
+  const meId = user.talentId || user.id;
   const mineId = user.talentId || user.id;
   const mine = trips.filter((tr) => tr.members.some((m) => m.id === mineId) || (tr.operatorId && tr.operatorId === mineId));
   const open = mine.find((tr) => tr.id === openId);
@@ -3080,8 +2987,8 @@ function Onboard({ mode: initialMode, session, onBack, onDone }) {
         <div className="fade">
           <h2 className="text-[24px] font-semibold tracking-[-0.01em] mb-5" style={{ color: C.ink }}>Tell us who you are</h2>
           <OLabel>{role === "operator" ? "Your name" : "Full name"}</OLabel>
-          <OInput value={name} onChange={(e) => setName(e.target.value)} placeholder="Karma Wangchuk" />
-          {role === "operator" && (<><OLabel>Agency name</OLabel><OInput value={company} onChange={(e) => setCompany(e.target.value)} placeholder="Druk Journeys" /></>)}
+          <OInput value={name} onChange={(e) => setName(e.target.value)} placeholder="Your full name" />
+          {role === "operator" && (<><OLabel>Agency name</OLabel><OInput value={company} onChange={(e) => setCompany(e.target.value)} placeholder="Your agency name" /></>)}
           <OLabel>Phone</OLabel>
           <OInput value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="+975 17 00 00 00" inputMode="tel" />
           {role !== "operator" && (<><OLabel>Home base</OLabel><OInput value={base} onChange={(e) => setBase(e.target.value)} placeholder="Paro" /></>)}
@@ -3284,7 +3191,7 @@ function Onboard({ mode: initialMode, session, onBack, onDone }) {
 }
 
 /* ===================== Messages · unified inbox (trips + DMs) ==================== */
-function ChatsTab({ user, me, dm, trips, actions, posts, onOpenPost, openWith, onOpened, onOpenProfile }) {
+function ChatsTab({ user, me, dm, trips, actions, posts, dirTick, onOpenPost, openWith, onOpened, onOpenProfile }) {
   const [withId, setWithId] = useState(openWith || null);
   const [tripId, setTripId] = useState(null);
   const [find, setFind] = useState(false);
@@ -3310,7 +3217,7 @@ function ChatsTab({ user, me, dm, trips, actions, posts, onOpenPost, openWith, o
   const openTrip = myTrips.find((t) => t.id === tripId);
   if (openTrip) return <TripChatView user={user} meId={me} trip={openTrip} actions={actions} onBack={() => setTripId(null)} />;
   if (withId) return <DmThread me={me} otherId={withId} dm={dm} posts={posts} onOpenPost={onOpenPost} onBack={() => setWithId(null)} onOpenProfile={onOpenProfile} />;
-  if (find) return <PickContact me={me} onPick={(id) => { setFind(false); setWithId(id); }} onBack={() => setFind(false)} />;
+  if (find) return <PickContact me={me} dirTick={dirTick} onPick={(id) => { setFind(false); setWithId(id); }} onBack={() => setFind(false)} />;
 
   return (
     <div className="px-5 py-4">
@@ -3447,9 +3354,12 @@ function TripChatView({ user, meId, trip, actions, onBack }) {
   );
 }
 
-function PickContact({ me, onPick, onBack }) {
+function PickContact({ me, dirTick, onPick, onBack }) {
   const [q, setQ] = useState("");
-  const pool = [...TALENT, ...Object.values(PROFILE_DIR)].filter((p) => p.id !== me);
+  const pool = useMemo(
+    () => [...TALENT, ...Object.values(PROFILE_DIR)].filter((p) => p.id !== me),
+    [me, dirTick]
+  );
   const seen = new Set();
   const list = pool.filter((p) => {
     if (seen.has(p.id)) return false;
