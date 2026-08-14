@@ -4,8 +4,8 @@ import {
   Compass, Car, Building2, ShieldCheck, ImagePlus, X, Check, Clock, Send,
   BadgeCheck, MapPin, Inbox, ChevronLeft, Star, Phone, Mail, Briefcase,
   Search, LogOut, Newspaper, User, CalendarCheck, MessageCircle,
-  Map as MapIcon, MessageSquare, Users, Download, Mic, Video, Heart, Share2, Trash2, Maximize2, Upload, Loader2, ArrowRight,
-  Award, UserX, RefreshCw, FileCheck2, ExternalLink, UserPlus, Send as SendIcon, Lock, Eye, EyeOff, CalendarDays, UserCheck, Plus, CheckCheck, Camera, Navigation, Bell, Smartphone, Share, PhoneCall,
+  Map as MapIcon, MessageSquare, Users, Download, Mic, Video as VideoIcon, Heart, Share2, Trash2, Maximize2, Upload, Loader2, ArrowRight,
+  Award, UserX, RefreshCw, FileCheck2, ExternalLink, UserPlus, Send as SendIcon, Lock, Eye, EyeOff, CalendarDays, UserCheck, Plus, CheckCheck, Camera, Navigation as NavIcon, Bell, Smartphone, Share, PhoneCall,
   ShieldAlert,
 } from "lucide-react";
 import mapImg from "./map.jpg";
@@ -45,7 +45,7 @@ const sysMsg = (text) => ({ id: uid(), senderId: null, kind: "system", body: tex
 /* ── Cloud (Supabase) ── posts are global when configured; everything falls back to local demo mode when not. */
 const CLOUD = Boolean(supabase);
 const DEMO_MODE = false;   // set true only for local demos without a database
-const BUILD = "v14 · photos";   // bump this every deploy so the running build is visible
+const BUILD = "v15 · photos+fix";   // bump this every deploy so the running build is visible
 
 /* ---- Install state ---- */
 const isStandalone = () =>
@@ -771,7 +771,7 @@ function Login({ onPick, session, myProfile, onAuthed, onBusy }) {
   return (
     <div className="flex-1 overflow-y-auto hidescroll fade" style={{ scrollbarWidth: "none" }}>
       {/* brand */}
-      <div className="px-6 pt-7 flex items-center gap-2.5">
+      <div className="px-6 pt-6 flex items-center gap-2.5">
         <div className="w-10 h-10 rounded-xl flex items-center justify-center" style={{ background: C.pine, boxShadow: `0 6px 14px ${C.pine}33` }}>
           <Compass size={20} color={C.goldSoft} strokeWidth={1.9} />
         </div>
@@ -782,7 +782,7 @@ function Login({ onPick, session, myProfile, onAuthed, onBusy }) {
       </div>
 
       {/* prototype badge */}
-      <div className="px-6 mt-5">
+      <div className="px-6 mt-4">
         <div className="inline-flex items-center gap-2 rounded-full pl-2.5 pr-3 py-1.5" style={{ background: C.goldSoft }}>
           <span className="w-2 h-2 rounded-full" style={{ background: C.gold }} />
           <span className="text-[11.5px] font-bold tracking-[.08em] uppercase" style={{ color: "#7a5a1e" }}>Early access · Prototype</span>
@@ -791,36 +791,41 @@ function Login({ onPick, session, myProfile, onAuthed, onBusy }) {
 
       {/* hero */}
       <div className="px-6 mt-4">
-        <h1 className="text-[32px] leading-[1.1] font-semibold tracking-[-0.02em]" style={{ color: C.ink }}>
+        <h1 className="text-[30px] leading-[1.12] font-semibold tracking-[-0.02em]" style={{ color: C.ink }}>
           Be one of the first<br />guides on the hub.
         </h1>
-        <p className="mt-3.5 text-[15px] leading-relaxed" style={{ color: C.muted }}>
+        <p className="mt-3 text-[14.5px] leading-relaxed" style={{ color: C.muted }}>
           We're building Bhutan's verified marketplace for licensed guides and drivers — where
           tour operators find you by your <b style={{ color: C.ink }}>skills</b>, not by who they
           already know.
         </p>
       </div>
 
-      {/* map */}
-      <div className="relative w-full mt-5 mb-6" style={{ aspectRatio: "5 / 2" }}>
-        <img src={mapImg} alt="Relief map of Bhutan" className="absolute inset-0 w-full h-full" style={{ objectFit: "cover", objectPosition: "center bottom" }} />
-        <div className="absolute inset-0 pointer-events-none" style={{ background: `linear-gradient(to bottom, ${C.bg} 0%, rgba(244,245,241,0) 30%, rgba(244,245,241,0) 68%, ${C.bg} 100%)` }} />
+      {/* map — contained, with its own breathing room */}
+      <div className="px-6 mt-6">
+        <div className="relative w-full rounded-2xl overflow-hidden" style={{ aspectRatio: "16 / 9", background: C.card }}>
+          <img src={mapImg} alt="Relief map of Bhutan" className="absolute inset-0 w-full h-full"
+            style={{ objectFit: "cover", objectPosition: "center 60%" }} />
+        </div>
       </div>
 
-      {/* PRIMARY ACTION — centred, clear of the map */}
-      <div className="px-6">
-        <button onClick={() => setAuthView("signup")} className="tap w-full rounded-2xl flex items-center justify-center gap-2 text-[16.5px] font-semibold"
+      {/* actions — clearly separated, nothing overlapping */}
+      <div className="px-6 mt-7">
+        <button onClick={() => setAuthView("signup")}
+          className="tap w-full rounded-2xl flex items-center justify-center gap-2 text-[16.5px] font-semibold"
           style={{ height: 56, background: C.pine, color: "#fff", boxShadow: `0 10px 24px ${C.pine}40` }}>
           Join the hub <ArrowRight size={19} strokeWidth={2.4} />
         </button>
-        <button onClick={() => setAuthView("signin")} className="tap w-full rounded-2xl text-[15px] font-semibold mt-2.5"
-          style={{ height: 50, background: C.card, border: `1.5px solid ${C.pine}`, color: C.pine }}>
+
+        <button onClick={() => setAuthView("signin")}
+          className="tap w-full rounded-2xl text-[15px] font-semibold mt-3"
+          style={{ height: 52, background: C.card, border: `1.5px solid ${C.pine}`, color: C.pine }}>
           I already have an account
         </button>
-        <p className="text-center text-[12.5px] mt-3" style={{ color: C.muted }}>
+
+        <p className="text-center text-[12.5px] mt-4" style={{ color: C.muted }}>
           Free for licensed guides, drivers and tour operators.
         </p>
-        <p className="text-center text-[10px] mt-1" style={{ color: C.line }}>{BUILD}</p>
       </div>
 
       {/* onboarding in batches — honest framing */}
@@ -870,6 +875,7 @@ function Login({ onPick, session, myProfile, onAuthed, onBusy }) {
             we'll build it.
           </p>
         </div>
+        <p className="text-center text-[10px] mt-4" style={{ color: C.line }}>{BUILD}</p>
       </div>
     </div>
   );
@@ -2251,7 +2257,7 @@ function Chat({ user, meId, trip, state, actions }) {
         <input value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => e.key === "Enter" && send()} disabled={disabled}
           placeholder={disabled ? "Chat isn't open yet" : "Message the crew…"} className="flex-1 h-10 px-3.5 rounded-full text-[14px]" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
         <button onClick={() => flash("Voice is shared live only — not saved to the trip.")} disabled={disabled} className="tap w-9 h-9 rounded-full flex items-center justify-center shrink-0" style={{ background: C.bg, border: `1px solid ${C.line}`, opacity: disabled ? 0.5 : 1 }}><Mic size={16} color={C.muted} /></button>
-        <button onClick={() => flash("Video is shared live only — not saved to the trip.")} disabled={disabled} className="tap w-9 h-9 rounded-full flex items-center justify-center shrink-0" style={{ background: C.bg, border: `1px solid ${C.line}`, opacity: disabled ? 0.5 : 1 }}><Video size={16} color={C.muted} /></button>
+        <button onClick={() => flash("Video is shared live only — not saved to the trip.")} disabled={disabled} className="tap w-9 h-9 rounded-full flex items-center justify-center shrink-0" style={{ background: C.bg, border: `1px solid ${C.line}`, opacity: disabled ? 0.5 : 1 }}><VideoIcon size={16} color={C.muted} /></button>
         <button onClick={send} disabled={disabled || !text.trim()} className="tap w-10 h-10 rounded-full flex items-center justify-center shrink-0" style={{ background: !disabled && text.trim() ? C.pine : "#C7CEC7" }}><Send size={17} color="#fff" /></button>
       </div>
 
@@ -2762,7 +2768,7 @@ function BhutanMap({ value, onPick, readOnly, pins, showMeta }) {
         <div className="rounded-xl overflow-hidden flex flex-col items-center justify-center text-center px-5 py-7"
           style={{ background: C.card, border: `1px dashed ${C.line}`, aspectRatio: BT_MAP_AR }}>
           <div className="w-12 h-12 rounded-2xl flex items-center justify-center mb-3" style={{ background: C.goldSoft }}>
-            <Navigation size={22} color={C.gold} />
+            <NavIcon size={22} color={C.gold} />
           </div>
           <div className="text-[14px] font-semibold" style={{ color: C.ink }}>Outside Bhutan</div>
           <p className="text-[12.5px] leading-snug mt-1 mb-3" style={{ color: C.muted }}>
@@ -2805,7 +2811,7 @@ function BhutanMap({ value, onPick, readOnly, pins, showMeta }) {
                 style={{ filter: "drop-shadow(0 1px 2px rgba(0,0,0,.4))" }} />
               {pt.bearing != null && (
                 <div className="absolute left-1/2 top-0" style={{ transform: `translate(-50%,-118%) rotate(${pt.bearing}deg)` }}>
-                  <Navigation size={13} color={C.pine} fill={C.pine} style={{ filter: "drop-shadow(0 1px 2px rgba(0,0,0,.35))" }} />
+                  <NavIcon size={13} color={C.pine} fill={C.pine} style={{ filter: "drop-shadow(0 1px 2px rgba(0,0,0,.35))" }} />
                 </div>
               )}
             </div>
@@ -4260,7 +4266,7 @@ function DmThread({ me, otherId, dm, posts, onOpenPost, onBack, onOpenProfile })
                     {m.lat != null && m.lng != null && (
                       <div className="px-3.5 py-2.5">
                         <div className="flex items-center gap-2">
-                          <Navigation size={15} color={mine ? "#fff" : C.gold} />
+                          <NavIcon size={15} color={mine ? "#fff" : C.gold} />
                           <span className="text-[13.5px] font-semibold" style={{ color: mine ? "#fff" : C.ink }}>Location shared</span>
                         </div>
                         <div className="text-[11.5px] mt-0.5 font-mono" style={{ color: mine ? "#ffffffcc" : C.muted }}>{m.lat}, {m.lng}</div>
@@ -4888,7 +4894,7 @@ function InstallSheet({ installEvent, onClose }) {
           <InstallReason Icon={Bell} title="Job alerts reach you"
             body={ios ? "On iPhone, notifications only work once the app is installed — a browser tab gets none."
                       : "Get notified about new jobs and messages without opening the app."} />
-          <InstallReason Icon={Navigation} title="Works with poor signal"
+          <InstallReason Icon={NavIcon} title="Works with poor signal"
             body="Opens instantly and keeps working on the road, where data is weak." />
           <InstallReason Icon={Smartphone} title="Opens like a normal app"
             body="Its own icon on your home screen — no browser bar, full screen." />
