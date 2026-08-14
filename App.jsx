@@ -45,6 +45,7 @@ const sysMsg = (text) => ({ id: uid(), senderId: null, kind: "system", body: tex
 /* ── Cloud (Supabase) ── posts are global when configured; everything falls back to local demo mode when not. */
 const CLOUD = Boolean(supabase);
 const DEMO_MODE = false;   // set true only for local demos without a database
+const BUILD = "v14 · photos";   // bump this every deploy so the running build is visible
 
 /* ---- Install state ---- */
 const isStandalone = () =>
@@ -819,6 +820,7 @@ function Login({ onPick, session, myProfile, onAuthed, onBusy }) {
         <p className="text-center text-[12.5px] mt-3" style={{ color: C.muted }}>
           Free for licensed guides, drivers and tour operators.
         </p>
+        <p className="text-center text-[10px] mt-1" style={{ color: C.line }}>{BUILD}</p>
       </div>
 
       {/* onboarding in batches — honest framing */}
@@ -1473,9 +1475,20 @@ function Composer({ talent, onAdd }) {
 
       {error && <p className="text-[12.5px] mt-2" style={{ color: C.maroon }}>{error}</p>}
 
+      {!media && (
+        <div className="rounded-xl px-3.5 py-2.5 mt-3 flex items-start gap-2.5" style={{ background: C.bg, border: `1px dashed ${C.line}` }}>
+          <ImagePlus size={15} color={C.gold} className="shrink-0 mt-0.5" />
+          <p className="text-[12px] leading-snug" style={{ color: C.muted }}>
+            Add up to <b style={{ color: C.ink }}>10 photos</b> — they become a swipeable set.
+            On Android, <b style={{ color: C.ink }}>press and hold</b> the first photo to pick several at once,
+            or add them one at a time.
+          </p>
+        </div>
+      )}
+
       <div className="flex items-center gap-2 mt-3">
         <button onClick={() => inputRef.current?.click()} className="tap inline-flex items-center gap-1.5 rounded-xl px-3 py-2 text-[13px] font-semibold" style={{ background: C.goldSoft, color: "#7a5a1e" }}>
-          <ImagePlus size={16} /> {media ? "Change" : "Add photos"}
+          <ImagePlus size={16} /> {media && media.kind === "photo" ? "Add another" : media ? "Change" : "Add photos"}
         </button>
         <input ref={inputRef} type="file" accept="image/*,video/*" multiple onChange={pick} className="hidden" />
         {!location && (
