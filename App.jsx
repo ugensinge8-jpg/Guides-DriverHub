@@ -1,3 +1,4 @@
+// ===== BHUTAN TOURISM HUB — FILE VERSION 17 — 14 AUG — VERIFIED CLEAN =====
 import React, { useState, useRef, useMemo, useEffect } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -1822,6 +1823,8 @@ function TalentProfile({ talent, posts, canRequest, self, contactOnly, eng, onRe
   const followerCount = allFollows.filter((f) => f.following === t.id).length;
   const followingCount = allFollows.filter((f) => f.follower === t.id).length;
   const iFollow = allFollows.some((f) => f.follower === eng?.me && f.following === t.id);
+  // Contact details are an operator feature. Guides and drivers message instead.
+  const canSeeContact = Boolean(self || canRequest || contactOnly);
   const myStories = (eng?.stories || []).filter((st) => st.authorId === t.id);
   const [viewStories, setViewStories] = useState(false);
   const [addStory, setAddStory] = useState(false);
@@ -1881,7 +1884,7 @@ function TalentProfile({ talent, posts, canRequest, self, contactOnly, eng, onRe
                 style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }}>
                 <MessageCircle size={15} /> Message
               </button>
-              {t.phone && (
+              {canSeeContact && t.phone && (
                 <a href={`tel:${dialNumber(t.phone)}`}
                   className="tap w-11 h-10 rounded-xl flex items-center justify-center shrink-0"
                   style={{ background: C.pineSoft, border: `1px solid ${C.line}` }} aria-label="Call">
@@ -1948,8 +1951,8 @@ function TalentProfile({ talent, posts, canRequest, self, contactOnly, eng, onRe
           galleryCount={gallery.length}
         />
 
-        {(canRequest || self || contactOnly) && (
-          <div className="mt-6"><SectionLabel>Contact</SectionLabel>
+        {canSeeContact && (
+          <div className="mt-6"><SectionLabel trailing={self ? "" : "Operators only"}>Contact</SectionLabel>
             <div className="rounded-2xl overflow-hidden" style={{ background: C.card, border: `1px solid ${C.line}` }}>
               {t.phone && (
                 <>
@@ -1993,6 +1996,28 @@ function TalentProfile({ talent, posts, canRequest, self, contactOnly, eng, onRe
           <button onClick={onRequest} className="tap flex-1 h-12 rounded-xl flex items-center justify-center gap-2 text-[15px] font-semibold" style={{ background: C.pine, color: "#fff", boxShadow: `0 6px 16px ${C.pine}33` }}><Briefcase size={18} /> Send job request</button>
         </div>
       )}
+      {!canSeeContact && (
+        <div className="px-5 mt-6">
+          <SectionLabel>Contact</SectionLabel>
+          <div className="rounded-2xl p-4 flex items-start gap-3" style={{ background: C.card, border: `1px dashed ${C.line}` }}>
+            <div className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0" style={{ background: C.goldSoft }}>
+              <Lock size={16} color={C.gold} />
+            </div>
+            <div className="flex-1">
+              <div className="text-[13.5px] font-semibold" style={{ color: C.ink }}>Contact details are for operators</div>
+              <p className="text-[12.5px] leading-snug mt-1" style={{ color: C.muted }}>
+                Phone numbers are shown to tour operators booking crew. You can message {String(t.name || "them").split(" ")[0]} here instead.
+              </p>
+              <button onClick={() => onMessage && onMessage(t.id)}
+                className="tap mt-2.5 h-9 px-3.5 rounded-lg text-[13px] font-semibold inline-flex items-center gap-1.5"
+                style={{ background: C.pine, color: "#fff" }}>
+                <MessageCircle size={14} /> Send a message
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {self && (
         <>
           <div className="px-5 mt-6"><div className="rounded-xl px-4 py-3 text-[13px] text-center" style={{ background: C.goldSoft, color: "#7a5a1e" }}>This is how operators see your profile.</div></div>
