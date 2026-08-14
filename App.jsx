@@ -719,7 +719,7 @@ export default function App() {
 
   return (
     <ErrorBoundary>
-    <div className="min-h-screen w-full flex justify-center" style={{ background: C.bg }}>
+      <div className="min-h-screen w-full flex justify-center" style={{ background: C.bg }}>
       <style>{`
         *{ font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Helvetica Neue", ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
         html, body { overscroll-behavior-y: none; }
@@ -1990,8 +1990,10 @@ function TalentProfile({ talent, posts, canRequest, self, contactOnly, eng, onRe
         </div>
       )}
       {self && (
-        <div className="px-5 mt-6"><div className="rounded-xl px-4 py-3 text-[13px] text-center" style={{ background: C.goldSoft, color: "#7a5a1e" }}>This is how operators see your profile.</div></div>
-        <div className="px-5 mt-4"><PrivacyPanel talent={t} /></div>
+        <>
+          <div className="px-5 mt-6"><div className="rounded-xl px-4 py-3 text-[13px] text-center" style={{ background: C.goldSoft, color: "#7a5a1e" }}>This is how operators see your profile.</div></div>
+          <div className="px-5 mt-4"><PrivacyPanel talent={t} /></div>
+        </>
       )}
 
       {viewStories && myStories.length > 0 && (
