@@ -1854,6 +1854,7 @@ function TalentProfile({ talent, posts, canRequest, self, contactOnly, eng, onRe
   const [addStory, setAddStory] = useState(false);
   const [shareToStory, setShareToStory] = useState(null);
   const [listMode, setListMode] = useState(null);
+  const [askOperator, setAskOperator] = useState(false);
   return (
     <div className="pb-6">
       <div className="relative">
@@ -1926,7 +1927,7 @@ function TalentProfile({ talent, posts, canRequest, self, contactOnly, eng, onRe
         <ProfileTabs
           cv={
             <>
-              <GuestReviews talentId={t.id} isAdmin={eng?.isAdmin} />
+              <GuestReviews talentId={t.id} isAdmin={eng?.isAdmin} isSelf={self} onAskOperator={() => setAskOperator(true)} />
 
               <div className="mt-6" />
 
@@ -2057,6 +2058,8 @@ function TalentProfile({ talent, posts, canRequest, self, contactOnly, eng, onRe
         <StoryViewer stories={myStories} author={t} canDelete={self} onDelete={eng?.deleteStory} onClose={() => setViewStories(false)} />
       )}
       {addStory && <AddStory onClose={() => setAddStory(false)} onAdd={eng?.addStory} />}
+      {askOperator && <OperatorInvite user={{ name: t.name, talentId: t.id, id: t.id, kind: t.role }} trip={null} onClose={() => setAskOperator(false)} />}
+
       {listMode && (
         <FollowListSheet mode={listMode} talent={t} eng={eng} onClose={() => setListMode(null)}
           onOpenProfile={(id) => { setListMode(null); onOpenProfile && onOpenProfile(id); }} />
@@ -2182,8 +2185,10 @@ function TripCard({ trip, onOpen }) {
 function TripHub({ user, meId, trip, actions, onBack }) {
   const state = tripStateNow(trip);
   const [inviting, setInviting] = useState(false);
-  // guests can be invited once the trip is running or finished — never before it starts
-  const canInvite = (state === "active" || state === "completed") && (user.kind === "operator" || user.kind === "admin");
+  const [askingOperator, setAskingOperator] = useState(false);
+  const tripDone = state === "active" || state === "completed";
+  const canInvite = tripDone && (user.kind === "operator" || user.kind === "admin");
+  const isTalent = user.kind === "guide" || user.kind === "driver";
   return (
     <div className="pb-6 fade">
       <div className="h-14 px-4 flex items-center gap-3" style={{ borderBottom: `1px solid ${C.lineSoft}` }}>
@@ -2216,7 +2221,25 @@ function TripHub({ user, meId, trip, actions, onBack }) {
           </button>
         )}
 
+        {isTalent && tripDone && (
+          <button onClick={() => setAskingOperator(true)}
+            className="tap w-full rounded-2xl p-4 mb-4 flex items-center gap-3 text-left"
+            style={{ background: C.goldSoft, border: `1px solid ${C.gold}33` }}>
+            <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0" style={{ background: C.gold }}>
+              <Star size={18} color="#fff" fill="#fff" />
+            </div>
+            <div className="flex-1">
+              <div className="text-[14px] font-semibold" style={{ color: "#7a5a1e" }}>Get a review for this trip</div>
+              <div className="text-[12.5px] mt-0.5 leading-snug" style={{ color: "#7a5a1e", opacity: .85 }}>
+                Ask {trip.operator || "your operator"} to send your guests a review link.
+              </div>
+            </div>
+            <ChevronLeft size={17} color="#7a5a1e" style={{ transform: "rotate(180deg)" }} />
+          </button>
+        )}
+
         {inviting && <ReviewInvite user={user} trip={trip} onClose={() => setInviting(false)} />}
+        {askingOperator && <OperatorInvite user={user} trip={trip} onClose={() => setAskingOperator(false)} />}
 
         <SectionLabel>Crew</SectionLabel>
         <div className="rounded-2xl divide-y mb-5" style={{ background: C.card, border: `1px solid ${C.line}`, borderColor: C.line }}>
@@ -5536,6 +5559,7 @@ function GuestReview({ token }) {
   const [comms, setComms] = useState(0);
   const [body, setBody] = useState("");
   const [country, setCountry] = useState("");
+  const [showDetail, setShowDetail] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
 
@@ -5632,85 +5656,121 @@ function GuestReview({ token }) {
   if (state === "done") return <Message Icon={Check} title="Thank you"
     body={`Your review of ${talent?.name || "your guide"} is published. It becomes part of their professional record and helps other travellers choose well.`} tone="good" />;
 
-  const Row = ({ label, value, onChange, hint }) => (
-    <div className="mb-4">
-      <div className="text-[13.5px] font-medium mb-0.5" style={{ color: C.ink }}>{label}</div>
-      {hint && <div className="text-[11.5px] mb-1.5" style={{ color: C.muted }}>{hint}</div>}
-      <div className="flex gap-1.5">
+  const BigStars = ({ value, onChange }) => (
+    <div className="flex justify-center gap-2">
+      {[1, 2, 3, 4, 5].map((n) => (
+        <button key={n} onClick={() => onChange(n)} className="tap" aria-label={`${n} out of 5`}>
+          <Star size={44} strokeWidth={1.4}
+            color={n <= value ? C.gold : C.line}
+            fill={n <= value ? C.gold : "transparent"}
+            style={{ transition: "transform .12s", transform: n === value ? "scale(1.08)" : "none" }} />
+        </button>
+      ))}
+    </div>
+  );
+
+  const SmallStars = ({ label, hint, value, onChange }) => (
+    <div className="flex items-center gap-3 py-2.5">
+      <div className="flex-1 min-w-0">
+        <div className="text-[13.5px] font-medium" style={{ color: C.ink }}>{label}</div>
+        <div className="text-[11.5px]" style={{ color: C.muted }}>{hint}</div>
+      </div>
+      <div className="flex gap-1 shrink-0">
         {[1, 2, 3, 4, 5].map((n) => (
-          <button key={n} onClick={() => onChange(n)} className="tap"
-            aria-label={`${n} of 5`}>
-            <Star size={30} strokeWidth={1.6}
-              color={n <= value ? C.gold : C.line}
-              fill={n <= value ? C.gold : "transparent"} />
+          <button key={n} onClick={() => onChange(n)} className="tap" aria-label={`${label} ${n} of 5`}>
+            <Star size={20} strokeWidth={1.6}
+              color={n <= value ? C.gold : C.line} fill={n <= value ? C.gold : "transparent"} />
           </button>
         ))}
       </div>
     </div>
   );
 
+  const wordFor = [null, "Poor", "Fair", "Good", "Great", "Excellent"][rating] || "";
+
   return (
     <Shell>
-      <div className="rounded-2xl p-5 mb-5" style={{ background: C.card, border: `1px solid ${C.line}` }}>
-        <div className="flex items-center gap-3">
-          <Avatar initials={talent?.initials || "?"} size={52} />
-          <div className="flex-1 min-w-0">
-            <div className="text-[18px] font-semibold leading-tight" style={{ color: C.ink }}>{talent?.name || "Your guide"}</div>
-            <div className="text-[13px] mt-0.5" style={{ color: C.muted }}>
-              {talent ? roleLabel(talent.role) : ""}{talent?.base ? ` · ${talent.base}` : ""}
-            </div>
-          </div>
+      {/* who you are reviewing */}
+      <div className="text-center mb-6">
+        <div className="flex justify-center mb-3"><Avatar initials={talent?.initials || "?"} size={64} /></div>
+        <div className="text-[21px] font-semibold tracking-[-0.01em]" style={{ color: C.ink }}>{talent?.name || "Your guide"}</div>
+        <div className="text-[13.5px] mt-0.5" style={{ color: C.muted }}>
+          {talent ? roleLabel(talent.role) : ""}{talent?.base ? ` · ${talent.base}` : ""}
         </div>
         {info?.trip_label && (
-          <div className="mt-3 pt-3 text-[13px]" style={{ borderTop: `1px solid ${C.lineSoft}`, color: C.muted }}>
+          <div className="inline-block mt-2.5 text-[12.5px] rounded-full px-3 py-1"
+            style={{ background: C.card, border: `1px solid ${C.line}`, color: C.muted }}>
             {info.trip_label}
           </div>
         )}
       </div>
 
-      <h1 className="text-[24px] font-semibold tracking-[-0.01em] mb-1" style={{ color: C.ink }}>
-        How was your trip?
-      </h1>
-      <p className="text-[14px] leading-relaxed mb-6" style={{ color: C.muted }}>
-        {info?.guest_name ? `${info.guest_name}, your` : "Your"} honest review helps Bhutanese guides
-        build a professional record — and helps other travellers choose well. It takes a minute.
-      </p>
-
-      <Row label="Overall" value={rating} onChange={setRating} />
-      <Row label="Knowledge" value={knowledge} onChange={setKnowledge} hint="Depth on culture, history, nature" />
-      <Row label="Care" value={care} onChange={setCare} hint="Looking after you and your group" />
-      <Row label="Communication" value={comms} onChange={setComms} hint="Clarity, language, keeping you informed" />
-
-      <div className="text-[13.5px] font-medium mb-1.5 mt-5" style={{ color: C.ink }}>In your words</div>
-      <textarea value={body} onChange={(e) => setBody(e.target.value)} rows={5} maxLength={600}
-        placeholder="What stood out? A moment you'll remember?"
-        className="w-full px-3.5 py-3 rounded-xl text-[15px] leading-relaxed resize-none"
-        style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }} />
-      <div className="flex justify-end mt-1 mb-4">
-        <span className="text-[11px]" style={{ color: C.muted }}>{body.length}/600</span>
+      {/* step 1 — the only thing required */}
+      <div className="rounded-2xl p-5 text-center" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+        <div className="text-[17px] font-semibold mb-1" style={{ color: C.ink }}>
+          {info?.guest_name ? `${String(info.guest_name).split(" ")[0]}, how` : "How"} was your trip?
+        </div>
+        <p className="text-[13px] mb-4" style={{ color: C.muted }}>Tap a star to begin</p>
+        <BigStars value={rating} onChange={setRating} />
+        <div className="text-[14px] font-semibold mt-3" style={{ color: rating ? C.gold : "transparent" }}>
+          {wordFor || "\u00a0"}
+        </div>
       </div>
 
-      <div className="text-[13.5px] font-medium mb-1.5" style={{ color: C.ink }}>Where are you visiting from? <span style={{ color: C.muted }}>(optional)</span></div>
-      <input value={country} onChange={(e) => setCountry(e.target.value)} maxLength={40}
-        placeholder="e.g. Australia"
-        className="w-full h-12 px-3.5 rounded-xl text-[15px] mb-5"
-        style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }} />
+      {/* everything else appears only after they've rated */}
+      {rating > 0 && (
+        <div className="fade mt-5">
+          <div className="text-[15px] font-semibold mb-1" style={{ color: C.ink }}>Tell them why</div>
+          <p className="text-[12.5px] mb-2" style={{ color: C.muted }}>
+            A sentence or two is plenty. What did they do well? What will you remember?
+          </p>
+          <textarea value={body} onChange={(e) => setBody(e.target.value)} rows={5} maxLength={600}
+            placeholder="e.g. Karma knew every trail on the way to Tiger's Nest and made sure my mother could take it at her own pace."
+            className="w-full px-3.5 py-3 rounded-xl text-[15px] leading-relaxed resize-none"
+            style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }} />
+          <div className="flex justify-end mt-1 mb-4">
+            <span className="text-[11px]" style={{ color: C.muted }}>{body.length}/600</span>
+          </div>
 
-      {err && <p className="text-[13px] mb-3" style={{ color: C.maroon }}>{err}</p>}
+          {/* optional detail — collapsed by default so the form stays short */}
+          <button onClick={() => setShowDetail((v) => !v)}
+            className="tap w-full flex items-center justify-between rounded-xl px-4 py-3 mb-1"
+            style={{ background: C.card, border: `1px solid ${C.line}` }}>
+            <span className="text-[13.5px] font-medium" style={{ color: C.ink }}>Rate a few details (optional)</span>
+            <ChevronLeft size={17} color={C.muted} style={{ transform: showDetail ? "rotate(90deg)" : "rotate(-90deg)", transition: "transform .2s" }} />
+          </button>
+          {showDetail && (
+            <div className="rounded-xl px-4 py-1 mb-4 fade" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+              <SmallStars label="Knowledge" hint="Culture, history, nature" value={knowledge} onChange={setKnowledge} />
+              <div style={{ height: 1, background: C.lineSoft }} />
+              <SmallStars label="Care" hint="Looking after your group" value={care} onChange={setCare} />
+              <div style={{ height: 1, background: C.lineSoft }} />
+              <SmallStars label="Communication" hint="Clear and easy to follow" value={comms} onChange={setComms} />
+            </div>
+          )}
 
-      <button onClick={submit} disabled={busy || !rating}
-        className="tap w-full rounded-2xl flex items-center justify-center gap-2 text-[16px] font-semibold"
-        style={{ height: 54, background: rating ? C.pine : "#C7CEC7", color: "#fff" }}>
-        {busy ? <Loader2 size={18} className="animate-spin" /> : "Publish my review"}
-      </button>
+          <div className="text-[13.5px] font-medium mb-1.5 mt-4" style={{ color: C.ink }}>
+            Where are you visiting from? <span style={{ color: C.muted }}>optional</span>
+          </div>
+          <input value={country} onChange={(e) => setCountry(e.target.value)} maxLength={40}
+            placeholder="e.g. Australia"
+            className="w-full h-12 px-3.5 rounded-xl text-[15px] mb-5"
+            style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }} />
 
-      <div className="rounded-xl p-3.5 flex gap-2.5 mt-4" style={{ background: C.goldSoft }}>
-        <ShieldCheck size={16} color={C.maroon} className="shrink-0 mt-0.5" />
-        <p className="text-[12px] leading-snug" style={{ color: "#5a4a2e" }}>
-          This link was issued by the tour operator who arranged your trip and can be used once.
-          Guides cannot request reviews for themselves.
-        </p>
-      </div>
+          {err && <p className="text-[13px] mb-3" style={{ color: C.maroon }}>{err}</p>}
+
+          <button onClick={submit} disabled={busy}
+            className="tap w-full rounded-2xl flex items-center justify-center gap-2 text-[16px] font-semibold"
+            style={{ height: 54, background: C.pine, color: "#fff", boxShadow: `0 8px 20px ${C.pine}33` }}>
+            {busy ? <Loader2 size={18} className="animate-spin" /> : "Send my review"}
+          </button>
+
+          <p className="text-[11.5px] text-center leading-snug mt-3.5" style={{ color: C.muted }}>
+            Your review is published on {talent?.name ? String(talent.name).split(" ")[0] + "'s" : "their"} profile
+            and stays part of their professional record. Please be honest — that is what makes it worth something.
+          </p>
+        </div>
+      )}
     </Shell>
   );
 }
@@ -5724,6 +5784,7 @@ function GuestReview({ token }) {
 function ReviewInvite({ user, trip, onClose }) {
   const [guestName, setGuestName] = useState("");
   const [guestEmail, setGuestEmail] = useState("");
+  const [guestPhone, setGuestPhone] = useState("");
   const [issued, setIssued] = useState([]);
   const [made, setMade] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -5777,16 +5838,42 @@ function ReviewInvite({ user, trip, onClose }) {
     load();
   };
 
+  // Kept short on purpose: WhatsApp truncates long pre-filled messages on some phones,
+  // and the link must sit on its own line so it is detected and previewed correctly.
+  const guestMessage = () =>
+`Thank you for travelling with us in Bhutan.
+
+Would you leave a short review for ${subjectName}? It becomes part of their verified record on Bhutan Tourism Hub, and it genuinely helps them.
+
+It takes about a minute:
+
+${made}`;
+
   const copy = async () => {
     try { await navigator.clipboard.writeText(made); setCopied(true); setTimeout(() => setCopied(false), 2200); }
     catch (e) { setErr("Couldn't copy — press and hold the link instead."); }
   };
+
+  const sendWhatsApp = () => {
+    const digits = String(guestPhone || "").replace(/[^\d]/g, "");
+    const text = encodeURIComponent(guestMessage());
+    // with a number: opens that person's chat directly. without: WhatsApp asks who to send to.
+    const url = digits.length >= 8
+      ? `https://wa.me/${digits}?text=${text}`
+      : `https://wa.me/?text=${text}`;
+    window.open(url, "_blank", "noopener");
+  };
+
   const share = async () => {
-    const text = `Thank you for travelling with us. Would you share a short review of your guide? It takes a minute:\n${made}`;
     try {
-      if (navigator.share) await navigator.share({ title: "Review your trip", text, url: made });
+      if (navigator.share) await navigator.share({ title: "Review your trip", text: guestMessage() });
       else copy();
     } catch (e) {}
+  };
+
+  const sendEmail = () => {
+    const subject = encodeURIComponent(`A quick review for ${subjectName}?`);
+    window.location.href = `mailto:${guestEmail || ""}?subject=${subject}&body=${encodeURIComponent(guestMessage())}`;
   };
 
   const subjectName = (trip.members || []).find((m) => m.id === subject)?.name || "the guide";
@@ -5820,10 +5907,18 @@ function ReviewInvite({ user, trip, onClose }) {
 
               <div className="text-[12.5px] font-medium mb-1.5" style={{ color: C.ink }}>Guest email</div>
               <input value={guestEmail} onChange={(e) => setGuestEmail(e.target.value)} inputMode="email" autoCapitalize="none"
-                placeholder="so we can trace where the review came from"
+                placeholder="guest@email.com"
                 className="w-full h-11 px-3.5 rounded-xl text-[14px] mb-1.5" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
               <p className="text-[11.5px] mb-4" style={{ color: C.muted }}>
-                Kept private. Never shown on the review — it exists so a disputed review can be traced.
+                Kept private, never shown on the review. It exists so a disputed review can be traced.
+              </p>
+
+              <div className="text-[12.5px] font-medium mb-1.5" style={{ color: C.ink }}>Guest WhatsApp number <span style={{ color: C.muted }}>· optional</span></div>
+              <input value={guestPhone} onChange={(e) => setGuestPhone(e.target.value)} inputMode="tel"
+                placeholder="+61 4XX XXX XXX — with country code"
+                className="w-full h-11 px-3.5 rounded-xl text-[14px] mb-1.5" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
+              <p className="text-[11.5px] mb-4" style={{ color: C.muted }}>
+                Add it and WhatsApp opens straight to their chat. Leave it blank and you'll choose the contact in WhatsApp.
               </p>
 
               {err && <p className="text-[13px] mb-2.5" style={{ color: C.maroon }}>{err}</p>}
@@ -5835,11 +5930,18 @@ function ReviewInvite({ user, trip, onClose }) {
                     Works once, expires in 14 days. Best shared with the guest in person on the last day.
                   </p>
                   <div className="rounded-lg px-3 py-2 mb-2.5 break-all text-[11.5px] font-mono" style={{ background: C.card, color: C.ink }}>{made}</div>
+                  <button onClick={sendWhatsApp}
+                    className="tap w-full h-12 rounded-xl text-[15px] font-semibold inline-flex items-center justify-center gap-2 mb-2"
+                    style={{ background: "#25D366", color: "#fff" }}>
+                    <MessageCircle size={17} /> Send on WhatsApp
+                  </button>
                   <div className="flex gap-2">
+                    <button onClick={sendEmail} className="tap flex-1 h-10 rounded-lg text-[13px] font-semibold inline-flex items-center justify-center gap-1.5"
+                      style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }}><Mail size={14} /> Email</button>
                     <button onClick={share} className="tap flex-1 h-10 rounded-lg text-[13px] font-semibold inline-flex items-center justify-center gap-1.5"
-                      style={{ background: C.pine, color: "#fff" }}><Share2 size={14} /> Share</button>
+                      style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }}><Share2 size={14} /> Share</button>
                     <button onClick={copy} className="tap flex-1 h-10 rounded-lg text-[13px] font-semibold"
-                      style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }}>{copied ? "Copied" : "Copy link"}</button>
+                      style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }}>{copied ? "Copied" : "Copy"}</button>
                   </div>
                   <button onClick={() => setMade(null)} className="tap w-full h-9 rounded-lg text-[12.5px] font-medium mt-2" style={{ color: C.pine }}>
                     Create another for the next guest
@@ -5899,7 +6001,7 @@ function ReviewInvite({ user, trip, onClose }) {
 /* ========================================================================== */
 /*  GUEST REVIEWS on a profile — with visible provenance                      */
 /* ========================================================================== */
-function GuestReviews({ talentId, isAdmin, onCount }) {
+function GuestReviews({ talentId, isAdmin, isSelf, onAskOperator, onCount }) {
   const [rows, setRows] = useState(null);
   const [busyId, setBusyId] = useState(null);
 
@@ -5930,8 +6032,26 @@ function GuestReviews({ talentId, isAdmin, onCount }) {
   }
 
   if (rows.length === 0) {
-    return <Empty Icon={Star} title="No guest reviews yet"
-      body="After a trip, guests can leave a review through a one-time link. They appear here." />;
+    return (
+      <div className="rounded-2xl px-5 py-8 flex flex-col items-center text-center"
+        style={{ background: C.card, border: `1px dashed ${C.line}` }}>
+        <div className="w-12 h-12 rounded-2xl flex items-center justify-center mb-3" style={{ background: C.goldSoft }}>
+          <Star size={22} color={C.gold} />
+        </div>
+        <div className="text-[15px] font-semibold" style={{ color: C.ink }}>No guest reviews yet</div>
+        <p className="text-[13px] leading-snug mt-1.5 mb-3" style={{ color: C.muted }}>
+          {isSelf
+            ? "Reviews are sent by the tour operator who ran your trip. Ask them after your next trip ends."
+            : "Guest reviews appear here once an operator invites guests to review this person."}
+        </p>
+        {isSelf && onAskOperator && (
+          <button onClick={onAskOperator} className="tap h-10 px-4 rounded-xl text-[13.5px] font-semibold inline-flex items-center gap-1.5"
+            style={{ background: C.pine, color: "#fff" }}>
+            <Send size={14} /> Ask your operator
+          </button>
+        )}
+      </div>
+    );
   }
 
   const avg = rows.reduce((a, r) => a + (r.rating || 0), 0) / rows.length;
@@ -6026,4 +6146,132 @@ function GuestReviews({ talentId, isAdmin, onCount }) {
       </p>
     </div>
   );
+}
+
+/* ========================================================================== */
+/*  INVITE YOUR OPERATOR                                                      */
+/*  A guide cannot request their own reviews — so this is how they get one:   */
+/*  they invite the operator who ran the trip. That operator joins to issue   */
+/*  the review, and becomes a user of the platform in the process.            */
+/* ========================================================================== */
+function OperatorInvite({ user, trip, onClose }) {
+  const [company, setCompany] = useState(trip?.operator || "");
+  const [opPhone, setOpPhone] = useState("");
+  const [copied, setCopied] = useState(false);
+  const [note, setNote] = useState(null);
+
+  const first = String(user.name || "").split(" ")[0] || "your guide";
+  const joinLink = `${window.location.origin}/?invited_by=${encodeURIComponent(user.talentId || user.id)}`;
+
+  // Deliberately short. WhatsApp truncates long pre-filled messages on some phones,
+  // and the link is placed on its own line so it is detected and previewed properly.
+  const message =
+`Kuzu Zangpo la${company ? ` ${company}` : ""},
+
+There's a new platform in Bhutan — Bhutan Tourism Hub — where licensed guides and drivers keep a verified professional record, and where guest reviews are stored permanently against real trips.
+
+What makes it different: a guide cannot write or request their own reviews. Only the tour operator who ran the trip can invite a guest to review. That's what keeps the ratings honest.
+
+${trip ? `Would you send our guests from "${trip.title}" a review link? ` : "Would you send my guests a review link after our trips? "}It takes a minute, and it builds a record that actually means something.
+
+Free to join:
+${joinLink}
+
+Kadrinchhey la,
+${user.name || ""}`;
+
+  const copy = async () => {
+    try { await navigator.clipboard.writeText(message); setCopied(true); setTimeout(() => setCopied(false), 2400); }
+    catch (e) { setNote("Couldn't copy — press and hold the message to copy it."); }
+  };
+
+  const shareWhatsApp = () => {
+    const digits = String(opPhone || "").replace(/[^\d]/g, "");
+    const withCode = digits.length === 8 ? `975${digits}` : digits;   // bare Bhutanese mobile
+    const text = encodeURIComponent(message);
+    const url = withCode.length >= 8
+      ? `https://wa.me/${withCode}?text=${text}`
+      : `https://wa.me/?text=${text}`;
+    window.open(url, "_blank", "noopener");
+  };
+
+  const shareNative = async () => {
+    try {
+      if (navigator.share) await navigator.share({ title: "Bhutan Tourism Hub", text: message });
+      else copy();
+    } catch (e) {}
+  };
+
+  const shareEmail = () => {
+    const subject = encodeURIComponent("Bhutan Tourism Hub — guest reviews for our trips");
+    window.location.href = `mailto:?subject=${subject}&body=${encodeURIComponent(message)}`;
+  };
+
+  return createPortal((
+    <div className="fixed inset-0 flex items-end" style={{ background: "rgba(8,10,8,.55)", zIndex: 230 }} onClick={onClose}>
+      <div className="w-full rounded-t-3xl flex flex-col safe-bottom" style={{ background: C.card, maxHeight: "90dvh" }} onClick={(e) => e.stopPropagation()}>
+        <div className="p-5 pb-3 shrink-0">
+          <div className="w-10 h-1 rounded-full mx-auto mb-4" style={{ background: C.line }} />
+          <div className="text-[17px] font-semibold" style={{ color: C.ink }}>Ask your operator for reviews</div>
+          <p className="text-[13px] mt-1 leading-snug" style={{ color: C.muted }}>
+            Guides can't request their own reviews — that's what makes the ratings worth something.
+            Invite the operator who ran the trip and they can send your guests a review link.
+          </p>
+        </div>
+
+        <div className="flex-1 overflow-y-auto hidescroll px-5 pb-5" style={{ scrollbarWidth: "none" }}>
+          <div className="text-[12.5px] font-medium mb-1.5" style={{ color: C.ink }}>Operator or agency name</div>
+          <input value={company} onChange={(e) => setCompany(e.target.value)} maxLength={60}
+            placeholder="e.g. Druk Journeys"
+            className="w-full h-11 px-3.5 rounded-xl text-[14px] mb-3.5" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
+
+          <div className="text-[12.5px] font-medium mb-1.5" style={{ color: C.ink }}>Their WhatsApp number <span style={{ color: C.muted }}>· optional</span></div>
+          <input value={opPhone} onChange={(e) => setOpPhone(e.target.value)} inputMode="tel"
+            placeholder="17 12 34 56 — or with country code"
+            className="w-full h-11 px-3.5 rounded-xl text-[14px] mb-1.5" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
+          <p className="text-[11.5px] mb-4" style={{ color: C.muted }}>
+            Add it and WhatsApp opens straight to their chat. A Bhutanese 8-digit number works on its own.
+          </p>
+
+          <div className="text-[11.5px] font-semibold tracking-[.12em] uppercase mb-2" style={{ color: C.gold }}>Message</div>
+          <div className="rounded-xl p-3.5 mb-3 text-[12.5px] leading-relaxed whitespace-pre-wrap"
+            style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink, maxHeight: 240, overflowY: "auto" }}>
+            {message}
+          </div>
+
+          {note && <p className="text-[12.5px] mb-2" style={{ color: C.maroon }}>{note}</p>}
+
+          <div className="space-y-2">
+            <button onClick={shareWhatsApp}
+              className="tap w-full h-12 rounded-xl text-[15px] font-semibold inline-flex items-center justify-center gap-2"
+              style={{ background: "#25D366", color: "#fff" }}>
+              <MessageCircle size={17} /> Send on WhatsApp
+            </button>
+            <div className="flex gap-2">
+              <button onClick={shareEmail} className="tap flex-1 h-11 rounded-xl text-[13.5px] font-semibold inline-flex items-center justify-center gap-1.5"
+                style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }}>
+                <Mail size={15} /> Email
+              </button>
+              <button onClick={shareNative} className="tap flex-1 h-11 rounded-xl text-[13.5px] font-semibold inline-flex items-center justify-center gap-1.5"
+                style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }}>
+                <Share2 size={15} /> Share
+              </button>
+              <button onClick={copy} className="tap flex-1 h-11 rounded-xl text-[13.5px] font-semibold"
+                style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }}>
+                {copied ? "Copied" : "Copy"}
+              </button>
+            </div>
+          </div>
+
+          <div className="rounded-xl p-3.5 flex gap-2.5 mt-4" style={{ background: C.goldSoft }}>
+            <Star size={16} color={C.gold} className="shrink-0 mt-0.5" />
+            <p className="text-[12px] leading-snug" style={{ color: "#7a5a1e" }}>
+              <b>Tip:</b> ask on the last day of the trip, while the guests are still with you.
+              A review written the same week is far more specific — and far more useful to the next operator reading it.
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+  ), document.body);
 }
