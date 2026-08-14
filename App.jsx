@@ -49,6 +49,13 @@ const DEMO_MODE = false;   // set true only for local demos without a database
 const BUILD = "BUILD 16 — 14 Aug";   // bump every deploy; shown at the top of the welcome screen
 
 /* ---- Install state ---- */
+// 43 characters of randomness — not guessable
+function makeReviewToken() {
+  const bytes = new Uint8Array(32);
+  (window.crypto || window.msCrypto).getRandomValues(bytes);
+  return btoa(String.fromCharCode(...bytes)).replace(/[+/=]/g, "").slice(0, 43);
+}
+
 const isStandalone = () =>
   window.matchMedia?.("(display-mode: standalone)").matches || window.navigator.standalone === true;
 const isIOS = () => /iphone|ipad|ipod/i.test(navigator.userAgent);
@@ -191,6 +198,11 @@ function useAutoUpdate() {
 
 export default function App() {
   useAutoUpdate();
+  // A guest arriving on a review link never signs in — they see only the review form.
+  const reviewToken = useMemo(() => {
+    try { return new URLSearchParams(window.location.search).get("review"); }
+    catch (e) { return null; }
+  }, []);
   const realUserRef = useRef(null);   // current signed-in id — set below, used by every action
   const [accountId, setAccountId] = useState(null);
   const [posts, setPosts] = useState(CLOUD ? [] : SEED_POSTS);
@@ -717,6 +729,18 @@ export default function App() {
     if (CLOUD) { const { error: jfErr } = await supabase.from("job_listings").update({ status: "filled" }).eq("id", listing.id); if (jfErr) console.error("job_listings.filled failed:", jfErr.message); fetchJobs(); }
     createTripFromJob({ id: `${listing.id}_${applicant.talentId}`, toTalentId: applicant.talentId, operator: listing.operator, title: listing.title, start: listing.start, end: listing.end });
   };
+
+  if (reviewToken) {
+    return (
+      <ErrorBoundary>
+        <div className="min-h-screen w-full flex justify-center" style={{ background: C.bg }}>
+          <div className="w-full max-w-[430px] flex flex-col" style={{ minHeight: "100dvh", background: C.bg }}>
+            <GuestReview token={reviewToken} />
+          </div>
+        </div>
+      </ErrorBoundary>
+    );
+  }
 
   return (
     <ErrorBoundary>
@@ -1902,6 +1926,10 @@ function TalentProfile({ talent, posts, canRequest, self, contactOnly, eng, onRe
         <ProfileTabs
           cv={
             <>
+              <GuestReviews talentId={t.id} isAdmin={eng?.isAdmin} />
+
+              <div className="mt-6" />
+
               {/* trip record */}
               <div className="rounded-2xl overflow-hidden" style={{ border: `1px solid ${C.line}` }}>
                 <div className="px-4 py-3.5 flex items-center justify-between" style={{ background: C.pine }}>
@@ -2153,6 +2181,9 @@ function TripCard({ trip, onOpen }) {
 
 function TripHub({ user, meId, trip, actions, onBack }) {
   const state = tripStateNow(trip);
+  const [inviting, setInviting] = useState(false);
+  // guests can be invited once the trip is running or finished — never before it starts
+  const canInvite = (state === "active" || state === "completed") && (user.kind === "operator" || user.kind === "admin");
   return (
     <div className="pb-6 fade">
       <div className="h-14 px-4 flex items-center gap-3" style={{ borderBottom: `1px solid ${C.lineSoft}` }}>
@@ -2167,6 +2198,25 @@ function TripHub({ user, meId, trip, actions, onBack }) {
           <div className="flex items-center gap-2 text-[13px] font-medium" style={{ color: C.ink }}><MapPin size={15} color={C.gold} /> Meeting point</div>
           <div className="text-[13.5px] mt-1" style={{ color: C.muted }}>{trip.meetingPoint}</div>
         </div>
+
+        {canInvite && (
+          <button onClick={() => setInviting(true)}
+            className="tap w-full rounded-2xl p-4 mb-4 flex items-center gap-3 text-left"
+            style={{ background: C.pineSoft, border: `1px solid ${C.pine}33` }}>
+            <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0" style={{ background: C.pine }}>
+              <Star size={18} color={C.goldSoft} fill={C.goldSoft} />
+            </div>
+            <div className="flex-1">
+              <div className="text-[14px] font-semibold" style={{ color: C.pine }}>Ask a guest for a review</div>
+              <div className="text-[12.5px] mt-0.5" style={{ color: C.pine, opacity: .8 }}>
+                Creates a one-time link. Best shared face to face on the last day.
+              </div>
+            </div>
+            <ChevronLeft size={17} color={C.pine} style={{ transform: "rotate(180deg)" }} />
+          </button>
+        )}
+
+        {inviting && <ReviewInvite user={user} trip={trip} onClose={() => setInviting(false)} />}
 
         <SectionLabel>Crew</SectionLabel>
         <div className="rounded-2xl divide-y mb-5" style={{ background: C.card, border: `1px solid ${C.line}`, borderColor: C.line }}>
@@ -5471,4 +5521,509 @@ function CropEditor({ slides, initialRatio, onDone, onClose }) {
       </div>
     </div>
   ), document.body);
+}
+
+/* ========================================================================== */
+/*  GUEST REVIEW — opened from a one-time link. No account, no sign-in.       */
+/* ========================================================================== */
+function GuestReview({ token }) {
+  const [state, setState] = useState("loading");   // loading | form | done | invalid | used | expired
+  const [info, setInfo] = useState(null);          // the token row
+  const [talent, setTalent] = useState(null);
+  const [rating, setRating] = useState(0);
+  const [knowledge, setKnowledge] = useState(0);
+  const [care, setCare] = useState(0);
+  const [comms, setComms] = useState(0);
+  const [body, setBody] = useState("");
+  const [country, setCountry] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+
+  useEffect(() => {
+    let on = true;
+    (async () => {
+      if (!CLOUD) { setState("invalid"); return; }
+      const { data, error } = await supabase
+        .from("review_tokens").select("*").eq("token", token).maybeSingle();
+      if (!on) return;
+      if (error || !data) { setState("invalid"); return; }
+      if (data.used_at) { setState("used"); return; }
+      if (new Date(data.expires_at) < new Date()) { setState("expired"); return; }
+      setInfo(data);
+      const { data: prof } = await supabase
+        .from("profiles").select("*").eq("id", data.talent_id).maybeSingle();
+      if (!on) return;
+      if (prof) setTalent(profileToTalent(prof));
+      setState("form");
+    })();
+    return () => { on = false; };
+  }, [token]);
+
+  const submit = async () => {
+    if (!rating) { setErr("Please choose an overall rating."); return; }
+    setBusy(true); setErr(null);
+    const { error } = await supabase.from("guest_reviews").insert({
+      token,
+      talent_id: info.talent_id,
+      trip_id: info.trip_id || null,
+      guest_name: info.guest_name || null,
+      guest_country: country.trim() || null,
+      rating,
+      knowledge: knowledge || null,
+      care: care || null,
+      communication: comms || null,
+      body: body.trim() || null,
+      trip_label: info.trip_label || null,
+    });
+    if (error) {
+      setBusy(false);
+      setErr("We couldn't save your review. The link may already have been used.");
+      return;
+    }
+    // consume the token so the link cannot be reused
+    await supabase.from("review_tokens").update({ used_at: new Date().toISOString() }).eq("token", token);
+    setBusy(false);
+    setState("done");
+  };
+
+  const Shell = ({ children }) => (
+    <div className="flex-1 overflow-y-auto hidescroll px-6 py-8" style={{ scrollbarWidth: "none" }}>
+      <div className="flex items-center gap-2.5 mb-7">
+        <div className="w-10 h-10 rounded-xl flex items-center justify-center" style={{ background: C.pine }}>
+          <Compass size={20} color={C.goldSoft} strokeWidth={1.9} />
+        </div>
+        <div>
+          <div className="text-[16px] font-semibold leading-none" style={{ color: C.ink }}>Bhutan Tourism Hub</div>
+          <div className="text-[10px] font-semibold tracking-[.14em] uppercase mt-1" style={{ color: C.gold }}>Verified guest review</div>
+        </div>
+      </div>
+      {children}
+    </div>
+  );
+
+  const Message = ({ Icon, title, body: b, tone }) => (
+    <Shell>
+      <div className="rounded-2xl p-6 text-center" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+        <div className="w-14 h-14 rounded-2xl flex items-center justify-center mx-auto mb-3"
+          style={{ background: tone === "good" ? C.pineSoft : C.goldSoft }}>
+          <Icon size={26} color={tone === "good" ? C.pine : C.gold} />
+        </div>
+        <div className="text-[17px] font-semibold" style={{ color: C.ink }}>{title}</div>
+        <p className="text-[13.5px] leading-relaxed mt-2" style={{ color: C.muted }}>{b}</p>
+      </div>
+    </Shell>
+  );
+
+  if (state === "loading") return (
+    <Shell><div className="flex items-center justify-center gap-2 py-16 text-[14px]" style={{ color: C.muted }}>
+      <Loader2 size={18} className="animate-spin" /> Opening your review…
+    </div></Shell>
+  );
+
+  if (state === "invalid") return <Message Icon={ShieldAlert} title="This link isn't valid"
+    body="Please check the link in your email, or ask your tour operator to send a new one." />;
+
+  if (state === "used") return <Message Icon={CheckCheck} title="This review is already submitted"
+    body="Thank you — each link can only be used once. If you meant to write another review, ask your operator for a new link." tone="good" />;
+
+  if (state === "expired") return <Message Icon={Clock} title="This link has expired"
+    body="Review links stay open for 14 days. Ask your tour operator to send a new one and we'll be glad to hear from you." />;
+
+  if (state === "done") return <Message Icon={Check} title="Thank you"
+    body={`Your review of ${talent?.name || "your guide"} is published. It becomes part of their professional record and helps other travellers choose well.`} tone="good" />;
+
+  const Row = ({ label, value, onChange, hint }) => (
+    <div className="mb-4">
+      <div className="text-[13.5px] font-medium mb-0.5" style={{ color: C.ink }}>{label}</div>
+      {hint && <div className="text-[11.5px] mb-1.5" style={{ color: C.muted }}>{hint}</div>}
+      <div className="flex gap-1.5">
+        {[1, 2, 3, 4, 5].map((n) => (
+          <button key={n} onClick={() => onChange(n)} className="tap"
+            aria-label={`${n} of 5`}>
+            <Star size={30} strokeWidth={1.6}
+              color={n <= value ? C.gold : C.line}
+              fill={n <= value ? C.gold : "transparent"} />
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+
+  return (
+    <Shell>
+      <div className="rounded-2xl p-5 mb-5" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+        <div className="flex items-center gap-3">
+          <Avatar initials={talent?.initials || "?"} size={52} />
+          <div className="flex-1 min-w-0">
+            <div className="text-[18px] font-semibold leading-tight" style={{ color: C.ink }}>{talent?.name || "Your guide"}</div>
+            <div className="text-[13px] mt-0.5" style={{ color: C.muted }}>
+              {talent ? roleLabel(talent.role) : ""}{talent?.base ? ` · ${talent.base}` : ""}
+            </div>
+          </div>
+        </div>
+        {info?.trip_label && (
+          <div className="mt-3 pt-3 text-[13px]" style={{ borderTop: `1px solid ${C.lineSoft}`, color: C.muted }}>
+            {info.trip_label}
+          </div>
+        )}
+      </div>
+
+      <h1 className="text-[24px] font-semibold tracking-[-0.01em] mb-1" style={{ color: C.ink }}>
+        How was your trip?
+      </h1>
+      <p className="text-[14px] leading-relaxed mb-6" style={{ color: C.muted }}>
+        {info?.guest_name ? `${info.guest_name}, your` : "Your"} honest review helps Bhutanese guides
+        build a professional record — and helps other travellers choose well. It takes a minute.
+      </p>
+
+      <Row label="Overall" value={rating} onChange={setRating} />
+      <Row label="Knowledge" value={knowledge} onChange={setKnowledge} hint="Depth on culture, history, nature" />
+      <Row label="Care" value={care} onChange={setCare} hint="Looking after you and your group" />
+      <Row label="Communication" value={comms} onChange={setComms} hint="Clarity, language, keeping you informed" />
+
+      <div className="text-[13.5px] font-medium mb-1.5 mt-5" style={{ color: C.ink }}>In your words</div>
+      <textarea value={body} onChange={(e) => setBody(e.target.value)} rows={5} maxLength={600}
+        placeholder="What stood out? A moment you'll remember?"
+        className="w-full px-3.5 py-3 rounded-xl text-[15px] leading-relaxed resize-none"
+        style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }} />
+      <div className="flex justify-end mt-1 mb-4">
+        <span className="text-[11px]" style={{ color: C.muted }}>{body.length}/600</span>
+      </div>
+
+      <div className="text-[13.5px] font-medium mb-1.5" style={{ color: C.ink }}>Where are you visiting from? <span style={{ color: C.muted }}>(optional)</span></div>
+      <input value={country} onChange={(e) => setCountry(e.target.value)} maxLength={40}
+        placeholder="e.g. Australia"
+        className="w-full h-12 px-3.5 rounded-xl text-[15px] mb-5"
+        style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }} />
+
+      {err && <p className="text-[13px] mb-3" style={{ color: C.maroon }}>{err}</p>}
+
+      <button onClick={submit} disabled={busy || !rating}
+        className="tap w-full rounded-2xl flex items-center justify-center gap-2 text-[16px] font-semibold"
+        style={{ height: 54, background: rating ? C.pine : "#C7CEC7", color: "#fff" }}>
+        {busy ? <Loader2 size={18} className="animate-spin" /> : "Publish my review"}
+      </button>
+
+      <div className="rounded-xl p-3.5 flex gap-2.5 mt-4" style={{ background: C.goldSoft }}>
+        <ShieldCheck size={16} color={C.maroon} className="shrink-0 mt-0.5" />
+        <p className="text-[12px] leading-snug" style={{ color: "#5a4a2e" }}>
+          This link was issued by the tour operator who arranged your trip and can be used once.
+          Guides cannot request reviews for themselves.
+        </p>
+      </div>
+    </Shell>
+  );
+}
+
+/* ========================================================================== */
+/*  INVITE A GUEST TO REVIEW                                                  */
+/*  Only operators and admins can issue an invite — a guide inviting their     */
+/*  own reviews would make the whole rating system worthless. Enforced in the  */
+/*  database too (issuer_is_not_subject + a role check on the insert policy).  */
+/* ========================================================================== */
+function ReviewInvite({ user, trip, onClose }) {
+  const [guestName, setGuestName] = useState("");
+  const [guestEmail, setGuestEmail] = useState("");
+  const [issued, setIssued] = useState([]);
+  const [made, setMade] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const [copied, setCopied] = useState(false);
+
+  const meId = user.talentId || user.id;
+  const isAdmin = user.kind === "admin";
+  const MAX_PER_TRIP = 12;
+
+  // who is being reviewed — never the person issuing the invite
+  const crew = (trip.members || []).filter((m) => m.roleInTrip !== "operator" && m.id !== meId);
+  const [subject, setSubject] = useState(crew[0]?.id || "");
+
+  const load = async () => {
+    if (!CLOUD) return;
+    const { data, error } = await supabase
+      .from("review_tokens").select("*").eq("trip_id", trip.id).order("created_at", { ascending: false });
+    if (error) { console.error("review_tokens load failed:", error.message); return; }
+    setIssued(data || []);
+  };
+  useEffect(() => { load(); }, [trip.id]);
+
+  const create = async () => {
+    if (!subject) { setErr("Choose which crew member the review is for."); return; }
+    if (!/\S+@\S+\.\S+/.test(guestEmail)) { setErr("Enter the guest's email — it records who the review came from."); return; }
+    if (issued.length >= MAX_PER_TRIP) { setErr(`Up to ${MAX_PER_TRIP} guests per trip.`); return; }
+
+    setBusy(true); setErr(null);
+    const token = makeReviewToken();
+    const { error } = await supabase.from("review_tokens").insert({
+      token,
+      talent_id: subject,
+      trip_id: trip.id,
+      trip_label: trip.title,
+      guest_name: guestName.trim() || null,
+      guest_email: guestEmail.trim(),
+      issued_by: meId,
+      issuer_role: isAdmin ? "admin" : "operator",
+    });
+    setBusy(false);
+    if (error) {
+      console.error("review_tokens.insert failed:", error.message);
+      setErr(/row-level security/i.test(error.message)
+        ? "Only tour operators and admins can request reviews."
+        : "Couldn't create the link. Please try again.");
+      return;
+    }
+    setMade(`${window.location.origin}/?review=${token}`);
+    setGuestName(""); setGuestEmail("");
+    load();
+  };
+
+  const copy = async () => {
+    try { await navigator.clipboard.writeText(made); setCopied(true); setTimeout(() => setCopied(false), 2200); }
+    catch (e) { setErr("Couldn't copy — press and hold the link instead."); }
+  };
+  const share = async () => {
+    const text = `Thank you for travelling with us. Would you share a short review of your guide? It takes a minute:\n${made}`;
+    try {
+      if (navigator.share) await navigator.share({ title: "Review your trip", text, url: made });
+      else copy();
+    } catch (e) {}
+  };
+
+  const subjectName = (trip.members || []).find((m) => m.id === subject)?.name || "the guide";
+
+  return createPortal((
+    <div className="fixed inset-0 flex items-end" style={{ background: "rgba(8,10,8,.55)", zIndex: 230 }} onClick={onClose}>
+      <div className="w-full rounded-t-3xl flex flex-col safe-bottom" style={{ background: C.card, maxHeight: "90dvh" }} onClick={(e) => e.stopPropagation()}>
+        <div className="p-5 pb-3 shrink-0">
+          <div className="w-10 h-1 rounded-full mx-auto mb-4" style={{ background: C.line }} />
+          <div className="text-[17px] font-semibold" style={{ color: C.ink }}>Ask a guest for a review</div>
+          <p className="text-[13px] mt-1" style={{ color: C.muted }}>{trip.title} · {fmtDate(trip.start)} – {fmtDate(trip.end)}</p>
+        </div>
+
+        <div className="flex-1 overflow-y-auto hidescroll px-5 pb-5" style={{ scrollbarWidth: "none" }}>
+          {crew.length === 0 ? (
+            <Empty Icon={Users} title="No crew to review"
+              body="Reviews are for the guides and drivers on this trip. You cannot request a review of yourself." />
+          ) : (
+            <>
+              <div className="text-[12.5px] font-medium mb-1.5" style={{ color: C.ink }}>Review is for</div>
+              <div className="flex flex-wrap gap-2 mb-4">
+                {crew.map((m) => (
+                  <Chip key={m.id} on={subject === m.id} onClick={() => setSubject(m.id)}>{m.name}</Chip>
+                ))}
+              </div>
+
+              <div className="text-[12.5px] font-medium mb-1.5" style={{ color: C.ink }}>Guest name</div>
+              <input value={guestName} onChange={(e) => setGuestName(e.target.value)} maxLength={60}
+                placeholder="e.g. Sarah Whitfield"
+                className="w-full h-11 px-3.5 rounded-xl text-[14px] mb-3" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
+
+              <div className="text-[12.5px] font-medium mb-1.5" style={{ color: C.ink }}>Guest email</div>
+              <input value={guestEmail} onChange={(e) => setGuestEmail(e.target.value)} inputMode="email" autoCapitalize="none"
+                placeholder="so we can trace where the review came from"
+                className="w-full h-11 px-3.5 rounded-xl text-[14px] mb-1.5" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
+              <p className="text-[11.5px] mb-4" style={{ color: C.muted }}>
+                Kept private. Never shown on the review — it exists so a disputed review can be traced.
+              </p>
+
+              {err && <p className="text-[13px] mb-2.5" style={{ color: C.maroon }}>{err}</p>}
+
+              {made ? (
+                <div className="rounded-2xl p-4 mb-4" style={{ background: C.pineSoft }}>
+                  <div className="text-[13.5px] font-semibold mb-1" style={{ color: C.pine }}>Link ready</div>
+                  <p className="text-[12px] mb-2.5" style={{ color: C.pine, opacity: .85 }}>
+                    Works once, expires in 14 days. Best shared with the guest in person on the last day.
+                  </p>
+                  <div className="rounded-lg px-3 py-2 mb-2.5 break-all text-[11.5px] font-mono" style={{ background: C.card, color: C.ink }}>{made}</div>
+                  <div className="flex gap-2">
+                    <button onClick={share} className="tap flex-1 h-10 rounded-lg text-[13px] font-semibold inline-flex items-center justify-center gap-1.5"
+                      style={{ background: C.pine, color: "#fff" }}><Share2 size={14} /> Share</button>
+                    <button onClick={copy} className="tap flex-1 h-10 rounded-lg text-[13px] font-semibold"
+                      style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }}>{copied ? "Copied" : "Copy link"}</button>
+                  </div>
+                  <button onClick={() => setMade(null)} className="tap w-full h-9 rounded-lg text-[12.5px] font-medium mt-2" style={{ color: C.pine }}>
+                    Create another for the next guest
+                  </button>
+                </div>
+              ) : (
+                <button onClick={create} disabled={busy || issued.length >= MAX_PER_TRIP}
+                  className="tap w-full h-12 rounded-xl text-[15px] font-semibold inline-flex items-center justify-center gap-2 mb-4"
+                  style={{ background: issued.length >= MAX_PER_TRIP ? "#C7CEC7" : C.pine, color: "#fff" }}>
+                  {busy ? <Loader2 size={18} className="animate-spin" /> : <><Plus size={17} strokeWidth={3} /> Create link for {String(subjectName).split(" ")[0]}</>}
+                </button>
+              )}
+            </>
+          )}
+
+          {issued.length > 0 && (
+            <>
+              <div className="text-[11.5px] font-semibold tracking-[.12em] uppercase mb-2" style={{ color: C.gold }}>
+                Requests for this trip · {issued.length}/{MAX_PER_TRIP}
+              </div>
+              <div className="rounded-2xl overflow-hidden" style={{ border: `1px solid ${C.line}` }}>
+                {issued.map((t, i) => {
+                  const used = Boolean(t.used_at);
+                  const expired = !used && new Date(t.expires_at) < new Date();
+                  return (
+                    <div key={t.token} className="px-3.5 py-2.5 flex items-center gap-2.5"
+                      style={{ background: C.card, borderTop: i ? `1px solid ${C.lineSoft}` : "none" }}>
+                      <span className="w-7 h-7 rounded-full flex items-center justify-center shrink-0"
+                        style={{ background: used ? C.pineSoft : expired ? C.maroonSoft : C.goldSoft }}>
+                        {used ? <Check size={13} color={C.pine} /> : expired ? <X size={13} color={C.maroon} /> : <Clock size={13} color={C.gold} />}
+                      </span>
+                      <span className="flex-1 text-[13px] truncate" style={{ color: C.ink }}>{t.guest_name || t.guest_email || "Guest"}</span>
+                      <span className="text-[11.5px] shrink-0" style={{ color: C.muted }}>
+                        {used ? "Reviewed" : expired ? "Expired" : "Waiting"}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </>
+          )}
+
+          <div className="rounded-xl p-3.5 flex gap-2.5 mt-4" style={{ background: C.bg, border: `1px solid ${C.line}` }}>
+            <ShieldCheck size={16} color={C.gold} className="shrink-0 mt-0.5" />
+            <p className="text-[12px] leading-snug" style={{ color: C.muted }}>
+              Guides and drivers cannot request reviews of themselves — only the operator running the trip,
+              or an admin, can. Every request is recorded against the trip, so a rating can always be traced
+              back to real work.
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+  ), document.body);
+}
+
+/* ========================================================================== */
+/*  GUEST REVIEWS on a profile — with visible provenance                      */
+/* ========================================================================== */
+function GuestReviews({ talentId, isAdmin, onCount }) {
+  const [rows, setRows] = useState(null);
+  const [busyId, setBusyId] = useState(null);
+
+  const load = async () => {
+    if (!CLOUD) { setRows([]); return; }
+    const { data, error } = await supabase
+      .from("guest_reviews").select("*")
+      .eq("talent_id", talentId).eq("status", "published")
+      .order("created_at", { ascending: false });
+    if (error) { console.error("guest_reviews load failed:", error.message); setRows([]); return; }
+    setRows(data || []);
+    onCount && onCount((data || []).length);
+  };
+  useEffect(() => { load(); }, [talentId]);
+
+  const hide = async (id) => {
+    setBusyId(id);
+    const { error } = await supabase.from("guest_reviews").update({ status: "hidden" }).eq("id", id);
+    setBusyId(null);
+    if (error) { console.error("hide review failed:", error.message); return; }
+    load();
+  };
+
+  if (rows === null) {
+    return <div className="flex items-center gap-2 justify-center py-8 text-[13.5px]" style={{ color: C.muted }}>
+      <Loader2 size={16} className="animate-spin" /> Loading reviews…
+    </div>;
+  }
+
+  if (rows.length === 0) {
+    return <Empty Icon={Star} title="No guest reviews yet"
+      body="After a trip, guests can leave a review through a one-time link. They appear here." />;
+  }
+
+  const avg = rows.reduce((a, r) => a + (r.rating || 0), 0) / rows.length;
+  const facet = (key) => {
+    const vals = rows.map((r) => r[key]).filter((v) => typeof v === "number");
+    return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
+  };
+  const facets = [["Knowledge", facet("knowledge")], ["Care", facet("care")], ["Communication", facet("communication")]]
+    .filter(([, v]) => v !== null);
+
+  return (
+    <div>
+      {/* summary */}
+      <div className="rounded-2xl overflow-hidden mb-4" style={{ border: `1px solid ${C.line}` }}>
+        <div className="px-4 py-3.5 flex items-center justify-between" style={{ background: C.pine }}>
+          <div>
+            <div className="text-[11px] font-semibold tracking-[.14em] uppercase" style={{ color: C.goldSoft }}>Guest reviews</div>
+            <div className="text-[12.5px] mt-0.5" style={{ color: "#ffffffcc" }}>{rows.length} {rows.length === 1 ? "review" : "reviews"}</div>
+          </div>
+          <div className="text-right">
+            <div className="text-[26px] font-semibold leading-none text-white">{avg.toFixed(1)}</div>
+            <div className="mt-1 flex justify-end"><Stars score={avg} light /></div>
+          </div>
+        </div>
+        {facets.length > 0 && (
+          <div className="px-4 py-3.5 space-y-3" style={{ background: C.card }}>
+            {facets.map(([label, v]) => (
+              <div key={label}>
+                <div className="flex items-baseline justify-between mb-1.5">
+                  <span className="text-[13px] font-medium" style={{ color: C.ink }}>{label}</span>
+                  <span className="text-[12.5px] font-semibold" style={{ color: C.pine }}>{v.toFixed(1)}</span>
+                </div>
+                <div className="h-1.5 rounded-full overflow-hidden" style={{ background: C.lineSoft }}>
+                  <div className="h-full rounded-full" style={{ width: `${(v / 5) * 100}%`, background: `linear-gradient(90deg, ${C.gold}, #D9A94E)` }} />
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* individual reviews */}
+      <div className="space-y-3">
+        {rows.map((r) => (
+          <div key={r.id} className="rounded-2xl p-4" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+            <div className="flex items-start gap-3">
+              <div className="w-9 h-9 rounded-full flex items-center justify-center shrink-0" style={{ background: C.goldSoft }}>
+                <span className="text-[13px] font-semibold" style={{ color: "#7a5a1e" }}>
+                  {(r.guest_name || "G").charAt(0).toUpperCase()}
+                </span>
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-[14px] font-semibold" style={{ color: C.ink }}>{r.guest_name || "Guest"}</span>
+                  {r.guest_country && <span className="text-[12px]" style={{ color: C.muted }}>· {r.guest_country}</span>}
+                </div>
+                <div className="mt-1"><Stars score={r.rating || 0} /></div>
+              </div>
+              {isAdmin && (
+                <button onClick={() => hide(r.id)} disabled={busyId === r.id}
+                  className="tap w-8 h-8 rounded-lg flex items-center justify-center shrink-0"
+                  style={{ background: C.maroonSoft }} aria-label="Hide review">
+                  {busyId === r.id ? <Loader2 size={13} className="animate-spin" color={C.maroon} /> : <Trash2 size={13} color={C.maroon} />}
+                </button>
+              )}
+            </div>
+
+            {r.body && <p className="text-[14px] leading-relaxed mt-2.5" style={{ color: C.ink }}>{r.body}</p>}
+
+            {/* provenance — this is what makes the review trustworthy */}
+            <div className="flex flex-wrap items-center gap-1.5 mt-3">
+              {r.trip_label && (
+                <span className="text-[11px] rounded-full px-2 py-1" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.muted }}>
+                  {r.trip_label}
+                </span>
+              )}
+              <span className="inline-flex items-center gap-1 text-[11px] font-semibold rounded-full px-2 py-1"
+                style={{ background: r.issuer_role === "admin" ? C.goldSoft : C.pineSoft,
+                         color: r.issuer_role === "admin" ? "#7a5a1e" : C.pine }}>
+                <ShieldCheck size={10} />
+                {r.issuer_role === "admin" ? "Verified by Bhutan Tourism Hub" : "Invited by the tour operator"}
+              </span>
+              <span className="text-[11px]" style={{ color: C.muted }}>{relTime(new Date(r.created_at).getTime())}</span>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <p className="text-[11.5px] text-center mt-4 leading-snug" style={{ color: C.muted }}>
+        Each review comes from a one-time link tied to a specific trip. We show who sent the invite so
+        you can judge it for yourself.
+      </p>
+    </div>
+  );
 }
