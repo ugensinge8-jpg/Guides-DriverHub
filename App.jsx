@@ -45,7 +45,7 @@ const sysMsg = (text) => ({ id: uid(), senderId: null, kind: "system", body: tex
 /* ── Cloud (Supabase) ── posts are global when configured; everything falls back to local demo mode when not. */
 const CLOUD = Boolean(supabase);
 const DEMO_MODE = false;   // set true only for local demos without a database
-const BUILD = "v15 · photos+fix";   // bump this every deploy so the running build is visible
+const BUILD = "BUILD 16 — 14 Aug";   // bump every deploy; shown at the top of the welcome screen
 
 /* ---- Install state ---- */
 const isStandalone = () =>
@@ -771,7 +771,12 @@ function Login({ onPick, session, myProfile, onAuthed, onBusy }) {
   return (
     <div className="flex-1 overflow-y-auto hidescroll fade" style={{ scrollbarWidth: "none" }}>
       {/* brand */}
-      <div className="px-6 pt-6 flex items-center gap-2.5">
+      <div className="px-6 pt-3">
+        <div className="rounded-lg px-2.5 py-1 inline-block text-[10px] font-bold tracking-[.1em]"
+          style={{ background: C.pineSoft, color: C.pine }}>{BUILD}</div>
+      </div>
+
+      <div className="px-6 pt-3 flex items-center gap-2.5">
         <div className="w-10 h-10 rounded-xl flex items-center justify-center" style={{ background: C.pine, boxShadow: `0 6px 14px ${C.pine}33` }}>
           <Compass size={20} color={C.goldSoft} strokeWidth={1.9} />
         </div>
