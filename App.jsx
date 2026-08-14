@@ -633,7 +633,7 @@ export default function App() {
     setTrips((prev) => {
       const existing = prev.find((tr) => tr.operator === job.operator && tr.start === job.start && tr.end === job.end);
       if (existing) {
-        if (existing.members.some((m) => m.id === job.toTalentId)) return prev;
+        if ((existing.members || []).some((m) => m.id === job.toTalentId)) return prev;
         return prev.map((tr) => tr.id === existing.id
           ? { ...tr, members: [...tr.members, talentMember], chat: { ...tr.chat, messages: [...tr.chat.messages, sysMsg(`${t.name} joined the trip.`)] } }
           : tr);
@@ -697,7 +697,7 @@ export default function App() {
   };
   const applyToListing = async (listingId, applicant) => {
     if (!CLOUD) {
-      setListings((L) => L.map((l) => (l.id === listingId ? (l.applicants.some((a) => a.talentId === applicant.talentId) ? l : { ...l, applicants: [...l.applicants, { status: "applied", appliedAt: Date.now(), ...applicant }] }) : l)));
+      setListings((L) => L.map((l) => (l.id === listingId ? ((l.applicants || []).some((a) => a.talentId === applicant.talentId) ? l : { ...l, applicants: [...l.applicants, { status: "applied", appliedAt: Date.now(), ...applicant }] }) : l)));
       return;
     }
     const { error: jaErr } = await supabase.from("job_applicants").upsert({ listing_id: listingId, talent_id: applicant.talentId, message: applicant.message || null, status: "applied" });
@@ -705,7 +705,7 @@ export default function App() {
     fetchJobs();
   };
   const setApplicant = async (listingId, talentId, status) => {
-    setListings((L) => L.map((l) => (l.id === listingId ? { ...l, applicants: l.applicants.map((a) => (a.talentId === talentId ? { ...a, status } : a)) } : l)));
+    setListings((L) => L.map((l) => (l.id === listingId ? { ...l, applicants: (l.applicants || []).map((a) => (a.talentId === talentId ? { ...a, status } : a)) } : l)));
     if (!CLOUD) return;
     { const { error: _e } = await supabase.from("job_applicants").update({ status }).eq("listing_id", listingId).eq("talent_id", talentId); if (_e) console.error("job_applicants.status failed:", _e.message); }
     fetchJobs();
@@ -806,16 +806,17 @@ function Login({ onPick, session, myProfile, onAuthed, onBusy }) {
         </p>
       </div>
 
-      {/* map — contained, with its own breathing room */}
-      <div className="px-6 mt-6">
-        <div className="relative w-full rounded-2xl overflow-hidden" style={{ aspectRatio: "16 / 9", background: C.card }}>
-          <img src={mapImg} alt="Relief map of Bhutan" className="absolute inset-0 w-full h-full"
-            style={{ objectFit: "cover", objectPosition: "center 60%" }} />
+      {/* map — its own block, whole image visible, fixed gap below */}
+      <div className="px-6" style={{ marginTop: 28, marginBottom: 32 }}>
+        <div className="relative w-full rounded-2xl overflow-hidden flex items-center justify-center"
+          style={{ aspectRatio: "16 / 9", background: C.card, border: `1px solid ${C.lineSoft}` }}>
+          <img src={mapImg} alt="Relief map of Bhutan"
+            style={{ width: "100%", height: "100%", objectFit: "contain", padding: 8 }} />
         </div>
       </div>
 
-      {/* actions — clearly separated, nothing overlapping */}
-      <div className="px-6 mt-7">
+      {/* actions — separate block, never overlapped */}
+      <div className="px-6">
         <button onClick={() => setAuthView("signup")}
           className="tap w-full rounded-2xl flex items-center justify-center gap-2 text-[16.5px] font-semibold"
           style={{ height: 56, background: C.pine, color: "#fff", boxShadow: `0 10px 24px ${C.pine}40` }}>
@@ -1013,7 +1014,7 @@ function Shell({ user, posts, jobs, trips, listings, actions, engagement, dm, di
   const pendingModCount = posts.filter((p) => p.status === "pending").length;
   const myTalent = user.talentId ? talentById(user.talentId) : null;
   const myJobsPending = myTalent ? jobs.filter((j) => j.toTalentId === myTalent.id && j.status === "pending").length : 0;
-  const availableListings = myTalent ? listings.filter((l) => l.status === "open" && l.role === user.kind && !l.applicants.some((a) => a.talentId === myTalent.id)).length : 0;
+  const availableListings = myTalent ? listings.filter((l) => l.status === "open" && l.role === user.kind && !(l.applicants || []).some((a) => a.talentId === myTalent.id)).length : 0;
   const jobsBadge = myJobsPending + availableListings;
 
   const openProfile = (talentId) => setOverlay({ type: "profile", talentId });
@@ -1568,8 +1569,11 @@ function Discover({ onOpen, initialQuery, dirTick }) {
   const POOL = useMemo(() => [...TALENT, ...Object.values(PROFILE_DIR).filter((p) => p.role === "guide" || p.role === "driver")], [dirTick]);
   const list = POOL.filter((t) => (role === "all" || t.role === role))
     .filter((t) => (!onlyFree || (t.availability || "open") === "open"))
-    .filter((t) => (!lang || t.languages.some((l) => l.n === lang)))
-    .filter((t) => t.name.toLowerCase().includes(q.toLowerCase()) || t.base.toLowerCase().includes(q.toLowerCase()) || t.tags.join(" ").toLowerCase().includes(q.toLowerCase()))
+    .filter((t) => (!lang || (t.languages || []).some((l) => l && l.n === lang)))
+    .filter((t) => {
+      const hay = `${t.name || ""} ${t.base || ""} ${(t.tags || []).join(" ")}`.toLowerCase();
+      return hay.includes(q.toLowerCase());
+    })
     .sort((a, b) => (b.rating || 0) - (a.rating || 0));
 
   return (
@@ -1621,14 +1625,14 @@ function TalentCard({ t, onOpen }) {
         </div>
         <div className="text-right shrink-0">
           <div className="inline-flex items-center gap-1 rounded-full px-2 py-1" style={{ background: C.goldSoft }}>
-            <Star size={12} color={C.gold} fill={C.gold} /><span className="text-[12.5px] font-semibold" style={{ color: "#7a5a1e" }}>{t.rating ? t.rating.toFixed(1) : "New"}</span>
+            <Star size={12} color={C.gold} fill={C.gold} /><span className="text-[12.5px] font-semibold" style={{ color: "#7a5a1e" }}>{typeof t.rating === "number" ? t.rating.toFixed(1) : "New"}</span>
           </div>
           <div className="text-[11.5px] mt-1" style={{ color: C.muted }}>{t.years} yrs</div>
         </div>
       </div>
       <div className="flex flex-wrap items-center gap-1.5 mt-3">
         <AvailabilityChip talent={t} />
-        {t.languages.slice(0, 3).map((l) => (
+        {(t.languages || []).slice(0, 3).map((l) => (
           <span key={l.n} className="text-[11.5px] rounded-md px-1.5 py-0.5" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.muted }}>{l.n}</span>
         ))}
       </div>
@@ -1900,13 +1904,13 @@ function TalentProfile({ talent, posts, canRequest, self, contactOnly, eng, onRe
                 <div className="px-4 py-3.5 flex items-center justify-between" style={{ background: C.pine }}>
                   <div><div className="text-[11px] font-semibold tracking-[.14em] uppercase" style={{ color: C.goldSoft }}>Trip record</div>
                     <div className="text-[12.5px] mt-0.5" style={{ color: "#ffffffcc" }}>Graded by operators</div></div>
-                  <div className="text-right"><div className="text-[26px] font-semibold leading-none text-white">{t.rating ? t.rating.toFixed(1) : "New"}</div><div className="mt-1 flex justify-end"><Stars score={t.rating || 0} light /></div></div>
+                  <div className="text-right"><div className="text-[26px] font-semibold leading-none text-white">{typeof t.rating === "number" ? t.rating.toFixed(1) : "New"}</div><div className="mt-1 flex justify-end"><Stars score={t.rating || 0} light /></div></div>
                 </div>
                 <div className="px-4 py-4 space-y-3.5" style={{ background: C.card }}>
                   {Object.keys(t.grades || {}).length === 0 ? (
                     <p className="text-[13.5px]" style={{ color: C.muted }}>No trips graded yet — the record fills in after the first completed trip.</p>
                   ) : Object.entries(t.grades).map(([kk, v]) => (
-                    <div key={kk}><div className="flex items-baseline justify-between mb-1.5"><span className="text-[13.5px] font-medium" style={{ color: C.ink }}>{kk}</span><span className="text-[13px] font-semibold" style={{ color: C.pine }}>{v.toFixed(1)}</span></div>
+                    <div key={kk}><div className="flex items-baseline justify-between mb-1.5"><span className="text-[13.5px] font-medium" style={{ color: C.ink }}>{kk}</span><span className="text-[13px] font-semibold" style={{ color: C.pine }}>{typeof v === "number" ? v.toFixed(1) : "—"}</span></div>
                       <div className="h-2 rounded-full overflow-hidden" style={{ background: C.lineSoft }}><div className="h-full rounded-full" style={{ width: `${(v / 5) * 100}%`, background: `linear-gradient(90deg, ${C.gold}, #D9A94E)` }} /></div></div>
                   ))}
                 </div>
@@ -1916,14 +1920,14 @@ function TalentProfile({ talent, posts, canRequest, self, contactOnly, eng, onRe
 
               {t.tags && t.tags.length > 0 && (
                 <div className="mt-6"><SectionLabel>{t.role === "guide" ? "Specialities" : "Drives"}</SectionLabel>
-                  <div className="flex flex-wrap gap-2">{t.tags.map((x) => <span key={x} className="rounded-full px-3 py-1.5 text-[13.5px] font-medium" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }}>{x}</span>)}</div>
+                  <div className="flex flex-wrap gap-2">{(t.tags || []).map((x) => <span key={x} className="rounded-full px-3 py-1.5 text-[13.5px] font-medium" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }}>{x}</span>)}</div>
                   {t.vehicle && <div className="mt-2.5 text-[13.5px]" style={{ color: C.muted }}><Car size={14} color={C.gold} className="inline mr-1" /> {t.vehicle}</div>}
                 </div>
               )}
 
               {t.languages && t.languages.length > 0 && (
                 <div className="mt-6"><SectionLabel>Languages</SectionLabel>
-                  <div className="flex flex-wrap gap-2">{t.languages.map((l) => (
+                  <div className="flex flex-wrap gap-2">{(t.languages || []).map((l) => (
                     <span key={l.n} className="inline-flex items-center gap-2 rounded-full pl-3.5 pr-2 py-1.5 text-[13.5px] font-medium" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }}>{l.n}<span className="text-[11px] px-1.5 py-0.5 rounded-full" style={{ background: C.goldSoft, color: "#7a5a1e" }}>{l.l}</span></span>
                   ))}</div>
                 </div>
@@ -2052,7 +2056,7 @@ function RequestForm({ talent, operator, onBack, onSend }) {
 
         <button onClick={() => canSend && onSend({ operator, toTalentId: talent.id, title: title.trim(), role: talent.role, start, end, languages: langs, notes: notes.trim() })}
           disabled={!canSend} className="tap w-full rounded-xl flex items-center justify-center gap-2 text-[15px] font-semibold" style={{ height: 52, background: canSend ? C.pine : "#C7CEC7", color: "#fff", cursor: canSend ? "pointer" : "not-allowed" }}>
-          <Send size={18} /> Send request to {talent.name.split(" ")[0]}
+          <Send size={18} /> Send request to {String(talent.name || "them").split(" ")[0]}
         </button>
       </div>
     </div>
@@ -2090,7 +2094,7 @@ function TripsTab({ user, trips, actions }) {
   const [openId, setOpenId] = useState(null);
   const meId = user.talentId || user.id;
   const mineId = user.talentId || user.id;
-  const mine = trips.filter((tr) => tr.members.some((m) => m.id === mineId) || (tr.operatorId && tr.operatorId === mineId));
+  const mine = trips.filter((tr) => (tr.members || []).some((m) => m.id === mineId) || (tr.operatorId && tr.operatorId === mineId));
   const open = mine.find((tr) => tr.id === openId);
   if (open) return <TripHub user={user} meId={meId} trip={open} actions={actions} onBack={() => setOpenId(null)} />;
   return (
@@ -2106,7 +2110,7 @@ function TripsTab({ user, trips, actions }) {
 }
 
 function TripCard({ trip, onOpen }) {
-  const msgs = trip.chat.messages.filter((m) => m.kind !== "system");
+  const msgs = trip.(chat.messages || []).filter((m) => m.kind !== "system");
   return (
     <button onClick={onOpen} className="tap w-full text-left rounded-2xl p-4" style={{ background: C.card, border: `1px solid ${C.line}` }}>
       <div className="flex items-start justify-between gap-3">
@@ -2141,7 +2145,7 @@ function TripHub({ user, meId, trip, actions, onBack }) {
 
         <SectionLabel>Crew</SectionLabel>
         <div className="rounded-2xl divide-y mb-5" style={{ background: C.card, border: `1px solid ${C.line}`, borderColor: C.line }}>
-          {trip.members.map((m) => (
+          {(trip.members || []).map((m) => (
             <div key={m.id} className="flex items-center gap-3 px-4 py-3">
               <Avatar initials={m.initials} size={36} />
               <div className="flex-1"><div className="text-[14px] font-semibold" style={{ color: C.ink }}>{m.name}</div>
@@ -2155,7 +2159,7 @@ function TripHub({ user, meId, trip, actions, onBack }) {
           <>
             <SectionLabel>Itinerary</SectionLabel>
             <div className="space-y-2 mb-5">
-              {trip.itinerary.map((it) => (
+              {(trip.itinerary || []).map((it) => (
                 <div key={it.day} className="flex items-center gap-3 rounded-xl px-4 py-3" style={{ background: C.card, border: `1px solid ${C.line}` }}>
                   <div className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0" style={{ background: C.pine }}><span className="text-[12px] font-bold" style={{ color: C.goldSoft }}>{it.day}</span></div>
                   <span className="text-[14px] font-medium" style={{ color: C.ink }}>{it.title}</span>
@@ -2181,7 +2185,7 @@ function Chat({ user, meId, trip, state, actions }) {
   const inputRef = useRef();
   const scrollRef = useRef();
 
-  const member = (id) => trip.members.find((m) => m.id === id);
+  const member = (id) => (trip.members || []).find((m) => m.id === id);
   const flash = (msg) => { setNote(msg); setTimeout(() => setNote(null), 2600); };
 
   React.useEffect(() => { if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight; }, [trip.chat.messages.length]);
@@ -2200,10 +2204,10 @@ function Chat({ user, meId, trip, state, actions }) {
     r.readAsDataURL(f);
   };
   const exportChat = () => {
-    const keep = trip.chat.messages.filter((m) => m.kind === "text" || m.kind === "photo");
+    const keep = trip.(chat.messages || []).filter((m) => m.kind === "text" || m.kind === "photo");
     const bundle = {
       trip: { title: trip.title, start: trip.start, end: trip.end, meetingPoint: trip.meetingPoint },
-      crew: trip.members.map((m) => ({ name: m.name, role: m.roleInTrip })),
+      crew: (trip.members || []).map((m) => ({ name: m.name, role: m.roleInTrip })),
       exportedAt: new Date().toISOString(),
       note: "Text and photos only. Voice and video are shared live and never saved.",
       messages: keep.map((m) => ({ from: member(m.senderId)?.name || "Unknown", kind: m.kind, text: m.body || null, photo: m.photo || null, at: new Date(m.ts).toISOString() })),
@@ -2212,7 +2216,7 @@ function Chat({ user, meId, trip, state, actions }) {
       const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: "application/json" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
-      a.href = url; a.download = `trip-${trip.title.replace(/\s+/g, "-").toLowerCase()}.json`;
+      a.href = url; a.download = `trip-${String(trip.title || "trip").replace(/\s+/g, "-").toLowerCase()}.json`;
       document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
       flash(`Exported ${keep.length} messages to your device.`);
     } catch { flash("Export isn't available in this preview."); }
@@ -2234,7 +2238,7 @@ function Chat({ user, meId, trip, state, actions }) {
 
       {/* messages */}
       <div ref={scrollRef} className="hidescroll px-3.5 py-3 space-y-2.5 overflow-y-auto" style={{ background: C.bg, maxHeight: "44vh", scrollbarWidth: "none" }}>
-        {trip.chat.messages.map((m) => {
+        {trip.(chat.messages || []).map((m) => {
           if (m.kind === "system") return <div key={m.id} className="text-center"><span className="text-[11.5px] rounded-full px-2.5 py-1" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.muted }}>{m.body}</span></div>;
           const mine = m.senderId === meId;
           const who = member(m.senderId);
@@ -2310,8 +2314,8 @@ function JobsHub({ user, jobs, listings, actions }) {
   const [sub, setSub] = useState("board");
   const t = talentById(user.talentId);
   const open = listings.filter((l) => l.status === "open" && l.role === user.kind);
-  const notApplied = open.filter((l) => !l.applicants.some((a) => a.talentId === t.id));
-  const applied = listings.filter((l) => l.applicants.some((a) => a.talentId === t.id));
+  const notApplied = open.filter((l) => !(l.applicants || []).some((a) => a.talentId === t.id));
+  const applied = listings.filter((l) => (l.applicants || []).some((a) => a.talentId === t.id));
   const invitesPending = jobs.filter((j) => j.toTalentId === t.id && j.status === "pending").length;
   return (
     <div>
@@ -2336,7 +2340,7 @@ function OpenBoard({ talent, listings, onApply }) {
 }
 
 function ListingCard({ listing, talent, onApply }) {
-  const applied = listing.applicants.some((a) => a.talentId === talent.id);
+  const applied = (listing.applicants || []).some((a) => a.talentId === talent.id);
   const [applying, setApplying] = useState(false);
   const [msg, setMsg] = useState("");
   return (
@@ -2348,7 +2352,7 @@ function ListingCard({ listing, talent, onApply }) {
       <div className="text-[13px] mt-1" style={{ color: C.muted }}>{listing.operator}</div>
       <div className="flex flex-wrap gap-2 mt-3">
         <Pill Icon={CalendarCheck}>{fmtDate(listing.start)} – {fmtDate(listing.end)}</Pill>
-        {listing.languages.map((l) => <Pill key={l}>{l}</Pill>)}
+        {(listing.languages || []).map((l) => <Pill key={l}>{l}</Pill>)}
       </div>
       {listing.notes && <p className="text-[13.5px] leading-snug mt-3" style={{ color: C.ink }}>{listing.notes}</p>}
 
@@ -2376,7 +2380,7 @@ function MyApplications({ talent, listings }) {
   return (
     <div className="px-5 pt-3 pb-4 space-y-3">
       {listings.map((l) => {
-        const a = l.applicants.find((x) => x.talentId === talent.id);
+        const a = (l.applicants || []).find((x) => x.talentId === talent.id);
         return (
           <div key={l.id} className="rounded-2xl p-4" style={{ background: C.card, border: `1px solid ${C.line}` }}>
             <div className="flex items-start justify-between gap-3">
@@ -2429,7 +2433,7 @@ function OperatorListings({ listings, onPost, onManage }) {
       ) : (
         <div className="space-y-3">
           {listings.map((l) => {
-            const pending = l.applicants.filter((a) => a.status === "applied").length;
+            const pending = (l.applicants || []).filter((a) => a.status === "applied").length;
             return (
               <button key={l.id} onClick={() => onManage(l.id)} className="tap w-full text-left rounded-2xl p-4" style={{ background: C.card, border: `1px solid ${C.line}` }}>
                 <div className="flex items-start justify-between gap-2">
@@ -2466,12 +2470,12 @@ function ManageApplicants({ listing, actions, onViewProfile, onBack }) {
           <Empty Icon={Briefcase} title="No applicants yet" body="Guides and drivers who match will see this job and can apply." />
         ) : (
           <div className="space-y-3">
-            {listing.applicants.map((a) => (
+            {(listing.applicants || []).map((a) => (
               <div key={a.talentId} className="rounded-2xl p-4" style={{ background: C.card, border: `1px solid ${C.line}` }}>
                 <div className="flex items-center gap-3">
                   <Avatar initials={a.initials} size={44} />
                   <div className="flex-1 min-w-0"><div className="text-[15px] font-semibold" style={{ color: C.ink }}>{a.name}</div>
-                    <div className="inline-flex items-center gap-1 mt-0.5"><Star size={12} color={C.gold} fill={C.gold} /><span className="text-[12.5px] font-semibold" style={{ color: "#7a5a1e" }}>{a.rating.toFixed(1)}</span></div></div>
+                    <div className="inline-flex items-center gap-1 mt-0.5"><Star size={12} color={C.gold} fill={C.gold} /><span className="text-[12.5px] font-semibold" style={{ color: "#7a5a1e" }}>{typeof a.rating === "number" ? a.rating.toFixed(1) : "New"}</span></div></div>
                   {a.status !== "applied" && <AppStatusBadge status={a.status} />}
                 </div>
                 {a.message && <p className="text-[13.5px] leading-snug mt-3" style={{ color: C.ink }}>“{a.message}”</p>}
@@ -2488,7 +2492,7 @@ function ManageApplicants({ listing, actions, onViewProfile, onBack }) {
                       </div>
                       {p.languages?.length > 0 && (
                         <div className="flex flex-wrap gap-1.5 mb-2.5">
-                          {p.languages.slice(0, 4).map((l) => <span key={l.n} className="text-[11px] rounded-md px-1.5 py-0.5" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.muted }}>{l.n}</span>)}
+                          {(p.languages || []).slice(0, 4).map((l) => <span key={l.n} className="text-[11px] rounded-md px-1.5 py-0.5" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.muted }}>{l.n}</span>)}
                         </div>
                       )}
                       <button onClick={() => onViewProfile(a.talentId)} className="tap w-full h-10 rounded-xl text-[13.5px] font-semibold inline-flex items-center justify-center gap-1.5"
@@ -2828,7 +2832,7 @@ function BhutanMap({ value, onPick, readOnly, pins, showMeta }) {
           <button onClick={(e) => { e.stopPropagation(); moved.current = true; setZoom(1); }}
             className="tap absolute top-2 right-2 rounded-full px-2.5 py-1 text-[11px] font-bold"
             style={{ background: "rgba(0,0,0,.55)", color: "#fff" }}>
-            {zoom.toFixed(1)}× · reset
+            {Number(zoom || 1).toFixed(1)}× · reset
           </button>
         )}
 
@@ -3897,18 +3901,21 @@ function ChatsTab({ user, me, dm, trips, actions, posts, dirTick, onOpenPost, op
   useEffect(() => { if (openWith) { setWithId(openWith); onOpened && onOpened(); } }, [openWith]);
 
   const meId = user.talentId || user.id;
-  const myTrips = (trips || []).filter((tr) => tr.members.some((m) => m.id === meId) || (tr.operatorId && tr.operatorId === meId));
+  const myTrips = (trips || []).filter((tr) => (tr.members || []).some((m) => m.id === meId) || (tr.operatorId && tr.operatorId === meId));
 
   const threads = useMemo(() => {
-    const map = new Map();
+    // plain object, not a JS Map — nothing here can collide with an icon name
+    const byPerson = {};
     msgs.forEach((m) => {
       if (m.from !== me && m.to !== me) return;
       const other = m.from === me ? m.to : m.from;
-      const prev = map.get(other);
-      if (!prev || m.ts > prev.ts) map.set(other, { other, ts: m.ts, body: m.body, fromMe: m.from === me, unread: 0 });
+      const prev = byPerson[other];
+      if (!prev || m.ts > prev.ts) byPerson[other] = { other, ts: m.ts, body: m.body, fromMe: m.from === me, unread: 0 };
     });
-    map.forEach((v, k) => { v.unread = msgs.filter((x) => x.from === k && x.to === me && !x.read).length; });
-    return [...map.values()].sort((a, b) => b.ts - a.ts);
+    Object.keys(byPerson).forEach((k) => {
+      byPerson[k].unread = msgs.filter((x) => x.from === k && x.to === me && !x.read).length;
+    });
+    return Object.values(byPerson).sort((a, b) => (b.ts || 0) - (a.ts || 0));
   }, [msgs, me]);
 
   const openTrip = myTrips.find((t) => t.id === tripId);
@@ -4022,7 +4029,7 @@ function TripChatView({ user, meId, trip, actions, onBack }) {
             <div className="text-[13px] mt-1" style={{ color: C.muted }}>{trip.meetingPoint}</div>
           </div>
           <div className="rounded-xl divide-y mb-3" style={{ background: C.card, border: `1px solid ${C.line}`, borderColor: C.line }}>
-            {trip.members.map((m) => (
+            {(trip.members || []).map((m) => (
               <div key={m.id} className="flex items-center gap-3 px-3.5 py-2.5">
                 <Avatar initials={m.initials} size={32} />
                 <div className="flex-1"><div className="text-[13.5px] font-semibold" style={{ color: C.ink }}>{m.name}</div>
@@ -4033,7 +4040,7 @@ function TripChatView({ user, meId, trip, actions, onBack }) {
           </div>
           {trip.itinerary.length > 0 && (
             <div className="space-y-2">
-              {trip.itinerary.map((it) => (
+              {(trip.itinerary || []).map((it) => (
                 <div key={it.day} className="flex items-center gap-3 rounded-xl px-3.5 py-2.5" style={{ background: C.card, border: `1px solid ${C.line}` }}>
                   <div className="w-6 h-6 rounded-md flex items-center justify-center shrink-0" style={{ background: C.pine }}><span className="text-[11px] font-bold" style={{ color: C.goldSoft }}>{it.day}</span></div>
                   <span className="text-[13.5px] font-medium" style={{ color: C.ink }}>{it.title}</span>
