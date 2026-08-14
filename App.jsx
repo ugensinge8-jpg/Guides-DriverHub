@@ -6054,7 +6054,7 @@ function GuestReviews({ talentId, isAdmin, isSelf, onAskOperator, onCount }) {
     );
   }
 
-  const avg = rows.reduce((a, r) => a + (r.rating || 0), 0) / rows.length;
+  const avg = rows.length ? rows.reduce((a, r) => a + (Number(r.rating) || 0), 0) / rows.length : 0;
   const facet = (key) => {
     const vals = rows.map((r) => r[key]).filter((v) => typeof v === "number");
     return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
@@ -6072,8 +6072,8 @@ function GuestReviews({ talentId, isAdmin, isSelf, onAskOperator, onCount }) {
             <div className="text-[12.5px] mt-0.5" style={{ color: "#ffffffcc" }}>{rows.length} {rows.length === 1 ? "review" : "reviews"}</div>
           </div>
           <div className="text-right">
-            <div className="text-[26px] font-semibold leading-none text-white">{avg.toFixed(1)}</div>
-            <div className="mt-1 flex justify-end"><Stars score={avg} light /></div>
+            <div className="text-[26px] font-semibold leading-none text-white">{Number(avg || 0).toFixed(1)}</div>
+            <div className="mt-1 flex justify-end"><Stars score={Number(avg) || 0} light /></div>
           </div>
         </div>
         {facets.length > 0 && (
@@ -6082,7 +6082,7 @@ function GuestReviews({ talentId, isAdmin, isSelf, onAskOperator, onCount }) {
               <div key={label}>
                 <div className="flex items-baseline justify-between mb-1.5">
                   <span className="text-[13px] font-medium" style={{ color: C.ink }}>{label}</span>
-                  <span className="text-[12.5px] font-semibold" style={{ color: C.pine }}>{v.toFixed(1)}</span>
+                  <span className="text-[12.5px] font-semibold" style={{ color: C.pine }}>{Number(v || 0).toFixed(1)}</span>
                 </div>
                 <div className="h-1.5 rounded-full overflow-hidden" style={{ background: C.lineSoft }}>
                   <div className="h-full rounded-full" style={{ width: `${(v / 5) * 100}%`, background: `linear-gradient(90deg, ${C.gold}, #D9A94E)` }} />
@@ -6108,7 +6108,7 @@ function GuestReviews({ talentId, isAdmin, isSelf, onAskOperator, onCount }) {
                   <span className="text-[14px] font-semibold" style={{ color: C.ink }}>{r.guest_name || "Guest"}</span>
                   {r.guest_country && <span className="text-[12px]" style={{ color: C.muted }}>· {r.guest_country}</span>}
                 </div>
-                <div className="mt-1"><Stars score={r.rating || 0} /></div>
+                <div className="mt-1"><Stars score={Number(r.rating) || 0} /></div>
               </div>
               {isAdmin && (
                 <button onClick={() => hide(r.id)} disabled={busyId === r.id}
