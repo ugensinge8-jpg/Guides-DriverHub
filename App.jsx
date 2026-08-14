@@ -1199,10 +1199,9 @@ function StatusBadge({ status, reason }) {
 function PostMedia({ media }) {
   if (!media) return null;
   return (
-    <>
-      <div className="mt-3 rounded-xl overflow-hidden" style={{ border: `1px solid ${C.line}` }}>
-        <MediaCarousel media={media} />
-      </div>
+    <div className="mt-3 rounded-xl overflow-hidden" style={{ border: `1px solid ${C.line}` }}>
+      <MediaCarousel media={media} />
+    </div>
   );
 }
 
@@ -2144,7 +2143,7 @@ function TripHub({ user, meId, trip, actions, onBack }) {
             <div key={m.id} className="flex items-center gap-3 px-4 py-3">
               <Avatar initials={m.initials} size={36} />
               <div className="flex-1"><div className="text-[14px] font-semibold" style={{ color: C.ink }}>{m.name}</div>
-                <div className="text-[12px] capitalize" style={{ color: C.muted }}>{m.roleInTrip.replace("_", " ")}</div></div>
+                <div className="text-[12px] capitalize" style={{ color: C.muted }}>{String(m.roleInTrip || "crew").replace("_", " ")}</div></div>
               {m.id === meId && <span className="text-[11px] font-semibold rounded-full px-2 py-0.5" style={{ background: C.goldSoft, color: "#7a5a1e" }}>You</span>}
             </div>
           ))}
@@ -4025,7 +4024,7 @@ function TripChatView({ user, meId, trip, actions, onBack }) {
               <div key={m.id} className="flex items-center gap-3 px-3.5 py-2.5">
                 <Avatar initials={m.initials} size={32} />
                 <div className="flex-1"><div className="text-[13.5px] font-semibold" style={{ color: C.ink }}>{m.name}</div>
-                  <div className="text-[11.5px] capitalize" style={{ color: C.muted }}>{m.roleInTrip.replace("_", " ")}</div></div>
+                  <div className="text-[11.5px] capitalize" style={{ color: C.muted }}>{String(m.roleInTrip || "crew").replace("_", " ")}</div></div>
                 {m.id === meId && <span className="text-[10.5px] font-semibold rounded-full px-2 py-0.5" style={{ background: C.goldSoft, color: "#7a5a1e" }}>You</span>}
               </div>
             ))}
