@@ -4,6 +4,8 @@ import { VitePWA } from "vite-plugin-pwa";
 import tailwindcss from "tailwindcss";
 import autoprefixer from "autoprefixer";
 
+const ICONS = "https://nxnsdnayzimzfiwjrkvv.supabase.co/storage/v1/object/public/icons";
+
 export default defineConfig({
   css: { postcss: { plugins: [ tailwindcss({ content: ["./index.html", "./*.{js,jsx}"] }), autoprefixer() ] } },
   plugins: [
@@ -25,12 +27,12 @@ export default defineConfig({
         start_url: "/",
         scope: "/",
         icons: [
-          { src: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAMAAAADACAYAAABS3GwHAAALHElEQVR4nO2cy3MVxxXGz6hGgeQPQIqoSnjogXgESQQ2ksCYOLGzySZeJhWvs7HL/gO8dRUOSLBPlc3DiW0esRM7D68wG4ikEOnqhR0nWYDE[...]
-          { src: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAgAAAAIACAYAAAD0eNT6AAAcFklEQVR4nO3dy/NkV0EH8NNTvxBA2JKQWEIek8kkE5KZmCxIQggvQReUWGiVr5KVKwVL/wC2Wip5sLcKAhExQAQFFRciuAhmAswrk4CvhZmw[...]
-          { src: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAABAAAAAQACAIAAADwf7zUAAAwKUlEQVR4nO3dS7B0V3se4H2o5mIwYxNBqsJNN6Qg/RQaRAgZlFEch6RcNiHGqTDKyGATV3nKNCnHIIl5UtwTDLYCGXpAgAygkJzSncxdZGruZ[...]
-        ]
+          { src: `${ICONS}/icon-192.png`, sizes: "192x192", type: "image/png" },
+          { src: `${ICONS}/icon-512.png`, sizes: "512x512", type: "image/png" },
+          { src: `${ICONS}/icon-maskable-1024.png`, sizes: "1024x1024", type: "image/png", purpose: "maskable" },
+        ],
       },
-      injectManifest: { globPatterns: ["**/*.{js,css,html,jpg,png,svg,woff2}"] }
-    })
-  ]
+      injectManifest: { globPatterns: ["**/*.{js,css,html,jpg,png,svg,woff2}"] },
+    }),
+  ],
 });
