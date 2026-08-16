@@ -25,12 +25,12 @@ export default defineConfig({
         start_url: "/",
         scope: "/",
         icons: [
-          { src: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAMAAAADACAYAAABS3GwHAAALHElEQVR4nO2cy3MVxxXGz6hGgeQPQIqoSnjogXgESQQ2ksCYOLGzySZeJhWvs7HL/gO8dRUOSLBPlc3DiW0esRM7D68wG4ikEOnqhR0nWYDE[...]" },
-          { src: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAgAAAAIACAYAAAD0eNT6AAAcFklEQVR4nO3dy/NkV0EH8NNTvxBA2JKQWEIek8kkE5KZmCxIQggvQReUWGiVr5KVKwVL/wC2Wip5sLcKAhExQAQFFRciuAhmAswrk4CvhZmw[...]" },
-          { src: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAABAAAAAQACAIAAADwf7zUAAAwKUlEQVR4nO3dS7B0V3ke4H2o5mIwYxNBqsJNN6Qg/RQaRAgZlFEch6RcNiHGqTDKyGATV3nKNCnHIIl5UtwTDLYCGXpAgAygkJzSncxdZGru[...]" }
+          { src: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAMAAAADACAYAAABS3GwHAAALHElEQVR4nO2cy3MVxxXGz6hGgeQPQIqoSnjogXgESQQ2ksCYOLGzySZeJhWvs7HL/gO8dRUOSLBPlc3DiW0esRM7D68wG4ikEOnqhR0nWYDE[...]
+          { src: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAgAAAAIACAYAAAD0eNT6AAAcFklEQVR4nO3dy/NkV0EH8NNTvxBA2JKQWEIek8kkE5KZmCxIQggvQReUWGiVr5KVKwVL/wC2Wip5sLcKAhExQAQFFRciuAhmAswrk4CvhZmw[...]
+          { src: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAABAAAAAQACAIAAADwf7zUAAAwKUlEQVR4nO3dS7B0V3se4H2o5mIwYxNBqsJNN6Qg/RQaRAgZlFEch6RcNiHGqTDKyGATV3nKNCnHIIl5UtwTDLYCGXpAgAygkJzSncxdZGruZ[...]
         ]
       },
-      injectManifest: { globPatterns: ["**/*.{js,css,html,jpg,png,svg,woff2}"], cleanupOutdatedCaches: true, clientsClaim: true, skipWaiting: true }
+      injectManifest: { globPatterns: ["**/*.{js,css,html,jpg,png,svg,woff2}"] }
     })
   ]
 });
