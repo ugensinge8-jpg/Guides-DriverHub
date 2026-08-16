@@ -2225,7 +2225,7 @@ function TripsTab({ user, trips, actions }) {
 }
 
 function TripCard({ trip, onOpen }) {
-  const msgs = trip.(chat.messages || []).filter((m) => m.kind !== "system");
+  const msgs = (trip.chat?.messages || []).filter((m) => m.kind !== "system");
   return (
     <button onClick={onOpen} className="tap w-full text-left rounded-2xl p-4" style={{ background: C.card, border: `1px solid ${C.line}` }}>
       <div className="flex items-start justify-between gap-3">
@@ -2361,7 +2361,7 @@ function Chat({ user, meId, trip, state, actions }) {
     r.readAsDataURL(f);
   };
   const exportChat = () => {
-    const keep = trip.(chat.messages || []).filter((m) => m.kind === "text" || m.kind === "photo");
+    const keep = (trip.chat?.messages || []).filter((m) => m.kind === "text" || m.kind === "photo");
     const bundle = {
       trip: { title: trip.title, start: trip.start, end: trip.end, meetingPoint: trip.meetingPoint },
       crew: (trip.members || []).map((m) => ({ name: m.name, role: m.roleInTrip })),
@@ -2395,7 +2395,7 @@ function Chat({ user, meId, trip, state, actions }) {
 
       {/* messages */}
       <div ref={scrollRef} className="hidescroll px-3.5 py-3 space-y-2.5 overflow-y-auto" style={{ background: C.bg, maxHeight: "44vh", scrollbarWidth: "none" }}>
-        {trip.(chat.messages || []).map((m) => {
+        {(trip.chat?.messages || []).map((m) => {
           if (m.kind === "system") return <div key={m.id} className="text-center"><span className="text-[11.5px] rounded-full px-2.5 py-1" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.muted }}>{m.body}</span></div>;
           const mine = m.senderId === meId;
           const who = member(m.senderId);
