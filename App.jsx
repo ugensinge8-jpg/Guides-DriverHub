@@ -780,8 +780,18 @@ export default function App() {
   };
   const hireApplicant = async (listing, applicant) => {
     await setApplicant(listing.id, applicant.talentId, "hired");
-    setListings((L) => L.map((l) => (l.id === listing.id ? { ...l, status: "filled" } : l)));
-    if (CLOUD) { const { error: jfErr } = await supabase.from("job_listings").update({ status: "filled" }).eq("id", listing.id); if (jfErr) console.error("job_listings.filled failed:", jfErr.message); fetchJobs(); }
+    // A guide+driver listing stays open until one of each is hired.
+    const hiredRoles = new Set(
+      (listing.applicants || [])
+        .filter((a) => a.status === "hired" || a.talentId === applicant.talentId)
+        .map((a) => talentById(a.talentId)?.role)
+    );
+    const filled = listing.role === "both" ? (hiredRoles.has("guide") && hiredRoles.has("driver")) : true;
+    if (filled) {
+      setListings((L) => L.map((l) => (l.id === listing.id ? { ...l, status: "filled" } : l)));
+      if (CLOUD) { const { error: jfErr } = await supabase.from("job_listings").update({ status: "filled" }).eq("id", listing.id); if (jfErr) console.error("job_listings.filled failed:", jfErr.message); }
+    }
+    if (CLOUD) fetchJobs();
     createTripFromJob({ id: `${listing.id}_${applicant.talentId}`, toTalentId: applicant.talentId, operator: listing.operator, title: listing.title, start: listing.start, end: listing.end });
   };
 
@@ -1053,7 +1063,7 @@ function Shell({ user, posts, jobs, trips, listings, actions, engagement, dm, di
 
     // open listings matching my role (guides see guide jobs, drivers see driver jobs)
     if (user.kind === "guide" || user.kind === "driver") {
-      (listings || []).filter((l) => l && l.status === "open" && l.role === user.kind &&
+      (listings || []).filter((l) => l && l.status === "open" && (l.role === user.kind || l.role === "both") &&
         !(l.applicants || []).some((a) => a && a.talentId === actorId)).forEach((l) =>
         add({ id: `lst-${l.id}`, kind: "listing", who: l.operatorId, text: l.title, ts: l.createdAt, urgent: l.urgent }));
     }
@@ -1095,7 +1105,7 @@ function Shell({ user, posts, jobs, trips, listings, actions, engagement, dm, di
   const pendingModCount = posts.filter((p) => p.status === "pending").length;
   const myTalent = user.talentId ? talentById(user.talentId) : null;
   const myJobsPending = myTalent ? jobs.filter((j) => j.toTalentId === myTalent.id && j.status === "pending").length : 0;
-  const availableListings = myTalent ? listings.filter((l) => l.status === "open" && l.role === user.kind && !(l.applicants || []).some((a) => a.talentId === myTalent.id)).length : 0;
+  const availableListings = myTalent ? listings.filter((l) => l.status === "open" && (l.role === user.kind || l.role === "both") && !(l.applicants || []).some((a) => a.talentId === myTalent.id)).length : 0;
   const jobsBadge = myJobsPending + availableListings;
 
   const openProfile = (talentId) => setOverlay({ type: "profile", talentId });
@@ -1314,7 +1324,7 @@ function prettyNumber(raw) {
   return d;
 }
 
-const roleLabel = (r) => (r === "guide" ? "Guide" : r === "operator" ? "Tour Operator" : r === "business" ? "Business" : r === "admin" ? "Admin" : "Driver");
+const roleLabel = (r) => (r === "guide" ? "Guide" : r === "operator" ? "Tour Operator" : r === "business" ? "Business" : r === "admin" ? "Admin" : r === "both" ? "Guide + Driver" : "Driver");
 
 /* ======================== Feed tab (guides & drivers) ===================== */
 function PostTab({ user, posts, onAdd, eng, onOpenProfile }) {
@@ -2470,7 +2480,7 @@ function AppStatusBadge({ status }) {
 function JobsHub({ user, jobs, listings, actions }) {
   const [sub, setSub] = useState("board");
   const t = talentById(user.talentId);
-  const open = listings.filter((l) => l.status === "open" && l.role === user.kind);
+  const open = listings.filter((l) => l.status === "open" && (l.role === user.kind || l.role === "both"));
   const notApplied = open.filter((l) => !(l.applicants || []).some((a) => a.talentId === t.id));
   const applied = listings.filter((l) => (l.applicants || []).some((a) => a.talentId === t.id));
   const invitesPending = jobs.filter((j) => j.toTalentId === t.id && j.status === "pending").length;
@@ -2614,6 +2624,14 @@ function OperatorListings({ listings, onPost, onManage }) {
 }
 
 function ManageApplicants({ listing, actions, onViewProfile, onBack }) {
+  const isBoth = listing.role === "both";
+  const [side, setSide] = useState("guide");
+  const all = (listing.applicants || []).map((a) => ({ ...a, _role: talentById(a.talentId)?.role }));
+  const guideApps = all.filter((a) => a._role === "guide");
+  const driverApps = all.filter((a) => a._role === "driver");
+  const shown = isBoth ? (side === "guide" ? guideApps : driverApps) : all;
+  const gHired = guideApps.some((a) => a.status === "hired");
+  const dHired = driverApps.some((a) => a.status === "hired");
   return (
     <div className="pb-6 fade">
       <div className="h-14 px-4 flex items-center gap-3" style={{ borderBottom: `1px solid ${C.lineSoft}` }}>
@@ -2622,12 +2640,22 @@ function ManageApplicants({ listing, actions, onViewProfile, onBack }) {
           <div className="text-[12px]" style={{ color: C.muted }}>{fmtDate(listing.start)} – {fmtDate(listing.end)} · {listing.applicants.length} applicant{listing.applicants.length === 1 ? "" : "s"}</div></div>
       </div>
 
+      {isBoth && (
+        <div className="px-5 pt-4">
+          <Segmented value={side} onChange={setSide}
+            options={[["guide", `Guides (${guideApps.length})${gHired ? " \u2713" : ""}`], ["driver", `Drivers (${driverApps.length})${dHired ? " \u2713" : ""}`]]} />
+          {(gHired || dHired) && !(gHired && dHired) && (
+            <p className="text-[12px] mt-2" style={{ color: C.muted }}>{gHired ? "Guide hired \u2014 now pick the driver to complete the pair." : "Driver hired \u2014 now pick the guide to complete the pair."}</p>
+          )}
+        </div>
+      )}
+
       <div className="px-5 py-4">
-        {listing.applicants.length === 0 ? (
+        {shown.length === 0 ? (
           <Empty Icon={Briefcase} title="No applicants yet" body="Guides and drivers who match will see this job and can apply." />
         ) : (
           <div className="space-y-3">
-            {(listing.applicants || []).map((a) => (
+            {shown.map((a) => (
               <div key={a.talentId} className="rounded-2xl p-4" style={{ background: C.card, border: `1px solid ${C.line}` }}>
                 <div className="flex items-center gap-3">
                   <Avatar initials={a.initials} size={44} />
@@ -2676,14 +2704,16 @@ function ManageApplicants({ listing, actions, onViewProfile, onBack }) {
 
 function ListingForm({ operator, onBack, onPost }) {
   const [title, setTitle] = useState("");
-  const [role, setRole] = useState("guide");
+  const [needGuide, setNeedGuide] = useState(true);
+  const [needDriver, setNeedDriver] = useState(false);
+  const role = needGuide && needDriver ? "both" : needDriver ? "driver" : "guide";
   const [start, setStart] = useState("");
   const [end, setEnd] = useState("");
   const [langs, setLangs] = useState([]);
   const [notes, setNotes] = useState("");
   const [urgent, setUrgent] = useState(false);
   const toggle = (l) => setLangs((x) => (x.includes(l) ? x.filter((y) => y !== l) : [...x, l]));
-  const canPost = title.trim() && start && end;
+  const canPost = title.trim() && start && end && (needGuide || needDriver);
   const submit = () => {
     if (!canPost) return;
     const soon = new Date(start + "T00:00").getTime() - 3 * 86400e3 < Date.now();
@@ -2699,8 +2729,18 @@ function ListingForm({ operator, onBack, onPost }) {
         <Label>Trip title</Label>
         <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="e.g. Guide for 5-day cultural tour" className="w-full h-12 px-4 rounded-xl text-[15px] mb-4" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }} />
 
-        <Label>Who do you need?</Label>
-        <div className="mb-4"><Segmented value={role} onChange={setRole} options={[["guide", "Guide"], ["driver", "Driver"]]} /></div>
+        <Label>Who do you need? Turn on one or both</Label>
+        <div className="flex gap-2.5 mb-1.5">
+          {[["Guide", needGuide, setNeedGuide, Compass], ["Driver", needDriver, setNeedDriver, Car]].map(([lbl, on, set, Ic]) => (
+            <button key={lbl} onClick={() => set((v) => !v)} className="tap flex-1 rounded-xl p-3 flex items-center gap-2.5"
+              style={{ background: on ? C.pineSoft : C.card, border: `1.5px solid ${on ? C.pine : C.line}` }}>
+              <Ic size={18} color={on ? C.pine : C.muted} />
+              <span className="flex-1 text-left text-[14px] font-semibold" style={{ color: on ? C.pine : C.muted }}>{lbl}</span>
+              <span className="w-5 h-5 rounded-full flex items-center justify-center" style={{ background: on ? C.pine : C.card, border: `1.5px solid ${on ? C.pine : C.line}` }}>{on && <Check size={12} color="#fff" strokeWidth={3} />}</span>
+            </button>
+          ))}
+        </div>
+        <p className="text-[12px] mb-4" style={{ color: C.muted }}>{role === "both" ? "One post, one trip: hire a guide\u2013driver pair together." : "Applicants will be " + (role === "guide" ? "guides" : "drivers") + " only."}</p>
 
         <div className="grid grid-cols-2 gap-3 mb-4">
           <div><Label>Start</Label><input type="date" value={start} onChange={(e) => setStart(e.target.value)} className="w-full h-12 px-3.5 rounded-xl text-[14px]" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }} /></div>
