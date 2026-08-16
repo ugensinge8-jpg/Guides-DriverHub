@@ -3602,8 +3602,8 @@ function ConfirmDelete({ onConfirm, busy }) {
 
 /* ================== Business bookings: calendar & requests ================= */
 const DAY_MS = 86400000;
-const isoDay = (d) => { const x = new Date(d); return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, "0")}-${String(x.getDate()).padStart(2, "0")}`; };
-const eachBookedDay = (s, e) => { const out = []; let d = new Date(s + "T00:00:00"); const end = new Date(e + "T00:00:00"); while (d <= end && out.length < 400) { out.push(isoDay(d)); d = new Date(d.getTime() + DAY_MS); } return out; };
+const bkDay = (d) => { const x = new Date(d); return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, "0")}-${String(x.getDate()).padStart(2, "0")}`; };
+const eachBookedDay = (s, e) => { const out = []; let d = new Date(s + "T00:00:00"); const end = new Date(e + "T00:00:00"); while (d <= end && out.length < 400) { out.push(bkDay(d)); d = new Date(d.getTime() + DAY_MS); } return out; };
 const bookingMarks = (rows) => {
   const marks = {};
   (rows || []).forEach((b) => {
@@ -3640,7 +3640,7 @@ function MonthCal({ ym, marks, onPrev, onNext, onDay }) {
   const [y, m] = ym;
   const startPad = (new Date(y, m, 1).getDay() + 6) % 7;
   const dim = new Date(y, m + 1, 0).getDate();
-  const todayIso = isoDay(new Date());
+  const todayIso = bkDay(new Date());
   const MON = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
   const cells = [];
   for (let i = 0; i < startPad; i++) cells.push(null);
@@ -3687,7 +3687,7 @@ function BusinessBookings({ user }) {
   const [busyId, setBusyId] = useState(null);
   const marks = useMemo(() => bookingMarks(rows), [rows]);
   const pending = rows.filter((b) => b.status === "requested");
-  const todayIso = isoDay(new Date());
+  const todayIso = bkDay(new Date());
   const upcoming = rows.filter((b) => b.status === "confirmed" && b.end_date >= todayIso).slice(0, 12);
 
   const nav = (dir) => setYm(([y, m]) => { const d = new Date(y, m + dir, 1); return [d.getFullYear(), d.getMonth()]; });
