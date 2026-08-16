@@ -1,4 +1,4 @@
-/* Custom service worker (vite-plugin-pwa injectManifest mode). Lives at src/sw.js */
+/* Custom service worker (vite-plugin-pwa injectManifest mode). */
 import { precacheAndRoute, cleanupOutdatedCaches } from "workbox-precaching";
 import { clientsClaim } from "workbox-core";
 
@@ -9,7 +9,6 @@ clientsClaim();
 cleanupOutdatedCaches();
 precacheAndRoute(self.__WB_MANIFEST);
 
-/* Closed-app push: sent by the push-lead Edge Function */
 self.addEventListener("push", (event) => {
   let data = {};
   try { data = event.data.json(); } catch (e) {}
