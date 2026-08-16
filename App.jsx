@@ -7,7 +7,7 @@ import {
   Search, LogOut, Newspaper, User, CalendarCheck, MessageCircle,
   Map as MapIcon, MessageSquare, Users, Download, Mic, Video as VideoIcon, Heart, Share2, Trash2, Maximize2, Upload, Loader2, ArrowRight,
   Award, UserX, RefreshCw, FileCheck2, ExternalLink, UserPlus, Send as SendIcon, Lock, Eye, EyeOff, CalendarDays, UserCheck, Plus, CheckCheck, Camera, Navigation as NavIcon, Bell, Smartphone, Share, PhoneCall,
-  ShieldAlert,
+  ShieldAlert, Store,
 } from "lucide-react";
 import mapImg from "./map.jpg";
 import { supabase } from "./supabase.js";
@@ -29,8 +29,8 @@ const HOUR = 3600e3;
 const uid = () => (crypto?.randomUUID ? crypto.randomUUID() : String(Date.now() + Math.random()));
 let PROFILE_DIR = {};
 const profileToTalent = (p) => ({
-  id: p.id, role: p.role, name: p.full_name || "Member", base: p.base || "",
-  initials: initialsOf(p.full_name || "?"), years: p.years || 0, trips: 0, rating: null,
+  id: p.id, role: p.role, name: (p.role === "business" && p.company_name) || p.full_name || "Member", base: p.base || "",
+  initials: initialsOf((p.role === "business" && p.company_name) || p.full_name || "?"), years: p.years || 0, trips: 0, rating: null,
   verified: p.license_status === "verified", licenseStatus: p.license_status || "none",
   grades: {}, tags: Array.isArray(p.tags) ? p.tags : [],
   languages: Array.isArray(p.languages) ? p.languages : [],
@@ -62,7 +62,7 @@ const isIOS = () => /iphone|ipad|ipod/i.test(navigator.userAgent);
 
 /* ---- Device notifications ----
    Shows a system notification when new activity arrives while the app is open or
-   backgrounded. For notifications when the app is fully closed, see PUSH-SETUP.md. */
+   backgrounded. Closed-app push: ensurePushSubscription below + the push-lead Edge Function. */
 async function askNotificationPermission() {
   if (!("Notification" in window)) return "unsupported";
   if (Notification.permission === "granted") return "granted";
@@ -77,6 +77,55 @@ function showDeviceNotification(title, body, tag) {
     navigator.serviceWorker?.ready
       .then((reg) => reg.showNotification(title, { body, tag, icon: "/icon-192.png", badge: "/icon-192.png" }))
       .catch(() => { new Notification(title, { body, tag }); });
+  } catch (e) {}
+}
+
+/* ---- Closed-app push ----
+   Registers this device for Web Push and stores the subscription in
+   push_subscriptions. The push-lead Edge Function fires a push whenever an
+   operator posts a job listing or sends a direct request. */
+const VAPID_PUBLIC_KEY = "BPMQ0hmX3HvMWkKjkcWJAa_O9uDuWMxQVXyl0mUNGuIz1toU6dl4jJ-sr8X0eiCeG8u27dI6CVwYEbiPCH4cbZ0";
+
+function urlBase64ToUint8Array(base64String) {
+  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const raw = atob(base64);
+  const out = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
+  return out;
+}
+
+async function ensurePushSubscription(profileId) {
+  try {
+    if (!CLOUD || !profileId) return false;
+    if (!("serviceWorker" in navigator) || !("PushManager" in window)) return false;
+    if (!("Notification" in window) || Notification.permission !== "granted") return false;
+    const reg = await navigator.serviceWorker.ready;
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub) {
+      sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY),
+      });
+    }
+    const j = sub.toJSON();
+    const { error } = await supabase.from("push_subscriptions").upsert(
+      { endpoint: sub.endpoint, profile_id: profileId, p256dh: j.keys.p256dh, auth: j.keys.auth },
+      { onConflict: "endpoint" }
+    );
+    if (error) console.error("push_subscriptions.upsert failed:", error.message);
+    return !error;
+  } catch (e) { console.error("push subscribe failed:", e); return false; }
+}
+
+async function removePushSubscription() {
+  try {
+    if (!("serviceWorker" in navigator)) return;
+    const reg = await navigator.serviceWorker.ready;
+    const sub = await reg.pushManager.getSubscription();
+    if (!sub) return;
+    if (CLOUD) await supabase.from("push_subscriptions").delete().eq("endpoint", sub.endpoint);
+    await sub.unsubscribe();
   } catch (e) {}
 }
 
@@ -405,6 +454,12 @@ export default function App() {
       .then(({ data }) => { if (on) setMyProfile(data || false); });
     return () => { on = false; };
   }, [session, profileTick]);
+
+  // Keep this device registered for closed-app push once signed in.
+  useEffect(() => {
+    if (!CLOUD || !session || !myProfile || typeof myProfile !== "object") return;
+    ensurePushSubscription(session.user.id);
+  }, [session, myProfile]);
 
   const realUser = CLOUD && !authBusy && session && myProfile && typeof myProfile === "object"
     ? { id: session.user.id, kind: myProfile.role, talentId: session.user.id, name: myProfile.full_name,
@@ -771,7 +826,7 @@ export default function App() {
           <Login onPick={setAccountId} session={session} myProfile={myProfile} onAuthed={reloadMe} onBusy={setAuthBusy} />
         ) : (
           <Shell key={user.id} user={user} posts={posts} jobs={jobs} trips={trips} listings={listings} dirTick={dirTick}
-            actions={{ addPost, approve, reject, deletePost, reloadDirectory: loadProfiles, setAvailability, toggleFollow, sendJob, setJobStatus, postChat, openChat, postListing, applyToListing, setApplicant, hireApplicant }} engagement={{ likes, comments, toggleLike, addComment, deleteComment, follows, toggleFollow, stories, addStory, deleteStory }} dm={{ dms, sendDm, markRead, sharePostTo }} onLogout={() => { if (session) supabase.auth.signOut(); setAccountId(null); }} />
+            actions={{ addPost, approve, reject, deletePost, reloadDirectory: loadProfiles, setAvailability, toggleFollow, sendJob, setJobStatus, postChat, openChat, postListing, applyToListing, setApplicant, hireApplicant }} engagement={{ likes, comments, toggleLike, addComment, deleteComment, follows, toggleFollow, stories, addStory, deleteStory }} dm={{ dms, sendDm, markRead, sharePostTo }} onLogout={async () => { if (session) { await Promise.race([removePushSubscription(), new Promise((res) => setTimeout(res, 1500))]); supabase.auth.signOut(); } setAccountId(null); }} />
         )}
       </div>
     </div>
@@ -931,9 +986,10 @@ const NAV = {
   guide: [{ id: "post", label: "Feed", Icon: Newspaper }, { id: "jobs", label: "Jobs", Icon: Briefcase }, { id: "trips", label: "Trips", Icon: MapIcon }, { id: "chats", label: "Messages", Icon: MessageSquare }, { id: "profile", label: "Profile", Icon: User }],
   driver: [{ id: "post", label: "Feed", Icon: Newspaper }, { id: "jobs", label: "Jobs", Icon: Briefcase }, { id: "trips", label: "Trips", Icon: MapIcon }, { id: "chats", label: "Messages", Icon: MessageSquare }, { id: "profile", label: "Profile", Icon: User }],
   operator: [{ id: "discover", label: "Discover", Icon: Search }, { id: "requests", label: "Jobs", Icon: Briefcase }, { id: "trips", label: "Trips", Icon: MapIcon }, { id: "chats", label: "Messages", Icon: MessageSquare }, { id: "feed", label: "Feed", Icon: Newspaper }],
+  business: [{ id: "post", label: "Feed", Icon: Newspaper }, { id: "bookings", label: "Bookings", Icon: CalendarDays }, { id: "discover", label: "Discover", Icon: Search }, { id: "chats", label: "Messages", Icon: MessageSquare }, { id: "profile", label: "Profile", Icon: User }],
   admin: [{ id: "review", label: "Review", Icon: ShieldCheck }, { id: "users", label: "Users", Icon: Users }, { id: "feed", label: "Feed", Icon: Newspaper }, { id: "discover", label: "Discover", Icon: Search }, { id: "chats", label: "Messages", Icon: MessageSquare }],
 };
-const DEFAULT_TAB = { guide: "post", driver: "post", operator: "discover", admin: "review" };
+const DEFAULT_TAB = { guide: "post", driver: "post", operator: "discover", business: "post", admin: "review" };
 
 function Shell({ user, posts, jobs, trips, listings, actions, engagement, dm, dirTick, onLogout }) {
   const [tab, setTab] = useState(DEFAULT_TAB[user.kind]);
@@ -1048,7 +1104,7 @@ function Shell({ user, posts, jobs, trips, listings, actions, engagement, dm, di
   return (
     <>
       <TopBar user={user} onLogout={onLogout} alerts={alertItems.length} onOpenAlerts={() => setAlertsOpen(true)}
-        onSearch={(term) => { setOverlay(null); setTab(user.kind === "operator" ? "discover" : "post"); setSearchTerm(term); }} />
+        onSearch={(term) => { setOverlay(null); setTab(["operator", "business"].includes(user.kind) ? "discover" : "post"); setSearchTerm(term); }} />
 
       <div className="flex-1 overflow-y-auto hidescroll" style={{ scrollbarWidth: "none" }}>
         <VerifyBanner user={user} />
@@ -1057,7 +1113,7 @@ function Shell({ user, posts, jobs, trips, listings, actions, engagement, dm, di
             <TalentProfile talent={talentById(overlay.talentId)} posts={posts} eng={eng}
               onOpenProfile={openProfile}
               onMessage={(id) => { setOverlay(null); setTab("chats"); setDmWith(id); }}
-              canRequest={user.kind === "operator"} self={user.talentId === overlay.talentId} contactOnly={user.kind === "admin"}
+              canRequest={user.kind === "operator" && ["guide", "driver"].includes(talentById(overlay.talentId)?.role)} viewer={user} self={user.talentId === overlay.talentId} contactOnly={user.kind === "admin"}
               onRequest={() => setOverlay({ type: "request", talentId: overlay.talentId })}
               onBack={() => setOverlay(null)} />
           ) : (
@@ -1074,6 +1130,7 @@ function Shell({ user, posts, jobs, trips, listings, actions, engagement, dm, di
             {tab === "profile" && <TalentProfile talent={talentById(user.talentId)} posts={posts} eng={eng} self onSetAvailability={actions.setAvailability} onOpenProfile={openProfile} onBack={null} />}
             {tab === "discover" && <Discover onOpen={openProfile} initialQuery={searchTerm} dirTick={dirTick} />}
             {tab === "requests" && <OperatorJobs user={user} jobs={jobs} listings={listings} posts={posts} actions={actions} eng={eng} onOpen={openProfile} />}
+            {tab === "bookings" && <BusinessBookings user={user} />}
             {tab === "feed" && <Feed posts={posts} eng={eng} admin={user.kind === "admin"} onDelete={actions.deletePost} onOpenProfile={openProfile} following={myFollowing} />}
             {tab === "review" && <Review posts={posts} onApprove={actions.approve} onReject={actions.reject} eng={eng} />}
             {tab === "users" && <AdminUsers onChanged={actions.reloadDirectory} currentAdminId={actorId} />}
@@ -1101,7 +1158,7 @@ function Shell({ user, posts, jobs, trips, listings, actions, engagement, dm, di
       {alertsOpen && (
         <AlertsSheet items={alertItems} onClose={() => setAlertsOpen(false)}
           notifyOn={notifyOn}
-          onEnableNotify={async () => { const r = await askNotificationPermission(); setNotifyOn(r === "granted"); }}
+          onEnableNotify={async () => { const r = await askNotificationPermission(); setNotifyOn(r === "granted"); if (r === "granted") ensurePushSubscription(actorId); }}
           installed={installed}
           onInstall={() => { setAlertsOpen(false); setInstallSheet(true); }}
           onOpenProfile={(id) => { setAlertsOpen(false); openProfile(id); }}
@@ -1257,7 +1314,7 @@ function prettyNumber(raw) {
   return d;
 }
 
-const roleLabel = (r) => (r === "guide" ? "Guide" : r === "operator" ? "Tour Operator" : "Driver");
+const roleLabel = (r) => (r === "guide" ? "Guide" : r === "operator" ? "Tour Operator" : r === "business" ? "Business" : r === "admin" ? "Admin" : "Driver");
 
 /* ======================== Feed tab (guides & drivers) ===================== */
 function PostTab({ user, posts, onAdd, eng, onOpenProfile }) {
@@ -1591,7 +1648,7 @@ function Discover({ onOpen, initialQuery, dirTick }) {
   const [lang, setLang] = useState(null);
   const [onlyFree, setOnlyFree] = useState(false);
 
-  const POOL = useMemo(() => [...TALENT, ...Object.values(PROFILE_DIR).filter((p) => p.role === "guide" || p.role === "driver")], [dirTick]);
+  const POOL = useMemo(() => [...TALENT, ...Object.values(PROFILE_DIR).filter((p) => ["guide", "driver", "business"].includes(p.role))], [dirTick]);
   const list = POOL.filter((t) => (role === "all" || t.role === role))
     .filter((t) => (!onlyFree || (t.availability || "open") === "open"))
     .filter((t) => (!lang || (t.languages || []).some((l) => l && l.n === lang)))
@@ -1612,7 +1669,7 @@ function Discover({ onOpen, initialQuery, dirTick }) {
       </div>
 
       <div className="flex gap-2 mb-3">
-        {[["all", "Everyone"], ["guide", "Guides"], ["driver", "Drivers"]].map(([k, l]) => {
+        {[["all", "All"], ["guide", "Guides"], ["driver", "Drivers"], ["business", "Business"]].map(([k, l]) => {
           const on = role === k;
           return <button key={k} onClick={() => setRole(k)} className="tap flex-1 h-9 rounded-full text-[13px] font-semibold" style={{ background: on ? C.pine : C.card, border: `1px solid ${on ? C.pine : C.line}`, color: on ? "#fff" : C.ink }}>{l}</button>;
         })}
@@ -1838,7 +1895,7 @@ function ModCard({ post, onApprove, onReject, eng }) {
 }
 
 /* ============================= Talent profile ============================ */
-function TalentProfile({ talent, posts, canRequest, self, contactOnly, eng, onRequest, onMessage, onSetAvailability, onOpenProfile, onBack }) {
+function TalentProfile({ talent, posts, canRequest, viewer, self, contactOnly, eng, onRequest, onMessage, onSetAvailability, onOpenProfile, onBack }) {
   const t = talent;
   const live = posts.filter((p) => p.talentId === t.id && p.status === "approved").length;
   const located = posts.filter((p) => p.talentId === t.id && p.status === "approved" && p.location);
@@ -1887,7 +1944,7 @@ function TalentProfile({ talent, posts, canRequest, self, contactOnly, eng, onRe
                 {t.verified && <BadgeCheck size={17} color={C.pine} className="shrink-0 mt-1" />}
               </div>
               <div className="flex items-center gap-1 text-[13.5px] mt-1" style={{ color: C.muted }}><MapPin size={13} /> {roleLabel(t.role)}{t.base ? ` · ${t.base}` : ""}</div>
-              {t.role !== "operator" && <div className="mt-2"><AvailabilityChip talent={t} /></div>}
+              {!["operator", "business"].includes(t.role) && <div className="mt-2"><AvailabilityChip talent={t} /></div>}
             </div>
           </div>
           <div className="flex items-center mt-4 mb-1">
@@ -1922,7 +1979,7 @@ function TalentProfile({ talent, posts, canRequest, self, contactOnly, eng, onRe
       </div>
 
       <div className="px-5">
-        {self && t.role !== "operator" && <AvailabilityEditor talent={t} onSet={onSetAvailability} />}
+        {self && !["operator", "business"].includes(t.role) && <AvailabilityEditor talent={t} onSet={onSetAvailability} />}
 
         <ProfileTabs
           cv={
@@ -1948,10 +2005,12 @@ function TalentProfile({ talent, posts, canRequest, self, contactOnly, eng, onRe
                 </div>
               </div>
 
+              {t.role === "business" && <BusinessAvailability business={t} viewer={viewer} />}
+
               {t.pitch && <div className="mt-5 pl-4" style={{ borderLeft: `3px solid ${C.gold}` }}><p className="text-[15px] leading-relaxed" style={{ color: C.ink }}>{t.pitch}</p></div>}
 
               {t.tags && t.tags.length > 0 && (
-                <div className="mt-6"><SectionLabel>{t.role === "guide" ? "Specialities" : "Drives"}</SectionLabel>
+                <div className="mt-6"><SectionLabel>{t.role === "guide" ? "Specialities" : t.role === "business" ? "What we offer" : "Drives"}</SectionLabel>
                   <div className="flex flex-wrap gap-2">{(t.tags || []).map((x) => <span key={x} className="rounded-full px-3 py-1.5 text-[13.5px] font-medium" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }}>{x}</span>)}</div>
                   {t.vehicle && <div className="mt-2.5 text-[13.5px]" style={{ color: C.muted }}><Car size={14} color={C.gold} className="inline mr-1" /> {t.vehicle}</div>}
                 </div>
@@ -3403,7 +3462,7 @@ function AdminUsers({ onChanged, currentAdminId }) {
   const list = (rows || []).filter((r) => {
     if (filter === "submitted" && r.license_status !== "submitted") return false;
     if (filter === "verified" && r.license_status !== "verified") return false;
-    if (["guide", "driver", "operator"].includes(filter) && r.role !== filter) return false;
+    if (["guide", "driver", "operator", "business"].includes(filter) && r.role !== filter) return false;
     const hay = `${r.full_name || ""} ${r.email || ""} ${r.base || ""}`.toLowerCase();
     return hay.includes(q.toLowerCase());
   });
@@ -3427,6 +3486,7 @@ function AdminUsers({ onChanged, currentAdminId }) {
         <Chip on={filter === "guide"} onClick={() => setFilter("guide")}>Guides</Chip>
         <Chip on={filter === "driver"} onClick={() => setFilter("driver")}>Drivers</Chip>
         <Chip on={filter === "operator"} onClick={() => setFilter("operator")}>Operators</Chip>
+        <Chip on={filter === "business"} onClick={() => setFilter("business")}>Business</Chip>
       </div>
 
       {note && <div className="rounded-xl px-3 py-2 text-[12.5px] mb-3" style={{ background: C.pineSoft, color: C.pine }}>{note}</div>}
@@ -3540,13 +3600,238 @@ function ConfirmDelete({ onConfirm, busy }) {
   );
 }
 
+/* ================== Business bookings: calendar & requests ================= */
+const DAY_MS = 86400000;
+const isoDay = (d) => { const x = new Date(d); return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, "0")}-${String(x.getDate()).padStart(2, "0")}`; };
+const eachBookedDay = (s, e) => { const out = []; let d = new Date(s + "T00:00:00"); const end = new Date(e + "T00:00:00"); while (d <= end && out.length < 400) { out.push(isoDay(d)); d = new Date(d.getTime() + DAY_MS); } return out; };
+const bookingMarks = (rows) => {
+  const marks = {};
+  (rows || []).forEach((b) => {
+    const kind = b.status === "confirmed" ? "booked" : b.status === "blocked" ? "blocked" : b.status === "requested" ? "pending" : null;
+    if (!kind) return;
+    eachBookedDay(b.start_date, b.end_date).forEach((d) => { if (marks[d] !== "booked") marks[d] = kind; });
+  });
+  return marks;
+};
+const fmtRange = (a, b) => (a === b ? fmtDate(a) : `${fmtDate(a)} – ${fmtDate(b)}`);
+
+function useBookings(filterCol, id) {
+  const [rows, setRows] = useState([]);
+  const load = async () => {
+    if (!CLOUD || !id) return;
+    const { data, error } = await supabase.from("business_bookings").select("*").eq(filterCol, id).order("start_date");
+    if (error) { console.error("bookings load failed:", error.message); return; }
+    setRows(data || []);
+  };
+  useEffect(() => { load(); }, [id]);
+  useEffect(() => {
+    if (!CLOUD || !id) return;
+    const ch = supabase.channel(`bookings-live-${filterCol}-${id}`)
+      .on("postgres_changes", { event: "*", schema: "public", table: "business_bookings" }, load)
+      .subscribe();
+    return () => { supabase.removeChannel(ch); };
+  }, [id]);
+  return [rows, load];
+}
+
+function BLabel({ children }) { return <div className="text-[13px] font-medium mb-1.5" style={{ color: C.ink }}>{children}</div>; }
+
+function MonthCal({ ym, marks, onPrev, onNext, onDay }) {
+  const [y, m] = ym;
+  const startPad = (new Date(y, m, 1).getDay() + 6) % 7;
+  const dim = new Date(y, m + 1, 0).getDate();
+  const todayIso = isoDay(new Date());
+  const MON = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+  const cells = [];
+  for (let i = 0; i < startPad; i++) cells.push(null);
+  for (let d = 1; d <= dim; d++) cells.push(d);
+  return (
+    <div className="rounded-2xl p-3.5" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+      <div className="flex items-center justify-between mb-2.5">
+        <button onClick={onPrev} className="tap w-8 h-8 rounded-full flex items-center justify-center" style={{ border: `1px solid ${C.line}`, background: C.bg }} aria-label="Previous month"><ChevronLeft size={16} color={C.ink} /></button>
+        <div className="text-[14.5px] font-semibold" style={{ color: C.ink }}>{MON[m]} {y}</div>
+        <button onClick={onNext} className="tap w-8 h-8 rounded-full flex items-center justify-center" style={{ border: `1px solid ${C.line}`, background: C.bg }} aria-label="Next month"><ChevronLeft size={16} color={C.ink} style={{ transform: "rotate(180deg)" }} /></button>
+      </div>
+      <div className="grid grid-cols-7 gap-1 mb-1">
+        {["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"].map((d) => <div key={d} className="text-center text-[10.5px] font-semibold" style={{ color: C.muted }}>{d}</div>)}
+      </div>
+      <div className="grid grid-cols-7 gap-1">
+        {cells.map((d, i) => {
+          if (!d) return <div key={`pad${i}`} />;
+          const iso = `${y}-${String(m + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+          const mark = marks[iso];
+          const past = iso < todayIso;
+          const bg = mark === "booked" ? C.pine : mark === "blocked" ? "#AEB9AE" : mark === "pending" ? C.gold : C.bg;
+          return (
+            <button key={iso} onClick={() => onDay && !past && onDay(iso, mark)} className="tap rounded-lg flex items-center justify-center text-[12.5px] font-medium"
+              style={{ height: 38, background: bg, border: `1px solid ${mark ? "transparent" : C.line}`, color: mark ? "#fff" : past ? "#C3CBC3" : C.ink, outline: iso === todayIso ? `2px solid ${C.gold}` : "none", outlineOffset: -2 }}>
+              {d}
+            </button>
+          );
+        })}
+      </div>
+      <div className="flex gap-3 mt-3 flex-wrap">
+        {[["Booked", C.pine], ["Blocked", "#AEB9AE"], ["Pending", C.gold]].map(([l, c]) => (
+          <span key={l} className="inline-flex items-center gap-1.5 text-[11.5px]" style={{ color: C.muted }}><span className="w-2.5 h-2.5 rounded-sm inline-block" style={{ background: c }} /> {l}</span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/* Business owner: manage the calendar and incoming requests */
+function BusinessBookings({ user }) {
+  const now = new Date();
+  const [ym, setYm] = useState([now.getFullYear(), now.getMonth()]);
+  const [rows, reload] = useBookings("business_id", user.talentId);
+  const [busyId, setBusyId] = useState(null);
+  const marks = useMemo(() => bookingMarks(rows), [rows]);
+  const pending = rows.filter((b) => b.status === "requested");
+  const todayIso = isoDay(new Date());
+  const upcoming = rows.filter((b) => b.status === "confirmed" && b.end_date >= todayIso).slice(0, 12);
+
+  const nav = (dir) => setYm(([y, m]) => { const d = new Date(y, m + dir, 1); return [d.getFullYear(), d.getMonth()]; });
+  const dayTap = async (iso, mark) => {
+    if (mark === "booked" || mark === "pending") return;
+    if (!mark) {
+      const { error } = await supabase.from("business_bookings").insert({ business_id: user.talentId, business_name: user.name, start_date: iso, end_date: iso, status: "blocked" });
+      if (error) console.error("block day failed:", error.message); else reload();
+    } else {
+      const row = rows.find((b) => b.status === "blocked" && b.start_date <= iso && b.end_date >= iso);
+      if (!row) return;
+      const { error } = await supabase.from("business_bookings").delete().eq("id", row.id);
+      if (error) console.error("unblock day failed:", error.message); else reload();
+    }
+  };
+  const setStatus = async (id, status) => {
+    setBusyId(id);
+    const { error } = await supabase.from("business_bookings").update({ status }).eq("id", id);
+    setBusyId(null);
+    if (error) console.error("booking update failed:", error.message); else reload();
+  };
+
+  return (
+    <div className="px-5 py-4">
+      <SectionLabel trailing={pending.length ? `${pending.length} pending` : null}>Your calendar</SectionLabel>
+      <MonthCal ym={ym} marks={marks} onPrev={() => nav(-1)} onNext={() => nav(1)} onDay={dayTap} />
+      <p className="text-[12px] mt-2 mb-5" style={{ color: C.muted }}>Tap a free day to block it. Tap a grey day to free it again. Operators see this calendar live.</p>
+
+      {pending.length > 0 && (<>
+        <SectionLabel>Booking requests</SectionLabel>
+        {pending.map((b) => (
+          <div key={b.id} className="rounded-2xl p-4 mb-3" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+            <div className="text-[14.5px] font-semibold" style={{ color: C.ink }}>{b.operator_name || "Tour operator"}</div>
+            <div className="flex flex-wrap gap-2 mt-2"><Pill Icon={CalendarCheck}>{fmtRange(b.start_date, b.end_date)}</Pill>{b.guests ? <Pill Icon={Users}>{b.guests} guests</Pill> : null}</div>
+            {b.note && <p className="text-[13.5px] mt-2.5 leading-snug" style={{ color: C.muted }}>{b.note}</p>}
+            <div className="flex gap-2 mt-3.5">
+              <button disabled={busyId === b.id} onClick={() => setStatus(b.id, "confirmed")} className="tap flex-1 h-11 rounded-xl text-[14px] font-semibold" style={{ background: C.pine, color: "#fff" }}>Confirm</button>
+              <button disabled={busyId === b.id} onClick={() => setStatus(b.id, "declined")} className="tap flex-1 h-11 rounded-xl text-[14px] font-semibold" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.maroon }}>Decline</button>
+            </div>
+          </div>
+        ))}
+      </>)}
+
+      <SectionLabel>Upcoming stays</SectionLabel>
+      {upcoming.length === 0 && <p className="text-[13.5px]" style={{ color: C.muted }}>No confirmed bookings yet. Post photos of your place to the feed — that’s your shop window.</p>}
+      {upcoming.map((b) => (
+        <div key={b.id} className="rounded-2xl p-4 mb-3 flex items-center justify-between gap-3" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+          <div>
+            <div className="text-[14px] font-semibold" style={{ color: C.ink }}>{b.operator_name || "Tour operator"}</div>
+            <div className="text-[12.5px] mt-0.5" style={{ color: C.muted }}>{fmtRange(b.start_date, b.end_date)}{b.guests ? ` · ${b.guests} guests` : ""}</div>
+          </div>
+          <button onClick={() => setStatus(b.id, "cancelled")} className="tap text-[12.5px] font-semibold px-3 py-2 rounded-lg" style={{ color: C.maroon, border: `1px solid ${C.line}` }}>Cancel</button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/* On a business profile: live availability + the operator booking form */
+function BusinessAvailability({ business, viewer }) {
+  const now = new Date();
+  const [ym, setYm] = useState([now.getFullYear(), now.getMonth()]);
+  const [rows] = useBookings("business_id", business.id);
+  const marks = useMemo(() => bookingMarks(rows.filter((b) => ["confirmed", "blocked"].includes(b.status) || (viewer && b.operator_id === viewer.talentId))), [rows, viewer]);
+  const isOperator = viewer && viewer.kind === "operator";
+  const mine = viewer ? rows.filter((b) => b.operator_id === viewer.talentId && ["requested", "confirmed"].includes(b.status)) : [];
+  const [start, setStart] = useState("");
+  const [end, setEnd] = useState("");
+  const [guests, setGuests] = useState("");
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState(null);
+  const nav = (dir) => setYm(([y, m]) => { const d = new Date(y, m + dir, 1); return [d.getFullYear(), d.getMonth()]; });
+
+  const request = async () => {
+    if (!start || !end || end < start) { setMsg("Pick a valid date range first."); return; }
+    setBusy(true); setMsg(null);
+    const { error } = await supabase.from("business_bookings").insert({
+      business_id: business.id, operator_id: viewer.talentId,
+      business_name: business.name, operator_name: viewer.name,
+      start_date: start, end_date: end,
+      guests: guests ? Number(guests) : null, note: note.trim() || null, status: "requested",
+    });
+    setBusy(false);
+    if (error) { setMsg(error.message); return; }
+    setStart(""); setEnd(""); setGuests(""); setNote("");
+    setMsg("Request sent — you’ll get a notification when they respond.");
+  };
+  const cancelMine = async (id) => {
+    const { error } = await supabase.from("business_bookings").update({ status: "cancelled" }).eq("id", id);
+    if (error) console.error("cancel failed:", error.message);
+  };
+
+  return (
+    <div className="mt-6">
+      <SectionLabel>Availability</SectionLabel>
+      <MonthCal ym={ym} marks={marks} onPrev={() => nav(-1)} onNext={() => nav(1)} onDay={null} />
+
+      {isOperator && (
+        <div className="rounded-2xl p-4 mt-3" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+          <div className="text-[14.5px] font-semibold mb-3" style={{ color: C.ink }}>Request a booking</div>
+          <div className="grid grid-cols-2 gap-2.5 mb-3">
+            <div><BLabel>Check-in</BLabel><input type="date" value={start} onChange={(e) => setStart(e.target.value)} className="w-full h-12 px-3 rounded-xl text-[14px]" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} /></div>
+            <div><BLabel>Check-out</BLabel><input type="date" value={end} onChange={(e) => setEnd(e.target.value)} className="w-full h-12 px-3 rounded-xl text-[14px]" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} /></div>
+          </div>
+          <BLabel>Guests</BLabel>
+          <input value={guests} onChange={(e) => setGuests(e.target.value.replace(/[^0-9]/g, "").slice(0, 3))} inputMode="numeric" placeholder="How many people?"
+            className="w-full h-12 px-3.5 rounded-xl text-[15px] mb-3" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
+          <BLabel>Note</BLabel>
+          <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={2} maxLength={200} placeholder="Group details, arrival time, rooms needed…"
+            className="w-full px-3.5 py-3 rounded-xl text-[15px] resize-none mb-3" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
+          {msg && <p className="text-[13px] mb-2.5" style={{ color: msg.startsWith("Request sent") ? C.pine : C.maroon }}>{msg}</p>}
+          <button disabled={busy} onClick={request} className="tap w-full rounded-xl flex items-center justify-center gap-2 text-[15px] font-semibold"
+            style={{ height: 50, background: C.pine, color: "#fff" }}>
+            {busy ? <Loader2 size={18} className="animate-spin" /> : <>Send booking request <ArrowRight size={17} strokeWidth={2.4} /></>}
+          </button>
+        </div>
+      )}
+
+      {mine.length > 0 && (
+        <div className="mt-3">
+          {mine.map((b) => (
+            <div key={b.id} className="rounded-2xl p-3.5 mb-2 flex items-center justify-between gap-3" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+              <div>
+                <div className="text-[13.5px] font-semibold" style={{ color: b.status === "confirmed" ? C.pine : C.ink }}>{b.status === "confirmed" ? "Confirmed" : "Awaiting reply"}</div>
+                <div className="text-[12.5px] mt-0.5" style={{ color: C.muted }}>{fmtRange(b.start_date, b.end_date)}{b.guests ? ` · ${b.guests} guests` : ""}</div>
+              </div>
+              <button onClick={() => cancelMine(b.id)} className="tap text-[12.5px] font-semibold px-3 py-2 rounded-lg" style={{ color: C.maroon, border: `1px solid ${C.line}` }}>Cancel</button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ============ Onboarding (real signup · role → details → OTP → license) ============ */
 const ONB_SPECS = ["Culture & Dzong", "Alpine Trekking & Camping", "Birdwatching & Wildlife", "Spiritual & Meditation", "Adventure & Outdoors"];
 const ONB_DRIVES = ["Long-distance touring", "Mountain & high passes", "Excursion & day trips", "Airport transfers", "Off-road & trailheads"];
 const ONB_VEHICLES = ["Sedan", "SUV", "Hiace Van", "Coaster Bus", "Large Coach"];
 const ONB_LANGS = ["Dzongkha", "English", "Hindi", "Nepali", "Japanese", "Mandarin", "German", "French", "Spanish", "Korean"];
 const ONB_YEARS = [["0–2 yrs", 1], ["3–5 yrs", 4], ["6–10 yrs", 8], ["10+ yrs", 12]];
-const LICENSE_LABEL = { guide: "Guide license (Department of Tourism)", driver: "Driving licence (RSTA)", operator: "Tour Operator licence (Department of Tourism)" };
+const LICENSE_LABEL = { guide: "Guide license (Department of Tourism)", driver: "Driving licence (RSTA)", operator: "Tour Operator licence (Department of Tourism)", business: "Trade licence (MoICE)" };
+const ONB_BUSINESS = ["Hotel", "Farmstay / Homestay", "Boutique & Handicrafts", "Restaurant / Caf\u00e9", "Wellness & Spa", "Textiles & Art"];
 
 function OLabel({ children }) { return <div className="text-[13px] font-medium mb-1.5" style={{ color: C.ink }}>{children}</div>; }
 function OInput(props) { return <input {...props} className="w-full h-12 px-4 rounded-xl text-[15px] mb-4" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }} />; }
@@ -3663,7 +3948,7 @@ function Onboard({ mode: initialMode, session, onBack, onDone }) {
     const { error } = await supabase.from("profiles").upsert({
       id: effUid, email: (email || session?.user?.email || "").trim() || null, role,
       full_name: name.trim(), phone: phone.trim() || null, base: base.trim() || null,
-      company_name: role === "operator" ? (company.trim() || name.trim()) : null,
+      company_name: ["operator", "business"].includes(role) ? (company.trim() || name.trim()) : null,
       years, pitch: pitch.trim() || null, languages: langs, tags,
       vehicle: role === "driver" ? vehicle : null,
       license_path: licensePath || null, license_status: licensePath ? "submitted" : "none",
@@ -3711,7 +3996,7 @@ function Onboard({ mode: initialMode, session, onBack, onDone }) {
     setStep(ORDER[i - 1]);
   };
   const detailsNext = () => { if (effUid) setStep("license"); else setStep("email"); };
-  const detailsOk = role === "operator" ? true : (tags.length > 0 && langs.length > 0 && (role !== "driver" || vehicle));
+  const detailsOk = role === "operator" ? true : role === "business" ? tags.length > 0 : (tags.length > 0 && langs.length > 0 && (role !== "driver" || vehicle));
 
   return (
     <div className="px-6 pt-5 pb-8">
@@ -3742,6 +4027,8 @@ function Onboard({ mode: initialMode, session, onBack, onDone }) {
               points: ["List your vehicle and the routes you know", "Get found for airport runs and long hauls", "Freelance owner-drivers welcome"] },
             { id: "operator", label: "Tour Operator", sub: "I book guides and drivers", Icon: Building2,
               points: ["Search verified guides and drivers", "Post jobs and hire in minutes", "Run every trip in one place"] },
+            { id: "business", label: "Business", sub: "I run a hotel, boutique or shop", Icon: Store,
+              points: ["A verified page guides and operators can find", "Share rooms, products and offers on the feed", "Direct messages from every tour passing through"] },
           ].map(({ id, label, sub: subT, Icon, points }) => (
             <button key={id} onClick={() => { setRole(id); setStep("about"); }} className="tap w-full text-left rounded-2xl p-4 mb-3"
               style={{ background: C.card, border: `1.5px solid ${role === id ? C.pine : C.line}` }}>
@@ -3778,9 +4065,9 @@ function Onboard({ mode: initialMode, session, onBack, onDone }) {
       {step === "about" && (
         <div className="fade">
           <h2 className="text-[24px] font-semibold tracking-[-0.01em] mb-5" style={{ color: C.ink }}>Tell us who you are</h2>
-          <OLabel>{role === "operator" ? "Your name" : "Full name"}</OLabel>
+          <OLabel>{["operator", "business"].includes(role) ? "Your name" : "Full name"}</OLabel>
           <OInput value={name} onChange={(e) => setName(e.target.value)} placeholder="Your full name" />
-          {role === "operator" && (<><OLabel>Agency name</OLabel><OInput value={company} onChange={(e) => setCompany(e.target.value)} placeholder="Your agency name" /></>)}
+          {["operator", "business"].includes(role) && (<><OLabel>{role === "business" ? "Business name" : "Agency name"}</OLabel><OInput value={company} onChange={(e) => setCompany(e.target.value)} placeholder={role === "business" ? "Your hotel or shop name" : "Your agency name"} /></>)}
           <OLabel>Phone</OLabel>
           <div className="relative mb-4">
             <span className="absolute left-4 top-1/2 -translate-y-1/2 text-[15px] font-semibold" style={{ color: C.muted }}>+975</span>
@@ -3790,14 +4077,14 @@ function Onboard({ mode: initialMode, session, onBack, onDone }) {
               style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }} />
           </div>
           <p className="text-[12px] -mt-2 mb-4" style={{ color: C.muted }}>Operators call this number directly — make sure it's right.</p>
-          {role !== "operator" && (<><OLabel>Home base</OLabel><OInput value={base} onChange={(e) => setBase(e.target.value)} placeholder="Paro" /></>)}
+          {role !== "operator" && (<><OLabel>{role === "business" ? "Town / location" : "Home base"}</OLabel><OInput value={base} onChange={(e) => setBase(e.target.value)} placeholder="Paro" /></>)}
           <OCta disabled={name.trim().length < 2} onClick={() => setStep("details")}>Continue</OCta>
         </div>
       )}
 
       {step === "details" && (
         <div className="fade">
-          <h2 className="text-[24px] font-semibold tracking-[-0.01em] mb-5" style={{ color: C.ink }}>{role === "guide" ? "Your specialities" : role === "driver" ? "What you drive" : "About your agency"}</h2>
+          <h2 className="text-[24px] font-semibold tracking-[-0.01em] mb-5" style={{ color: C.ink }}>{role === "guide" ? "Your specialities" : role === "driver" ? "What you drive" : role === "business" ? "About your business" : "About your agency"}</h2>
           <OLabel>Years of experience</OLabel>
           <div className="flex flex-wrap gap-2 mb-5">{ONB_YEARS.map(([l, v]) => <Chip key={l} on={years === v} onClick={() => setYears(v)}>{l}</Chip>)}</div>
           {role === "guide" && (<>
@@ -3809,6 +4096,10 @@ function Onboard({ mode: initialMode, session, onBack, onDone }) {
             <div className="flex flex-wrap gap-2 mb-5">{ONB_VEHICLES.map((v) => <Chip key={v} on={vehicle === v} onClick={() => setVehicle(v)}>{v}</Chip>)}</div>
             <OLabel>Comfortable with</OLabel>
             <div className="flex flex-wrap gap-2 mb-5">{ONB_DRIVES.map((t) => <Chip key={t} on={tags.includes(t)} onClick={() => toggleTag(t)}>{t}</Chip>)}</div>
+          </>)}
+          {role === "business" && (<>
+            <OLabel>What kind of business? Pick all that fit</OLabel>
+            <div className="flex flex-wrap gap-2 mb-5">{ONB_BUSINESS.map((t) => <Chip key={t} on={tags.includes(t)} onClick={() => toggleTag(t)}>{t}</Chip>)}</div>
           </>)}
           {role !== "operator" && (<>
             <OLabel>Languages — tap once for Fluent, twice for Basic</OLabel>
@@ -3824,9 +4115,9 @@ function Onboard({ mode: initialMode, session, onBack, onDone }) {
               })}
             </div>
           </>)}
-          {role === "operator" && (<>
-            <OLabel>What should the crew know about you?</OLabel>
-            <textarea value={pitch} onChange={(e) => setPitch(e.target.value)} rows={3} maxLength={220} placeholder="Routes you run, group sizes, what you value."
+          {["operator", "business"].includes(role) && (<>
+            <OLabel>{role === "business" ? "Describe your place" : "What should the crew know about you?"}</OLabel>
+            <textarea value={pitch} onChange={(e) => setPitch(e.target.value)} rows={3} maxLength={220} placeholder={role === "business" ? "Rooms, products, opening hours \u2014 what should visiting tours know?" : "Routes you run, group sizes, what you value."}
               className="w-full px-3.5 py-3 rounded-xl text-[15px] resize-none mb-5" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }} />
           </>)}
           <OCta disabled={!detailsOk} onClick={detailsNext}>Continue</OCta>
@@ -5086,6 +5377,19 @@ function Tutorial({ user, nav, setTab, onDone }) {
         { kind: "outro", title: "One last thing", body: user.licenseStatus === "submitted"
             ? "Your licence is with our review team. Everything works meanwhile — your Verified badge appears once it clears."
             : "Add your licence from your profile to get the Verified badge. Operators prioritise verified guides and drivers." },
+      ]
+    : user.kind === "business"
+    ? [
+        { kind: "intro", title: `Welcome, ${first}`, body: "You're one of the first businesses on the hub. A quick tour of your new page." },
+        { kind: "tab", tab: "post", title: "Your Feed", body: "Post your rooms, products and offers \u2014 every guide and operator on the hub sees this feed." },
+        { kind: "tab", tab: "bookings", title: "Bookings", body: "Your live calendar. Tap days to block them, and confirm operator requests right here." },
+        { kind: "tab", tab: "discover", title: "Discover", body: "Browse verified guides, drivers and fellow businesses across Bhutan." },
+        { kind: "tab", tab: "chats", title: "Messages", body: "Operators and guides can message you directly to plan stops and stays." },
+        { kind: "tab", tab: "profile", title: "Your Page", body: "Photos, what you offer, and your location \u2014 this is what passing tours see." },
+        { kind: "top", title: "Search & alerts", body: "Search anyone by name, and tap the bell for messages and follows." },
+        { kind: "outro", title: "One last thing", body: user.licenseStatus === "submitted"
+            ? "Your trade licence is with our review team. Everything works meanwhile \u2014 your Verified badge appears once it clears."
+            : "Add your trade licence from your profile to get the Verified badge. Tours trust verified businesses." },
       ]
     : [
         { kind: "intro", title: `Welcome, ${first}`, body: "You're one of the first operators here. Quick tour so you can start booking." },
