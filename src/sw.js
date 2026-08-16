@@ -1,6 +1,8 @@
-/* Custom service worker (vite-plugin-pwa injectManifest mode). */
+/* Custom service worker (vite-plugin-pwa injectManifest mode). Lives at src/sw.js */
 import { precacheAndRoute, cleanupOutdatedCaches } from "workbox-precaching";
 import { clientsClaim } from "workbox-core";
+
+const ICON = "https://nxnsdnayzimzfiwjrkvv.supabase.co/storage/v1/object/public/icons/icon-192.png";
 
 self.skipWaiting();
 clientsClaim();
@@ -15,8 +17,8 @@ self.addEventListener("push", (event) => {
   event.waitUntil(
     self.registration.showNotification(title, {
       body: data.body || "",
-      icon: "/icon-192.png",
-      badge: "/icon-192.png",
+      icon: ICON,
+      badge: ICON,
       tag: data.tag,
       data: { url: data.url || "/" },
     })
@@ -34,4 +36,5 @@ self.addEventListener("notificationclick", (event) => {
       return self.clients.openWindow(url);
     })
   );
+});
 });
