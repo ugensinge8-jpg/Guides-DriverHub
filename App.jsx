@@ -239,6 +239,56 @@ function bakeEnhance(dataUri, p) {
   });
 }
 
+async function compressVideo(file, onProgress) {
+  // Re-encodes on the device: decode -> draw to a 720p canvas -> record at ~2.5 Mbps.
+  // Turns any 30s phone clip into ~8-12 MB before upload. Returns null when unsupported.
+  let url = null;
+  try {
+    if (!window.MediaRecorder || !HTMLCanvasElement.prototype.captureStream) return null;
+    const mime = ["video/mp4", 'video/webm;codecs=vp9', "video/webm"].find((t) => MediaRecorder.isTypeSupported(t));
+    if (!mime) return null;
+    url = URL.createObjectURL(file);
+    const v = document.createElement("video");
+    v.src = url; v.playsInline = true; v.preload = "auto";
+    await new Promise((res, rej) => { v.onloadedmetadata = res; v.onerror = () => rej(new Error("decode")); });
+    const scale = Math.min(1, 1280 / Math.max(v.videoWidth || 1280, v.videoHeight || 720));
+    const w = Math.max(2, Math.round((v.videoWidth * scale) / 2) * 2);
+    const h = Math.max(2, Math.round((v.videoHeight * scale) / 2) * 2);
+    const canvas = document.createElement("canvas");
+    canvas.width = w; canvas.height = h;
+    const ctx = canvas.getContext("2d");
+    const stream = new MediaStream(canvas.captureStream(30).getVideoTracks());
+    try {
+      const els = v.captureStream ? v.captureStream() : v.mozCaptureStream ? v.mozCaptureStream() : null;
+      if (els) els.getAudioTracks().forEach((t) => stream.addTrack(t));
+    } catch (e) {}
+    const rec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 2500000, audioBitsPerSecond: 96000 });
+    const chunks = [];
+    rec.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
+    const finished = new Promise((res) => { rec.onstop = res; });
+    let raf = 0;
+    const draw = () => {
+      ctx.drawImage(v, 0, 0, w, h);
+      onProgress && onProgress(v.currentTime || 0, v.duration || 0);
+      raf = requestAnimationFrame(draw);
+    };
+    v.onended = () => { cancelAnimationFrame(raf); try { rec.stop(); } catch (e) {} };
+    rec.start(500);
+    try { await v.play(); } catch (e) { v.muted = true; await v.play(); }
+    draw();
+    await finished;
+    cancelAnimationFrame(raf);
+    URL.revokeObjectURL(url); url = null;
+    if (!chunks.length) return null;
+    const blob = new Blob(chunks, { type: mime.split(";")[0] });
+    return blob.size > 0 ? blob : null;
+  } catch (e) {
+    console.error("compressVideo failed:", e.message || e);
+    if (url) URL.revokeObjectURL(url);
+    return null;
+  }
+}
+
 function dataUriToBlob(dataUri) {
   // Manual conversion: works under any Content-Security-Policy, unlike fetch(dataUri).
   const [head, b64] = String(dataUri).split(",");
@@ -1524,6 +1574,7 @@ function Composer({ talent, onAdd }) {
   const [text, setText] = useState("");
   const [media, setMedia] = useState(null);       // { kind:'photo'|'video', dataUri, slides, ratio }
   const [cropping, setCropping] = useState(null);  // slides currently being reframed
+  const [compressing, setCompressing] = useState(null); // { cur, dur } while shrinking a video
   const [enhancing, setEnhancing] = useState(false); // colour / light touch-ups
   const [location, setLocation] = useState(null); // { lat, lng, place, description?, source? }
   const [picking, setPicking] = useState(false);
@@ -1542,13 +1593,23 @@ function Composer({ talent, onAdd }) {
 
     const vid = files.find((f) => f.type.startsWith("video/"));
     if (vid) {
-      if (vid.size > 25 * 1024 * 1024) return setError("That video is over 25 MB — trim it or pick a shorter clip.");
-      videoDuration(vid).then((secs) => {
+      if (vid.size > 150 * 1024 * 1024) return setError("That video is over 150 MB — export a smaller version first.");
+      videoDuration(vid).then(async (secs) => {
         if (secs != null && secs > 30.5) { setError(`Videos are limited to 30 seconds — yours is ${Math.round(secs)}s. Trim it and try again.`); return; }
+        let out = vid;
+        if (vid.size > 25 * 1024 * 1024) {
+          setError(null);
+          setCompressing({ cur: 0, dur: secs || 0 });
+          const small = await compressVideo(vid, (cur, dur) => setCompressing({ cur, dur }));
+          setCompressing(null);
+          if (!small) { setError("This phone couldn't compress the video — trim it under 25 MB and try again."); return; }
+          if (small.size > 25 * 1024 * 1024) { setError("Even compressed it stays over 25 MB — pick a shorter clip."); return; }
+          out = small;
+        }
         setError(null);
         const r = new FileReader();
         r.onload = () => setMedia({ kind: "video", dataUri: r.result });
-        r.readAsDataURL(vid);
+        r.readAsDataURL(out);
       });
       return;
     }
@@ -1757,6 +1818,14 @@ function Composer({ talent, onAdd }) {
         </div>
       )}
 
+      {compressing && (
+        <div className="flex items-center gap-2.5 rounded-xl px-3.5 py-2.5 mt-2 fade" style={{ background: C.pineSoft }}>
+          <Loader2 size={15} color={C.pine} className="animate-spin shrink-0" />
+          <span className="text-[13px] font-medium" style={{ color: C.pine }}>
+            Compressing video… {Math.floor(compressing.cur)}s / {Math.round(compressing.dur)}s — big files shrink before upload.
+          </span>
+        </div>
+      )}
       {error && <p className="text-[12.5px] mt-2" style={{ color: C.maroon }}>{error}</p>}
 
       {!media && (
@@ -6002,6 +6071,7 @@ function AddStory({ onClose, onAdd }) {
   const [caption, setCaption] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
+  const [compressing, setCompressing] = useState(null);
   const inputRef = useRef();
 
   const pick = (e) => {
@@ -6009,7 +6079,7 @@ function AddStory({ onClose, onAdd }) {
     if (!f) return;
     const isVideo = f.type.startsWith("video/");
     if (!isVideo && !f.type.startsWith("image/")) return setErr("Choose a photo or a video.");
-    if (isVideo && f.size > 30 * 1024 * 1024) return setErr("Video is over 30 MB — keep stories short.");
+    if (isVideo && f.size > 150 * 1024 * 1024) return setErr("Video is over 150 MB — export a smaller version first.");
     if (!isVideo && f.size > 8 * 1024 * 1024) return setErr("Photo is over 8 MB.");
     const finish = () => {
       setErr(null);
@@ -6018,9 +6088,22 @@ function AddStory({ onClose, onAdd }) {
       r.readAsDataURL(f);
     };
     if (isVideo) {
-      videoDuration(f).then((secs) => {
+      videoDuration(f).then(async (secs) => {
         if (secs != null && secs > 15.5) { setErr(`Stories play for 15 seconds — this clip is ${Math.round(secs)}s. Trim it first.`); return; }
-        finish();
+        let out = f;
+        if (f.size > 25 * 1024 * 1024) {
+          setErr(null);
+          setCompressing({ cur: 0, dur: secs || 0 });
+          const small = await compressVideo(f, (cur, dur) => setCompressing({ cur, dur }));
+          setCompressing(null);
+          if (!small) { setErr("This phone couldn't compress the video — trim it under 25 MB."); return; }
+          if (small.size > 25 * 1024 * 1024) { setErr("Even compressed it stays over 25 MB — pick a shorter clip."); return; }
+          out = small;
+        }
+        setErr(null);
+        const r = new FileReader();
+        r.onload = () => setMedia({ kind: "video", dataUri: r.result });
+        r.readAsDataURL(out);
       });
     } else {
       finish();
@@ -6062,6 +6145,16 @@ function AddStory({ onClose, onAdd }) {
         <input value={caption} onChange={(e) => setCaption(e.target.value)} maxLength={120} placeholder="Add a caption (optional)"
           className="w-full h-11 px-3.5 rounded-xl text-[14px] mb-3" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
 
+        {compressing && (
+          <div className="mb-2 rounded-xl px-3 py-2.5" style={{ background: C.pineSoft }}>
+            <div className="text-[12.5px] font-medium" style={{ color: C.pine }}>
+              Optimising video{compressing.dur ? ` · ${Math.min(100, Math.round((compressing.cur / compressing.dur) * 100))}%` : "…"}
+            </div>
+            <div className="h-1.5 rounded-full mt-1.5 overflow-hidden" style={{ background: "rgba(31,107,69,.18)" }}>
+              <div className="h-full rounded-full" style={{ width: `${compressing.dur ? Math.min(100, (compressing.cur / compressing.dur) * 100) : 8}%`, background: C.pine, transition: "width .3s" }} />
+            </div>
+          </div>
+        )}
         {err && <p className="text-[13px] mb-2" style={{ color: C.maroon }}>{err}</p>}
 
         <button onClick={post} disabled={!media || busy} className="tap w-full h-12 rounded-xl text-[15px] font-semibold inline-flex items-center justify-center gap-2"
@@ -6567,7 +6660,7 @@ function MediaCarousel({ media, rounded }) {
   if (media.kind === "video") {
     return (
       <div className="w-full" style={{ background: "#0c0e0c", borderRadius: rounded ? 12 : 0, overflow: "hidden" }}>
-        <video src={media.dataUri} controls playsInline className="w-full block" style={{ maxHeight: "62dvh" }} />
+        <video src={media.dataUri} controls playsInline preload="metadata" className="w-full block" style={{ maxHeight: "62dvh" }} />
       </div>
     );
   }
