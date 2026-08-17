@@ -1210,6 +1210,7 @@ function Shell({ user, posts, jobs, trips, listings, actions, engagement, dm, di
 
   return (
     <>
+      <PortalBar user={user} />
       <TopBar user={user} onLogout={onLogout} alerts={alertItems.length} onOpenAlerts={() => setAlertsOpen(true)}
         onSearch={(term) => { setOverlay(null); setTab(["operator", "business"].includes(user.kind) ? "discover" : "post"); setSearchTerm(term); }} />
 
@@ -1280,12 +1281,25 @@ function Shell({ user, posts, jobs, trips, listings, actions, engagement, dm, di
   );
 }
 
+function PortalBar({ user }) {
+  const names = { guide: "Guide Portal", driver: "Driver Portal", operator: "Operator Portal", business: "Business Portal", admin: "Admin Portal" };
+  const h = new Date().getHours();
+  const greet = h < 12 ? "Good morning" : h < 17 ? "Good afternoon" : "Good evening";
+  const first = String(user.name || "").split(" ")[0] || "there";
+  return (
+    <div className="shrink-0 flex items-center justify-between px-3.5" style={{ height: "calc(32px + var(--sa-top))", paddingTop: "var(--sa-top)", background: `linear-gradient(90deg, ${C.pine} 0%, #2E5741 100%)` }}>
+      <span className="text-[10px] font-bold tracking-[.16em] uppercase" style={{ color: C.goldSoft }}>{names[user.kind] || "Portal"}</span>
+      <span className="text-[11.5px] font-medium" style={{ color: "rgba(255,255,255,.92)" }}>{greet}, {first}</span>
+    </div>
+  );
+}
+
 function TopBar({ user, onLogout, onSearch, alerts, onOpenAlerts }) {
   const [q, setQ] = useState("");
   const submit = () => { const t = q.trim(); if (t && onSearch) onSearch(t); };
 
   return (
-    <div className="shrink-0 flex items-center gap-2 px-2.5" style={{ height: "calc(56px + var(--sa-top))", paddingTop: "var(--sa-top)", background: C.bg, borderBottom: `1px solid ${C.lineSoft}` }}>
+    <div className="shrink-0 flex items-center gap-2 px-2.5" style={{ height: 56, background: C.bg, borderBottom: `1px solid ${C.lineSoft}` }}>
       <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0" style={{ background: C.pine }}>
         <Compass size={16} color={C.goldSoft} />
       </div>
@@ -1457,7 +1471,7 @@ function PostTab({ user, posts, onAdd, eng, onOpenProfile }) {
                   {mine && p.status !== "approved" && <StatusBadge status={p.status} reason={p.reason} />}
                 </div>
                 {p.text && <p className="text-[15px] leading-relaxed mt-3" style={{ color: C.ink }}>{p.text}</p>}
-                {p.location && p.media && p.media.kind === "photo" && !(p.media.slides && p.media.slides.length > 1) ? (
+                {p.location && !p.location.outside && p.media && p.media.kind === "photo" && !(p.media.slides && p.media.slides.length > 1) ? (
                   <div className="mt-3"><MapCinema location={p.location} photo={p.media.dataUri} /></div>
                 ) : (<>
                   <PostMedia media={p.media} />
@@ -1678,9 +1692,31 @@ function Composer({ talent, onAdd }) {
               <BhutanMap value={location} onPick={(loc) => setLocation({ ...loc, source: "map" })} />
             </>
           )}
+          <button onClick={() => {
+            if (!navigator.geolocation) { setError("This phone doesn't share location."); return; }
+            navigator.geolocation.getCurrentPosition(
+              (pos) => {
+                const { latitude: glat, longitude: glng, altitude, accuracy } = pos.coords;
+                if (!isValidLatLng(glat, glng)) { setError("Couldn't read a valid position — try again outdoors."); return; }
+                const inBT = insideBhutan(glat, glng);
+                setError(null); setManual(false);
+                setLocation({
+                  lat: +glat.toFixed(6), lng: +glng.toFixed(6),
+                  place: nearestPlace(glat, glng), source: "gps", outside: !inBT,
+                  altitude: altitude != null ? Math.round(altitude) : null,
+                });
+                flash(`Exact position captured · ±${Math.round(accuracy || 0)}m`);
+              },
+              () => setError("Location was blocked — allow it in your browser settings to use exact GPS."),
+              { enableHighAccuracy: true, timeout: 12000, maximumAge: 0 }
+            );
+          }} className="tap w-full h-11 rounded-xl text-[13.5px] font-semibold inline-flex items-center justify-center gap-2 mt-2"
+            style={{ background: C.pineSoft, color: C.pine }}>
+            <NavIcon size={15} /> Use my exact location (GPS)
+          </button>
           {location && location.description && <p className="text-[12.5px] leading-snug mt-2" style={{ color: C.ink }}>{location.description}</p>}
           <div className="flex items-center justify-between mt-2">
-            <span className="text-[12.5px]" style={{ color: C.muted }}>{location ? `${location.lat}, ${location.lng}${location.source === "map" ? " · approx." : ""}` : "No pin yet"}</span>
+            <span className="text-[12.5px]" style={{ color: C.muted }}>{location ? `${location.lat}, ${location.lng}${location.source === "map" ? " · approx." : location.source === "gps" ? " · exact GPS" : ""}` : "No pin yet"}</span>
             <button onClick={() => setPicking(false)} className="tap text-[13px] font-semibold rounded-full px-3 py-1.5" style={{ background: C.pine, color: "#fff" }}>Done</button>
           </div>
         </div>
@@ -1911,7 +1947,7 @@ function Feed({ posts, eng, admin, onDelete, onOpenProfile, following }) {
                   {admin && <DeletePost onConfirm={() => onDelete(p.id)} />}
                 </div>
                 {p.text && <p className="text-[15px] leading-relaxed mt-3" style={{ color: C.ink }}>{p.text}</p>}
-                {p.location && p.media && p.media.kind === "photo" && !(p.media.slides && p.media.slides.length > 1) ? (
+                {p.location && !p.location.outside && p.media && p.media.kind === "photo" && !(p.media.slides && p.media.slides.length > 1) ? (
                   <div className="mt-3"><MapCinema location={p.location} photo={p.media.dataUri} /></div>
                 ) : (<>
                   <PostMedia media={p.media} />
@@ -3207,13 +3243,23 @@ function compassName(deg) {
 
 function PostLocation({ location, showMap }) {
   if (!location) return null;
+  const outside = location.outside || !insideBhutan(location.lat, location.lng);
+  const valid = isValidLatLng(location.lat, location.lng);
+  const openMaps = () => window.open(`https://www.google.com/maps?q=${location.lat},${location.lng}`, "_blank", "noopener");
   return (
     <div className="mt-2.5">
-      <span className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[12.5px] font-medium" style={{ background: C.goldSoft, color: "#7a5a1e" }}>
-        <MapPin size={13} color={C.gold} /> {placeLabel(location)}
-      </span>
+      {outside && valid ? (
+        <button onClick={openMaps} className="tap inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[12.5px] font-medium"
+          style={{ background: C.goldSoft, color: "#7a5a1e" }}>
+          <MapPin size={13} color={C.gold} /> {Number(location.lat).toFixed(4)}°, {Number(location.lng).toFixed(4)}° · Google Maps <ExternalLink size={11} />
+        </button>
+      ) : (
+        <span className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[12.5px] font-medium" style={{ background: C.goldSoft, color: "#7a5a1e" }}>
+          <MapPin size={13} color={C.gold} /> {placeLabel(location)}
+        </span>
+      )}
       {location.description && <p className="text-[12.5px] leading-snug mt-1.5" style={{ color: C.muted }}>{location.description}</p>}
-      {showMap && <div className="mt-2.5"><BhutanMap readOnly value={location} showMeta /></div>}
+      {showMap && !outside && <div className="mt-2.5"><BhutanMap readOnly value={location} showMeta /></div>}
     </div>
   );
 }
