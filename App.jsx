@@ -2128,6 +2128,15 @@ function TalentProfile({ talent, posts, canRequest, viewer, self, contactOnly, e
   // Contact details are an operator feature. Guides and drivers message instead.
   const canSeeContact = Boolean(self || canRequest || contactOnly);
   const gcp = t.role === "guide" && t.guideClass ? GUIDE_CLASSES[t.guideClass] : null;
+  const [opEmail, setOpEmail] = useState(null);
+  useEffect(() => {
+    let on = true;
+    setOpEmail(null);
+    if (!CLOUD || self || !["operator", "admin"].includes(viewer?.kind)) return;
+    supabase.from("profile_emails").select("email").eq("profile_id", t.id).maybeSingle()
+      .then(({ data }) => { if (on) setOpEmail(data?.email || null); });
+    return () => { on = false; };
+  }, [t.id, viewer?.kind, self]);
   const myStories = (eng?.stories || []).filter((st) => st.authorId === t.id);
   const [viewStories, setViewStories] = useState(false);
   const [addStory, setAddStory] = useState(false);
@@ -2210,12 +2219,29 @@ function TalentProfile({ talent, posts, canRequest, viewer, self, contactOnly, e
                 <MessageCircle size={15} /> Message
               </button>
               {canSeeContact && t.phone && (
-                <a href={`tel:${dialNumber(t.phone)}`}
-                  className="tap w-11 h-10 rounded-xl flex items-center justify-center shrink-0"
-                  style={{ background: C.pineSoft, border: `1px solid ${C.line}` }} aria-label="Call">
-                  <PhoneCall size={16} color={C.pine} />
-                </a>
+                <>
+                  <a href={`tel:${dialNumber(t.phone)}`}
+                    className="tap w-11 h-10 rounded-xl flex items-center justify-center shrink-0"
+                    style={{ background: C.pineSoft, border: `1px solid ${C.line}` }} aria-label="Call">
+                    <PhoneCall size={16} color={C.pine} />
+                  </a>
+                  <a href={`https://wa.me/${dialNumber(t.phone).replace("+", "")}`} target="_blank" rel="noreferrer"
+                    className="tap w-11 h-10 rounded-xl flex items-center justify-center shrink-0"
+                    style={{ background: "rgba(37,211,102,.13)", border: "1px solid rgba(37,211,102,.45)" }} aria-label="WhatsApp">
+                    <MessageCircle size={16} color="#1FA855" />
+                  </a>
+                </>
               )}
+            </div>
+          )}
+          {!self && canSeeContact && t.phone && (
+            <div className="mt-2.5 text-[12.5px]" style={{ color: C.muted }}>
+              {prettyNumber(t.phone)}{opEmail ? ` · ${opEmail}` : ""}
+            </div>
+          )}
+          {!self && viewer?.kind === "business" && (
+            <div className="mt-2.5 text-[12px]" style={{ color: C.muted }}>
+              Email: ••••••@•••••• — full contact is visible to tour operators only.
             </div>
           )}
         </div>
@@ -2299,75 +2325,12 @@ function TalentProfile({ talent, posts, canRequest, viewer, self, contactOnly, e
           galleryCount={gallery.length}
         />
 
-        {canSeeContact && (
-          <div className="mt-6"><SectionLabel trailing={self ? "" : "Operators only"}>Contact</SectionLabel>
-            <div className="rounded-2xl overflow-hidden" style={{ background: C.card, border: `1px solid ${C.line}` }}>
-              {t.phone && (
-                <>
-                  <div className="px-4 pt-3.5 pb-2 flex items-center gap-3">
-                    <div className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0" style={{ background: C.goldSoft }}><Phone size={17} color={C.gold} /></div>
-                    <div className="flex-1 min-w-0">
-                      <div className="text-[15px] font-semibold tracking-[0.01em]" style={{ color: C.ink }}>{prettyNumber(t.phone)}</div>
-                      <div className="text-[11.5px]" style={{ color: C.muted }}>Bhutan · +975</div>
-                    </div>
-                  </div>
-                  <div className="flex gap-2 px-4 pb-3.5">
-                    <a href={`tel:${dialNumber(t.phone)}`} className="tap flex-1 h-11 rounded-xl inline-flex items-center justify-center gap-2 text-[14px] font-semibold"
-                      style={{ background: C.pine, color: "#fff" }}>
-                      <PhoneCall size={16} /> Call
-                    </a>
-                    <a href={`https://wa.me/${dialNumber(t.phone).replace("+", "")}`} target="_blank" rel="noreferrer"
-                      className="tap flex-1 h-11 rounded-xl inline-flex items-center justify-center gap-2 text-[14px] font-semibold"
-                      style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }}>
-                      <MessageCircle size={16} /> WhatsApp
-                    </a>
-                  </div>
-                </>
-              )}
-              {false && (
-                <a className="flex items-center gap-3 px-4 py-3.5" style={{ borderTop: t.phone ? `1px solid ${C.lineSoft}` : "none" }}>
-                  <div className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0" style={{ background: C.goldSoft }}><Mail size={17} color={C.gold} /></div>
-                  <span className="text-[14px] font-medium truncate" style={{ color: C.ink }}>{t.email}</span>
-                </a>
-              )}
-              {t.phone && (
-                <div className="px-4 py-2.5 text-[11.5px]" style={{ borderTop: `1px solid ${C.lineSoft}`, color: C.muted }}>
-                  Email addresses stay private with the platform — ask in Messages if you need one.
-                </div>
-              )}
-              {!t.phone && (
-                <div className="px-4 py-4 text-[13px]" style={{ color: C.muted }}>No contact details added yet.</div>
-              )}
-            </div>
-          </div>
-        )}
       </div>
 
       {canRequest && !contactOnly && (
         <div className="px-5 mt-6 flex gap-3">
           <button onClick={() => onMessage && onMessage(t.id)} className="tap h-12 px-5 rounded-xl flex items-center justify-center gap-2 text-[14.5px] font-semibold" style={{ background: C.card, border: `1.5px solid ${C.pine}`, color: C.pine }}><MessageCircle size={18} /> Message</button>
           <button onClick={onRequest} className="tap flex-1 h-12 rounded-xl flex items-center justify-center gap-2 text-[15px] font-semibold" style={{ background: C.pine, color: "#fff", boxShadow: `0 6px 16px ${C.pine}33` }}><Briefcase size={18} /> Send job request</button>
-        </div>
-      )}
-      {!canSeeContact && (
-        <div className="px-5 mt-6">
-          <SectionLabel>Contact</SectionLabel>
-          <div className="rounded-2xl p-4 flex items-start gap-3" style={{ background: C.card, border: `1px dashed ${C.line}` }}>
-            <div className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0" style={{ background: C.goldSoft }}>
-              <Lock size={16} color={C.gold} />
-            </div>
-            <div className="flex-1">
-              <div className="text-[13.5px] font-semibold" style={{ color: C.ink }}>Contact details are for operators</div>
-              <p className="text-[12.5px] leading-snug mt-1" style={{ color: C.muted }}>
-                Phone numbers are visible only to tour operators. You can message {String(t.name || "them").split(" ")[0]} here instead.
-              </p>
-              <button onClick={() => onMessage && onMessage(t.id)}
-                className="tap mt-2.5 h-9 px-3.5 rounded-lg text-[13px] font-semibold inline-flex items-center gap-1.5"
-                style={{ background: C.pine, color: "#fff" }}>
-                <MessageCircle size={14} /> Send a message
-              </button>
-            </div>
-          </div>
         </div>
       )}
 
