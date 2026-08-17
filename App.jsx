@@ -1238,7 +1238,7 @@ function Shell({ user, posts, jobs, trips, listings, actions, engagement, dm, di
           <div key={tab} className="fade">
             {tab === "post" && <PostTab user={user} posts={posts} onAdd={actions.addPost} eng={eng} onOpenProfile={openProfile} />}
             {tab === "jobs" && <JobsHub user={user} jobs={jobs} listings={listings} actions={actions} />}
-            {tab === "trips" && <TripsTab user={user} trips={trips} actions={actions} />}
+            {tab === "trips" && <TripsTab user={user} trips={trips} actions={actions} onMessage={(id) => { setTab("chats"); setDmWith(id); }} />}
             {tab === "chats" && <ChatsTab user={user} me={actorId} dm={dm} trips={trips} actions={actions} posts={posts} dirTick={dirTick} onOpenPost={setSharedPost} openWith={dmWith} onOpened={() => setDmWith(null)} onOpenProfile={openProfile} />}
             {tab === "profile" && <TalentProfile talent={talentById(user.talentId)} posts={posts} eng={eng} self onSetAvailability={actions.setAvailability} onOpenProfile={openProfile} onBack={null} />}
             {tab === "discover" && <Discover onOpen={openProfile} initialQuery={searchTerm} dirTick={dirTick} viewerKind={user.kind} />}
@@ -2278,24 +2278,25 @@ function TalentProfile({ talent, posts, canRequest, viewer, self, contactOnly, e
 
               {t.pitch && <div className="mt-5 pl-4" style={{ borderLeft: `3px solid ${C.gold}` }}><p className="text-[15px] leading-relaxed" style={{ color: C.ink }}>{t.pitch}</p></div>}
 
+              {t.role === "guide" && (self || ["operator", "admin"].includes(viewer?.kind)) && (
+                <div className="mt-5">
+                  <button onClick={() => setCredsOpen(true)} className="tap w-full rounded-2xl p-4 flex items-center gap-3 text-left"
+                    style={{ background: C.card, border: `1px solid ${C.line}`, borderLeft: `4px solid ${t.guideClass && GUIDE_CLASSES[t.guideClass] ? GUIDE_CLASSES[t.guideClass].color : C.gold}` }}>
+                    <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0"
+                      style={{ background: t.guideClass && GUIDE_CLASSES[t.guideClass] ? `${GUIDE_CLASSES[t.guideClass].color}18` : C.goldSoft }}>
+                      <FileCheck2 size={18} color={t.guideClass && GUIDE_CLASSES[t.guideClass] ? GUIDE_CLASSES[t.guideClass].color : C.gold} />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-[14.5px] font-semibold" style={{ color: C.ink }}>Credentials & Licence</div>
+                      <div className="text-[12px]" style={{ color: C.muted }}>{t.guideClass && GUIDE_CLASSES[t.guideClass] ? GUIDE_CLASSES[t.guideClass].label + " · " : ""}DOT licence & certificates</div>
+                    </div>
+                    <ChevronLeft size={17} color={C.muted} style={{ transform: "rotate(180deg)" }} />
+                  </button>
+                </div>
+              )}
+              {self && t.role === "guide" && <GuideLicenseCard talent={t} />}
+
               {t.tags && t.tags.length > 0 && (
-                {t.role === "guide" && (self || ["operator", "admin"].includes(viewer?.kind)) && (
-                  <div className="px-5 mt-5">
-                    <button onClick={() => setCredsOpen(true)} className="tap w-full rounded-2xl p-4 flex items-center gap-3 text-left"
-                      style={{ background: C.card, border: `1px solid ${C.line}`, borderLeft: `4px solid ${t.guideClass && GUIDE_CLASSES[t.guideClass] ? GUIDE_CLASSES[t.guideClass].color : C.gold}` }}>
-                      <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0"
-                        style={{ background: t.guideClass && GUIDE_CLASSES[t.guideClass] ? `${GUIDE_CLASSES[t.guideClass].color}18` : C.goldSoft }}>
-                        <FileCheck2 size={18} color={t.guideClass && GUIDE_CLASSES[t.guideClass] ? GUIDE_CLASSES[t.guideClass].color : C.gold} />
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="text-[14.5px] font-semibold" style={{ color: C.ink }}>Credentials & Licence</div>
-                        <div className="text-[12px]" style={{ color: C.muted }}>{t.guideClass && GUIDE_CLASSES[t.guideClass] ? GUIDE_CLASSES[t.guideClass].label + " · " : ""}DOT licence & certificates</div>
-                      </div>
-                      <ChevronLeft size={17} color={C.muted} style={{ transform: "rotate(180deg)" }} />
-                    </button>
-                  </div>
-                )}
-                {self && t.role === "guide" && <GuideLicenseCard talent={t} />}
                 <div className="mt-6"><SectionLabel>{t.role === "guide" ? "Specialities" : t.role === "business" ? "What we offer" : "Drives"}</SectionLabel>
                   <div className="flex flex-wrap gap-2">{(t.tags || []).map((x) => <span key={x} className="rounded-full px-3 py-1.5 text-[13.5px] font-medium" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }}>{x}</span>)}</div>
                   {t.vehicle && <div className="mt-2.5 text-[13.5px]" style={{ color: C.muted }}><Car size={14} color={C.gold} className="inline mr-1" /> {t.vehicle}</div>}
@@ -2347,8 +2348,8 @@ function TalentProfile({ talent, posts, canRequest, viewer, self, contactOnly, e
       {addStory && <AddStory onClose={() => setAddStory(false)} onAdd={eng?.addStory} />}
       {askOperator && <OperatorInvite user={{ name: t.name, talentId: t.id, id: t.id, kind: t.role }} trip={null} onClose={() => setAskOperator(false)} />}
 
+      {credsOpen && <CredentialsPage talent={t} self={self} onClose={() => setCredsOpen(false)} />}
       {listMode && (
-        {credsOpen && <CredentialsPage talent={t} self={self} onClose={() => setCredsOpen(false)} />}
         <FollowListSheet mode={listMode} talent={t} eng={eng} onClose={() => setListMode(null)}
           onOpenProfile={(id) => { setListMode(null); onOpenProfile && onOpenProfile(id); }} />
       )}
@@ -2434,13 +2435,13 @@ function CrewAvatars({ members, size = 26 }) {
   );
 }
 
-function TripsTab({ user, trips, actions }) {
+function TripsTab({ user, trips, actions, onMessage }) {
   const [openId, setOpenId] = useState(null);
   const meId = user.talentId || user.id;
   const mineId = user.talentId || user.id;
   const mine = trips.filter((tr) => (tr.members || []).some((m) => m.id === mineId) || (tr.operatorId && tr.operatorId === mineId));
   const open = mine.find((tr) => tr.id === openId);
-  if (open) return <TripHub user={user} meId={meId} trip={open} actions={actions} onBack={() => setOpenId(null)} />;
+  if (open) return <TripHub user={user} meId={meId} trip={open} actions={actions} onMessage={onMessage} onBack={() => setOpenId(null)} />;
   return (
     <div className="px-5 py-4">
       <SectionLabel trailing={`${mine.length}`}>Trips</SectionLabel>
@@ -2470,7 +2471,7 @@ function TripCard({ trip, onOpen }) {
   );
 }
 
-function TripHub({ user, meId, trip, actions, onBack }) {
+function TripHub({ user, meId, trip, actions, onMessage, onBack }) {
   const state = tripStateNow(trip);
   const [inviting, setInviting] = useState(false);
   const [askingOperator, setAskingOperator] = useState(false);
@@ -2531,14 +2532,44 @@ function TripHub({ user, meId, trip, actions, onBack }) {
 
         <SectionLabel>Crew</SectionLabel>
         <div className="rounded-2xl divide-y mb-5" style={{ background: C.card, border: `1px solid ${C.line}`, borderColor: C.line }}>
-          {(trip.members || []).map((m) => (
-            <div key={m.id} className="flex items-center gap-3 px-4 py-3">
-              <Avatar initials={m.initials} size={36} />
-              <div className="flex-1"><div className="text-[14px] font-semibold" style={{ color: C.ink }}>{m.name}</div>
-                <div className="text-[12px] capitalize" style={{ color: C.muted }}>{String(m.roleInTrip || "crew").replace("_", " ")}</div></div>
-              {m.id === meId && <span className="text-[11px] font-semibold rounded-full px-2 py-0.5" style={{ background: C.goldSoft, color: "#7a5a1e" }}>You</span>}
-            </div>
-          ))}
+          {(trip.members || []).map((m) => {
+            const mp = m.id === meId ? null : talentById(m.id)?.phone;
+            const dial = mp ? dialNumber(mp) : null;
+            return (
+              <div key={m.id} className="flex items-center gap-3 px-4 py-3">
+                <Avatar initials={m.initials} size={36} />
+                <div className="flex-1 min-w-0">
+                  <div className="text-[14px] font-semibold truncate" style={{ color: C.ink }}>{m.name}</div>
+                  <div className="text-[12px] capitalize" style={{ color: C.muted }}>{String(m.roleInTrip || "crew").replace("_", " ")}{dial ? ` · ${dial}` : ""}</div>
+                </div>
+                {m.id === meId ? (
+                  <span className="text-[11px] font-semibold rounded-full px-2 py-0.5" style={{ background: C.goldSoft, color: "#7a5a1e" }}>You</span>
+                ) : (
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    {onMessage && (
+                      <button onClick={() => onMessage(m.id)} className="tap w-9 h-9 rounded-xl flex items-center justify-center"
+                        style={{ background: C.bg, border: `1px solid ${C.line}` }} aria-label={`Message ${m.name}`}>
+                        <MessageCircle size={15} color={C.ink} />
+                      </button>
+                    )}
+                    {dial && (
+                      <a href={`tel:${dial}`} className="tap w-9 h-9 rounded-xl flex items-center justify-center"
+                        style={{ background: C.pineSoft, border: `1px solid ${C.line}` }} aria-label={`Call ${m.name}`}>
+                        <PhoneCall size={15} color={C.pine} />
+                      </a>
+                    )}
+                    {dial && (
+                      <a href={`https://wa.me/${dial.replace("+", "")}`} target="_blank" rel="noreferrer"
+                        className="tap w-9 h-9 rounded-xl flex items-center justify-center"
+                        style={{ background: "rgba(37,211,102,.13)", border: "1px solid rgba(37,211,102,.45)" }} aria-label={`WhatsApp ${m.name}`}>
+                        <MessageCircle size={15} color="#1FA855" />
+                      </a>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
 
         {trip.itinerary.length > 0 && (
@@ -5514,7 +5545,7 @@ function GuideLicenseCard({ talent }) {
   };
 
   return (
-    <div className="px-5 mt-6">
+    <div className="mt-6">
       <SectionLabel>My licence</SectionLabel>
       <div className="rounded-2xl p-4" style={{ background: C.card, border: `1.5px solid ${current ? current.color : expired ? C.maroon : C.line}` }}>
         <div className="flex items-center justify-between">
