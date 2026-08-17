@@ -2248,7 +2248,7 @@ function TalentProfile({ talent, posts, canRequest, viewer, self, contactOnly, e
       </div>
 
       <div className="px-5">
-        {self && !["operator", "business"].includes(t.role) && <AvailabilityEditor talent={t} onSet={onSetAvailability} />}
+        {self && !["operator", "business"].includes(t.role) && <TalentAvailability talent={t} onSet={onSetAvailability} />}
 
         <ProfileTabs
           cv={
@@ -2275,6 +2275,7 @@ function TalentProfile({ talent, posts, canRequest, viewer, self, contactOnly, e
               </div>
 
               {t.role === "business" && <BusinessAvailability business={t} viewer={viewer} />}
+              {["guide", "driver"].includes(t.role) && !self && ["operator", "admin"].includes(viewer?.kind) && <TalentAvailability talent={t} viewerOnly />}
 
               {t.pitch && <div className="mt-5 pl-4" style={{ borderLeft: `3px solid ${C.gold}` }}><p className="text-[15px] leading-relaxed" style={{ color: C.ink }}>{t.pitch}</p></div>}
 
@@ -5664,12 +5665,56 @@ function AvailabilityChip({ talent }) {
   );
 }
 
-function AvailabilityEditor({ talent, onSet }) {
+function TalentAvailability({ talent, onSet, viewerOnly = false }) {
+  const now = new Date();
+  const [open, setOpen] = useState(viewerOnly);
+  const [ym, setYm] = useState([now.getFullYear(), now.getMonth()]);
+  const [blocks, setBlocks] = useState(null);
+  const [bs, setBs] = useState("");
+  const [be, setBe] = useState("");
+  const [bl, setBl] = useState("");
+  const [addBusy, setAddBusy] = useState(false);
   const [status, setStatus] = useState(talent?.availability || "open");
   const [from, setFrom] = useState(talent?.availableFrom || "");
   const [note, setNote] = useState(talent?.availableNote || "");
   const [saved, setSaved] = useState(false);
   const [busy, setBusy] = useState(false);
+
+  const load = async () => {
+    if (!CLOUD) { setBlocks([]); return; }
+    const { data } = await supabase.from("talent_blocks").select("*").eq("talent_id", talent.id).order("start_date");
+    setBlocks(data || []);
+  };
+  useEffect(() => { if (open) load(); }, [open, talent.id]);
+
+  const marks = useMemo(() => {
+    const m = {};
+    (blocks || []).forEach((b) => eachBookedDay(b.start_date, b.end_date).forEach((d) => { m[d] = "booked"; }));
+    return m;
+  }, [blocks]);
+
+  const [yy, mmn] = ym;
+  const dim = new Date(yy, mmn + 1, 0).getDate();
+  let blockedInMonth = 0;
+  for (let d = 1; d <= dim; d++) {
+    const iso = `${yy}-${String(mmn + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+    if (marks[iso]) blockedInMonth++;
+  }
+  const openDays = dim - blockedInMonth;
+  const monthName = new Date(yy, mmn, 1).toLocaleString("en", { month: "long" });
+  const totalBlocked = Object.keys(marks).length;
+  const cur = AVAIL[talent?.availability] || AVAIL.open;
+
+  const addBlock = async () => {
+    if (!bs || !be || be < bs) return;
+    setAddBusy(true);
+    const { error } = await supabase.from("talent_blocks").insert({ talent_id: talent.id, start_date: bs, end_date: be, label: bl.trim() || null });
+    setAddBusy(false);
+    if (error) { console.error("block add failed:", error.message); return; }
+    setBs(""); setBe(""); setBl("");
+    load();
+  };
+  const delBlock = async (id) => { await supabase.from("talent_blocks").delete().eq("id", id); load(); };
 
   const save = async () => {
     if (!onSet) return;
@@ -5679,48 +5724,106 @@ function AvailabilityEditor({ talent, onSet }) {
     setSaved(true);
     setTimeout(() => setSaved(false), 2200);
   };
-
   const dirty = status !== (talent?.availability || "open") || from !== (talent?.availableFrom || "") || note !== (talent?.availableNote || "");
 
   return (
-    <div className="rounded-2xl p-4 mt-5" style={{ background: C.card, border: `1px solid ${C.line}` }}>
-      <div className="flex items-center gap-2 mb-1">
+    <div className="rounded-2xl mt-5 overflow-hidden" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+      <button onClick={() => setOpen((v) => !v)} className="tap w-full px-4 py-3 flex items-center gap-2.5">
         <CalendarDays size={16} color={C.gold} />
-        <span className="text-[14px] font-semibold" style={{ color: C.ink }}>Your availability</span>
-      </div>
-      <p className="text-[12.5px] mb-3" style={{ color: C.muted }}>Operators see this before they book you.</p>
+        <span className="text-[14px] font-semibold flex-1 text-left" style={{ color: C.ink }}>{viewerOnly ? "Availability calendar" : "Availability"}</span>
+        <span className="inline-flex items-center gap-1.5 text-[12px] font-medium" style={{ color: C.muted }}>
+          <span className="rounded-full" style={{ width: 8, height: 8, background: cur.dot }} />
+          {cur.label}{totalBlocked > 0 && !open ? ` · ${totalBlocked}d` : ""}
+        </span>
+        <ChevronLeft size={15} color={C.muted} style={{ transform: open ? "rotate(90deg)" : "rotate(-90deg)", transition: "transform .18s" }} />
+      </button>
 
-      <div className="space-y-2 mb-3">
-        {Object.entries(AVAIL).map(([k, v]) => (
-          <button key={k} onClick={() => setStatus(k)} className="tap w-full rounded-xl px-3.5 py-2.5 flex items-center gap-3"
-            style={{ background: status === k ? C.bg : C.card, border: `1px solid ${status === k ? C.pine : C.line}` }}>
-            <span className="rounded-full shrink-0" style={{ width: 9, height: 9, background: v.dot }} />
-            <span className="text-[14px] font-medium flex-1 text-left" style={{ color: C.ink }}>{v.label}</span>
-            {status === k && <Check size={16} color={C.pine} strokeWidth={2.6} />}
-          </button>
-        ))}
-      </div>
+      {open && (
+        <div className="px-4 pb-4 fade">
+          {!viewerOnly && (
+            <>
+              <div className="space-y-1.5 mb-2.5">
+                {Object.entries(AVAIL).map(([k, v]) => (
+                  <button key={k} onClick={() => setStatus(k)} className="tap w-full rounded-xl px-3 py-2 flex items-center gap-2.5"
+                    style={{ background: status === k ? C.bg : C.card, border: `1px solid ${status === k ? C.pine : C.line}` }}>
+                    <span className="rounded-full shrink-0" style={{ width: 8, height: 8, background: v.dot }} />
+                    <span className="text-[13px] font-medium flex-1 text-left" style={{ color: C.ink }}>{v.label}</span>
+                    {status === k && <Check size={14} color={C.pine} strokeWidth={2.6} />}
+                  </button>
+                ))}
+              </div>
+              {status === "busy" && (
+                <input type="date" value={from} onChange={(e) => setFrom(e.target.value)}
+                  className="w-full h-10 px-3 rounded-xl text-[13px] mb-2 fade" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
+              )}
+              <div className="flex gap-2 mb-3">
+                <input value={note} onChange={(e) => setNote(e.target.value)} maxLength={80} placeholder="Note — e.g. weekends only"
+                  className="flex-1 h-10 px-3 rounded-xl text-[13px]" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
+                <button onClick={save} disabled={busy || !dirty} className="tap h-10 px-4 rounded-xl text-[13px] font-semibold shrink-0"
+                  style={{ background: dirty ? C.pine : "#C7CEC7", color: "#fff" }}>{busy ? "…" : saved ? "Saved ✓" : "Save"}</button>
+              </div>
+              <div className="pt-3 mb-2.5" style={{ borderTop: `1px solid ${C.lineSoft}` }}>
+                <div className="text-[13px] font-semibold" style={{ color: C.ink }}>Committed trips</div>
+                <p className="text-[11.5px] mt-0.5 leading-snug" style={{ color: C.muted }}>
+                  Enter this year's confirmed trips — those days block out. Every open day is your opportunity for new work.
+                </p>
+              </div>
+            </>
+          )}
+          {viewerOnly && (
+            <p className="text-[11.5px] mb-2.5 leading-snug" style={{ color: C.muted }}>
+              Green days are committed trips. Open days are free — send a request for the dates you need.
+            </p>
+          )}
 
-      {status === "busy" && (
-        <div className="mb-3 fade">
-          <div className="text-[12.5px] font-medium mb-1.5" style={{ color: C.ink }}>Free again from</div>
-          <input type="date" value={from} onChange={(e) => setFrom(e.target.value)}
-            className="w-full h-11 px-3.5 rounded-xl text-[14px]" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
+          {blocks === null ? (
+            <div className="flex items-center justify-center gap-2 py-6 text-[13px]" style={{ color: C.muted }}>
+              <Loader2 size={15} className="animate-spin" /> Loading calendar…
+            </div>
+          ) : (
+            <>
+              <MonthCal ym={ym} marks={marks}
+                onPrev={() => setYm(([y, m]) => { const d = new Date(y, m - 1, 1); return [d.getFullYear(), d.getMonth()]; })}
+                onNext={() => setYm(([y, m]) => { const d = new Date(y, m + 1, 1); return [d.getFullYear(), d.getMonth()]; })}
+                onDay={null} />
+              <div className="text-[12px] font-semibold mt-2" style={{ color: C.pine }}>
+                {monthName}: {openDays} open day{openDays === 1 ? "" : "s"} — {viewerOnly ? "available to request" : "your opportunities"}
+              </div>
+
+              {!viewerOnly && (
+                <>
+                  <div className="flex gap-2 mt-3">
+                    <input type="date" value={bs} onChange={(e) => setBs(e.target.value)}
+                      className="flex-1 min-w-0 h-10 px-2 rounded-xl text-[12.5px]" style={{ background: C.bg, border: `1px solid ${C.line}`, color: bs ? C.ink : C.muted }} />
+                    <input type="date" value={be} onChange={(e) => setBe(e.target.value)}
+                      className="flex-1 min-w-0 h-10 px-2 rounded-xl text-[12.5px]" style={{ background: C.bg, border: `1px solid ${be && be < bs ? C.maroon : C.line}`, color: be ? C.ink : C.muted }} />
+                  </div>
+                  <div className="flex gap-2 mt-2">
+                    <input value={bl} onChange={(e) => setBl(e.target.value)} maxLength={40} placeholder="Label — e.g. Bumthang group"
+                      className="flex-1 min-w-0 h-10 px-3 rounded-xl text-[13px]" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
+                    <button onClick={addBlock} disabled={addBusy || !bs || !be || be < bs}
+                      className="tap h-10 px-4 rounded-xl text-[13px] font-semibold shrink-0"
+                      style={{ background: bs && be && be >= bs ? C.pine : "#C7CEC7", color: "#fff" }}>{addBusy ? "…" : "Add"}</button>
+                  </div>
+                  {(blocks || []).map((b) => (
+                    <div key={b.id} className="flex items-center gap-2 mt-2 rounded-xl px-3 py-2" style={{ background: C.bg, border: `1px solid ${C.line}` }}>
+                      <span className="rounded-full shrink-0" style={{ width: 8, height: 8, background: C.pine }} />
+                      <div className="flex-1 min-w-0 text-[12.5px] truncate" style={{ color: C.ink }}>
+                        <span className="font-medium">{fmtRange(b.start_date, b.end_date)}</span>
+                        {b.label ? <span style={{ color: C.muted }}> · {b.label}</span> : null}
+                      </div>
+                      <button onClick={() => delBlock(b.id)} className="tap text-[13px] font-semibold shrink-0" style={{ color: C.maroon }}>✕</button>
+                    </div>
+                  ))}
+                </>
+              )}
+            </>
+          )}
         </div>
       )}
-
-      <input value={note} onChange={(e) => setNote(e.target.value)} maxLength={80} placeholder="Optional note — e.g. weekends only"
-        className="w-full h-11 px-3.5 rounded-xl text-[14px] mb-3" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
-
-      <button onClick={save} disabled={!dirty || busy} className="tap w-full h-11 rounded-xl text-[14px] font-semibold inline-flex items-center justify-center gap-2"
-        style={{ background: saved ? C.pineSoft : dirty ? C.pine : "#C7CEC7", color: saved ? C.pine : "#fff" }}>
-        {busy ? <Loader2 size={16} className="animate-spin" /> : saved ? <><Check size={16} /> Saved</> : "Save availability"}
-      </button>
     </div>
   );
 }
-
-/* ================================ Stories ================================ */
 function StoryViewer({ stories, author, canDelete, onDelete, onClose }) {
   const [i, setI] = useState(0);
   const [paused, setPaused] = useState(false);
