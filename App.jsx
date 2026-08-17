@@ -4856,14 +4856,42 @@ function TripChatView({ user, meId, trip, actions, onBack }) {
             <div className="text-[13px] mt-1" style={{ color: C.muted }}>{trip.meetingPoint}</div>
           </div>
           <div className="rounded-xl divide-y mb-3" style={{ background: C.card, border: `1px solid ${C.line}`, borderColor: C.line }}>
-            {(trip.members || []).map((m) => (
-              <div key={m.id} className="flex items-center gap-3 px-3.5 py-2.5">
-                <Avatar initials={m.initials} size={32} />
-                <div className="flex-1"><div className="text-[13.5px] font-semibold" style={{ color: C.ink }}>{m.name}</div>
-                  <div className="text-[11.5px] capitalize" style={{ color: C.muted }}>{String(m.roleInTrip || "crew").replace("_", " ")}</div></div>
-                {m.id === meId && <span className="text-[10.5px] font-semibold rounded-full px-2 py-0.5" style={{ background: C.goldSoft, color: "#7a5a1e" }}>You</span>}
-              </div>
-            ))}
+            {(trip.members || []).map((m) => {
+              const mp = m.id === meId ? null : talentById(m.id)?.phone;
+              const dial = mp ? dialNumber(mp) : null;
+              return (
+                <div key={m.id} className="flex items-center gap-3 px-3.5 py-2.5">
+                  <Avatar initials={m.initials} size={32} />
+                  <div className="flex-1 min-w-0">
+                    <div className="text-[13.5px] font-semibold truncate" style={{ color: C.ink }}>{m.name}</div>
+                    <div className="text-[11.5px] capitalize" style={{ color: C.muted }}>{String(m.roleInTrip || "crew").replace("_", " ")}{dial ? ` · ${dial}` : ""}</div>
+                  </div>
+                  {m.id === meId ? (
+                    <span className="text-[10.5px] font-semibold rounded-full px-2 py-0.5" style={{ background: C.goldSoft, color: "#7a5a1e" }}>You</span>
+                  ) : (
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <button onClick={() => { setTripId(null); setWithId(m.id); }} className="tap w-8 h-8 rounded-lg flex items-center justify-center"
+                        style={{ background: C.bg, border: `1px solid ${C.line}` }} aria-label={`Message ${m.name}`}>
+                        <MessageCircle size={14} color={C.ink} />
+                      </button>
+                      {dial && (
+                        <a href={`tel:${dial}`} className="tap w-8 h-8 rounded-lg flex items-center justify-center"
+                          style={{ background: C.pineSoft, border: `1px solid ${C.line}` }} aria-label={`Call ${m.name}`}>
+                          <PhoneCall size={14} color={C.pine} />
+                        </a>
+                      )}
+                      {dial && (
+                        <a href={`https://wa.me/${dial.replace("+", "")}`} target="_blank" rel="noreferrer"
+                          className="tap w-8 h-8 rounded-lg flex items-center justify-center"
+                          style={{ background: "rgba(37,211,102,.13)", border: "1px solid rgba(37,211,102,.45)" }} aria-label={`WhatsApp ${m.name}`}>
+                          <MessageCircle size={14} color="#1FA855" />
+                        </a>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
           {trip.itinerary.length > 0 && (
             <div className="space-y-2">
