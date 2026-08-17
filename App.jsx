@@ -1224,7 +1224,7 @@ function Shell({ user, posts, jobs, trips, listings, actions, engagement, dm, di
             <TalentProfile talent={talentById(overlay.talentId)} posts={posts} eng={eng}
               onOpenProfile={openProfile}
               onMessage={(id) => { setOverlay(null); setTab("chats"); setDmWith(id); }}
-              canRequest={user.kind === "operator" && ["guide", "driver"].includes(talentById(overlay.talentId)?.role)} viewer={user} self={user.talentId === overlay.talentId} contactOnly={user.kind === "admin"}
+              canRequest={user.kind === "operator" && ["guide", "driver"].includes(talentById(overlay.talentId)?.role)} viewer={user} self={user.talentId === overlay.talentId} contactOnly={["operator", "admin"].includes(user.kind)}
               onRequest={() => setOverlay({ type: "request", talentId: overlay.talentId })}
               onBack={() => setOverlay(null)} />
           ) : (
@@ -2253,13 +2253,18 @@ function TalentProfile({ talent, posts, canRequest, viewer, self, contactOnly, e
                   </div>
                 </>
               )}
-              {t.email && (
-                <a href={`mailto:${t.email}`} className="flex items-center gap-3 px-4 py-3.5" style={{ borderTop: t.phone ? `1px solid ${C.lineSoft}` : "none" }}>
+              {false && (
+                <a className="flex items-center gap-3 px-4 py-3.5" style={{ borderTop: t.phone ? `1px solid ${C.lineSoft}` : "none" }}>
                   <div className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0" style={{ background: C.goldSoft }}><Mail size={17} color={C.gold} /></div>
                   <span className="text-[14px] font-medium truncate" style={{ color: C.ink }}>{t.email}</span>
                 </a>
               )}
-              {!t.phone && !t.email && (
+              {t.phone && (
+                <div className="px-4 py-2.5 text-[11.5px]" style={{ borderTop: `1px solid ${C.lineSoft}`, color: C.muted }}>
+                  Email addresses stay private with the platform — ask in Messages if you need one.
+                </div>
+              )}
+              {!t.phone && (
                 <div className="px-4 py-4 text-[13px]" style={{ color: C.muted }}>No contact details added yet.</div>
               )}
             </div>
@@ -2283,7 +2288,7 @@ function TalentProfile({ talent, posts, canRequest, viewer, self, contactOnly, e
             <div className="flex-1">
               <div className="text-[13.5px] font-semibold" style={{ color: C.ink }}>Contact details are for operators</div>
               <p className="text-[12.5px] leading-snug mt-1" style={{ color: C.muted }}>
-                Phone numbers are shown to tour operators booking crew. You can message {String(t.name || "them").split(" ")[0]} here instead.
+                Phone numbers are visible only to tour operators. You can message {String(t.name || "them").split(" ")[0]} here instead.
               </p>
               <button onClick={() => onMessage && onMessage(t.id)}
                 className="tap mt-2.5 h-9 px-3.5 rounded-lg text-[13px] font-semibold inline-flex items-center gap-1.5"
@@ -3660,7 +3665,10 @@ function AdminUsers({ onChanged, currentAdminId }) {
     if (!CLOUD) { setRows([]); return; }
     const { data, error } = await supabase.from("profiles").select("*").order("created_at", { ascending: false });
     if (error) { flash("Couldn't load users."); setRows([]); return; }
-    setRows(data || []);
+    const { data: vault } = await supabase.from("profile_emails").select("profile_id, email");
+    const emailById = {};
+    (vault || []).forEach((v) => { emailById[v.profile_id] = v.email; });
+    setRows((data || []).map((r) => ({ ...r, email: r.email || emailById[r.id] || null })));
   };
   useEffect(() => { load(); }, []);
 
@@ -4255,14 +4263,19 @@ function Onboard({ mode: initialMode, session, onBack, onDone }) {
       setErr("Your session expired. Tap Resend code and verify again.");
       return;
     }
+    const vaultEmail = (email || session?.user?.email || "").trim() || null;
     const { error } = await supabase.from("profiles").upsert({
-      id: effUid, email: (email || session?.user?.email || "").trim() || null, role,
+      id: effUid, email: null, role,
       full_name: name.trim(), phone: phone.trim() || null, base: base.trim() || null,
       company_name: ["operator", "business"].includes(role) ? (company.trim() || name.trim()) : null,
       years, pitch: pitch.trim() || null, languages: langs, tags,
       vehicle: role === "driver" ? vehicle : null,
       license_path: licensePath || null, license_status: licensePath ? "submitted" : "none",
     });
+    if (!error && vaultEmail) {
+      const { error: veErr } = await supabase.from("profile_emails").upsert({ profile_id: effUid, email: vaultEmail });
+      if (veErr) console.error("email vault save failed:", veErr.message);
+    }
     setBusy(false);
     if (error) {
       console.error("PROFILE SAVE FAILED", error, "uid:", effUid, "session uid:", sess.session.user.id);
