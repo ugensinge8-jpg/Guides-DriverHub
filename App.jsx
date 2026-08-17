@@ -2165,7 +2165,7 @@ function TalentProfile({ talent, posts, canRequest, viewer, self, contactOnly, e
         {onBack && (
           <button onClick={onBack} className="tap absolute left-4 top-4 z-10 w-9 h-9 rounded-full flex items-center justify-center" style={{ background: "rgba(255,255,255,.9)", border: `1px solid ${C.line}` }}><ChevronLeft size={19} color={C.ink} /></button>
         )}
-        <div className="h-24" style={{ background: gcp
+        <div className="h-24 relative" style={{ background: gcp
           ? `radial-gradient(130% 150% at 80% 0%, ${gcp.color} 0%, ${gcp.color}E6 45%, #16241B 105%)`
           : `radial-gradient(120% 140% at 80% 0%, ${C.pine} 0%, ${C.pineDeep} 70%)` }}>
           {gcp && (
