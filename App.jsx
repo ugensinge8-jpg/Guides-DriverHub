@@ -31,7 +31,7 @@ let PROFILE_DIR = {};
 const profileToTalent = (p) => ({
   id: p.id, role: p.role, name: (p.role === "business" && p.company_name) || p.full_name || "Member", base: p.base || "",
   initials: initialsOf((p.role === "business" && p.company_name) || p.full_name || "?"),
-  years: p.career_start_date ? Math.max(0, Math.floor((Date.now() - new Date(p.career_start_date + "T00:00").getTime()) / 31557600000)) : (p.years || 0),
+  years: p.career_start_date ? Math.max(0, Math.floor((Date.now() - new Date(p.career_start_date + "T00:00").getTime()) / 31557600000)) : 0,
   careerStart: p.career_start_date || null, trips: 0, rating: null,
   verified: p.license_status === "verified", licenseStatus: p.license_status || "none",
   guideClass: p.guide_class || null, licenseNo: p.license_no || null, licenseExpiry: p.license_expiry || null, licensePath: p.license_path || null,
@@ -2267,6 +2267,20 @@ function TalentProfile({ talent, posts, canRequest, viewer, self, contactOnly, e
       </div>
 
       <div className="px-5">
+        {self && ["guide", "driver"].includes(t.role) && !t.careerStart && (
+          <div className="rounded-2xl p-4 mt-5" style={{ background: C.goldSoft, border: `1.5px solid ${C.gold}` }}>
+            <div className="flex items-center gap-2">
+              <CalendarDays size={16} color={C.gold} />
+              <span className="text-[14px] font-semibold" style={{ color: "#7a5a1e" }}>Your experience shows 0 years</span>
+            </div>
+            <p className="text-[12.5px] mt-1.5 leading-snug" style={{ color: "#7a5a1e" }}>
+              Experience counts only from your Government of Bhutan Date-of-Joining certificate. Add the date, then upload the
+              certificate in Credentials &amp; Licence for admin verification.
+            </p>
+            <button onClick={() => setEditOpen(true)} className="tap w-full h-10 rounded-xl text-[13.5px] font-semibold mt-2.5"
+              style={{ background: C.gold, color: "#fff" }}>Add Date of Joining</button>
+          </div>
+        )}
         {self && !["operator", "business"].includes(t.role) && <TalentAvailability talent={t} onSet={onSetAvailability} />}
 
         <ProfileTabs
