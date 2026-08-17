@@ -159,10 +159,33 @@ async function shrinkImage(dataUri, maxW = 1280, quality = 0.82) {
   } catch { return dataUri; }
 }
 
+function videoDuration(file) {
+  return new Promise((res) => {
+    try {
+      const v = document.createElement("video");
+      v.preload = "metadata";
+      const url = URL.createObjectURL(file);
+      v.onloadedmetadata = () => { const d = v.duration; URL.revokeObjectURL(url); res(isFinite(d) ? d : null); };
+      v.onerror = () => { URL.revokeObjectURL(url); res(null); };
+      v.src = url;
+    } catch (e) { res(null); }
+  });
+}
+
+function dataUriToBlob(dataUri) {
+  // Manual conversion: works under any Content-Security-Policy, unlike fetch(dataUri).
+  const [head, b64] = String(dataUri).split(",");
+  const mime = (head.match(/data:([^;]+)/) || [])[1] || "application/octet-stream";
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new Blob([bytes], { type: mime });
+}
+
 async function uploadPostMedia(talentId, media) {
   try {
     const dataUri = media.kind === "photo" ? await shrinkImage(media.dataUri) : media.dataUri;
-    const blob = await (await fetch(dataUri)).blob();
+    const blob = dataUriToBlob(dataUri);
     const ext = (blob.type.split("/")[1] || "bin").split(";")[0];
     const path = `${talentId}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
     const { error } = await supabase.storage.from("post-media").upload(path, blob, { contentType: blob.type });
@@ -312,7 +335,7 @@ export default function App() {
     if (!url && dataUri) {
       try {
         const small = kind === "photo" ? await shrinkImage(dataUri, 1280, 0.82) : dataUri;
-        const blob = await (await fetch(small)).blob();
+        const blob = dataUriToBlob(small);
         const ext = kind === "video" ? "mp4" : "jpg";
         path = `${me}/${Date.now()}.${ext}`;
         const { error } = await supabase.storage.from("stories").upload(path, blob, { contentType: blob.type || (kind === "video" ? "video/mp4" : "image/jpeg") });
@@ -398,7 +421,7 @@ export default function App() {
     if (extra.photoDataUri) {
       try {
         const small = await shrinkImage(extra.photoDataUri, 1280, 0.82);
-        const blob = await (await fetch(small)).blob();
+        const blob = dataUriToBlob(small);
         const path = `dm/${me}/${Date.now()}.jpg`;
         const { error: upErr } = await supabase.storage.from("post-media").upload(path, blob, { contentType: "image/jpeg" });
         if (!upErr) photoUrl = supabase.storage.from("post-media").getPublicUrl(path).data.publicUrl;
@@ -498,8 +521,16 @@ export default function App() {
           if (r.media_url) slideUrls.push(r.media_url);
         }
         up = { media_url: slideUrls[0] || null, media_kind: "photo" };
+        if (slideUrls.length < (media.slides || []).length) {
+          console.error("addPost: only", slideUrls.length, "of", media.slides.length, "photos uploaded");
+          return { ok: false, reason: "upload" };
+        }
       } else {
         up = await uploadPostMedia(talentId, media);
+        if (!up.media_url) {
+          console.error("addPost: media upload failed");
+          return { ok: false, reason: "upload" };
+        }
       }
     }
     const { error: postErr } = await supabase.from("posts").insert({
@@ -511,8 +542,9 @@ export default function App() {
       loc_altitude: location?.altitude ?? null, loc_bearing: location?.bearing ?? null, loc_taken_on: location?.takenOn ?? null,
       loc_outside: location?.outside ?? false,
     });
-    if (postErr) console.error("posts.insert failed:", postErr.message);
+    if (postErr) { console.error("posts.insert failed:", postErr.message); return { ok: false, reason: "insert" }; }
     fetchPosts();
+    return { ok: true };
   };
   const approve = async (id) => {
     if (!CLOUD) { setPosts((p) => p.map((x) => (x.id === id ? { ...x, status: "approved", reason: null } : x))); return; }
@@ -735,7 +767,7 @@ export default function App() {
     if (msg.kind === "photo" && msg.photo) {
       try {
         const small = await shrinkImage(msg.photo, 1280, 0.82);
-        const blob = await (await fetch(small)).blob();
+        const blob = dataUriToBlob(small);
         const path = `${tripId}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.jpg`;
         const { error } = await supabase.storage.from("post-media").upload(path, blob, { contentType: "image/jpeg" });
         if (!error) photoUrl = supabase.storage.from("post-media").getPublicUrl(path).data.publicUrl;
@@ -1398,10 +1430,13 @@ function Composer({ talent, onAdd }) {
     const vid = files.find((f) => f.type.startsWith("video/"));
     if (vid) {
       if (vid.size > 25 * 1024 * 1024) return setError("That video is over 25 MB — trim it or pick a shorter clip.");
-      setError(null);
-      const r = new FileReader();
-      r.onload = () => setMedia({ kind: "video", dataUri: r.result });
-      r.readAsDataURL(vid);
+      videoDuration(vid).then((secs) => {
+        if (secs != null && secs > 30.5) { setError(`Videos are limited to 30 seconds — yours is ${Math.round(secs)}s. Trim it and try again.`); return; }
+        setError(null);
+        const r = new FileReader();
+        r.onload = () => setMedia({ kind: "video", dataUri: r.result });
+        r.readAsDataURL(vid);
+      });
       return;
     }
 
@@ -1441,7 +1476,11 @@ function Composer({ talent, onAdd }) {
 
   const post = () => {
     if (!text.trim() && !media) return;
-    onAdd({ talentId: talent.id, text: text.trim(), media, location });
+    Promise.resolve(onAdd({ talentId: talent.id, text: text.trim(), media, location })).then((res) => {
+      if (res && res.ok === false) setError(res.reason === "upload"
+        ? "The photos didn't upload — check your connection and try posting again."
+        : "The post couldn't be saved — please try again.");
+    });
     setText(""); setMedia(null); setLocation(null); setPicking(false); setManual(false);
   };
   const canPost = text.trim() || media;
@@ -4011,7 +4050,7 @@ function Onboard({ mode: initialMode, session, onBack, onDone }) {
     setBusy(true); setErr(null);
     try {
       const small = await shrinkImage(licPreview, 1600, 0.85);
-      const blob = await (await fetch(small)).blob();
+      const blob = dataUriToBlob(small);
       const path = `${effUid}/license.jpg`;
       const { error } = await supabase.storage.from("licenses").upload(path, blob, { contentType: "image/jpeg", upsert: true });
       if (error) {
@@ -5129,11 +5168,22 @@ function AddStory({ onClose, onAdd }) {
     if (!isVideo && !f.type.startsWith("image/")) return setErr("Choose a photo or a video.");
     if (isVideo && f.size > 30 * 1024 * 1024) return setErr("Video is over 30 MB — keep stories short.");
     if (!isVideo && f.size > 8 * 1024 * 1024) return setErr("Photo is over 8 MB.");
-    setErr(null);
-    const r = new FileReader();
-    r.onload = () => setMedia({ kind: isVideo ? "video" : "photo", dataUri: r.result });
-    r.readAsDataURL(f);
+    const finish = () => {
+      setErr(null);
+      const r = new FileReader();
+      r.onload = () => setMedia({ kind: isVideo ? "video" : "photo", dataUri: r.result });
+      r.readAsDataURL(f);
+    };
+    if (isVideo) {
+      videoDuration(f).then((secs) => {
+        if (secs != null && secs > 15.5) { setErr(`Stories play for 15 seconds — this clip is ${Math.round(secs)}s. Trim it first.`); return; }
+        finish();
+      });
+    } else {
+      finish();
+    }
   };
+
 
   const post = async () => {
     if (!media) return;
@@ -5895,61 +5945,59 @@ function CropEditor({ slides, initialRatio, onDone, onClose }) {
 /* ========================================================================== */
 function GuestReview({ token }) {
   const [state, setState] = useState("loading");   // loading | form | done | invalid | used | expired
-  const [info, setInfo] = useState(null);          // the token row
-  const [talent, setTalent] = useState(null);
-  const [rating, setRating] = useState(0);
-  const [knowledge, setKnowledge] = useState(0);
-  const [care, setCare] = useState(0);
-  const [comms, setComms] = useState(0);
-  const [body, setBody] = useState("");
+  const [info, setInfo] = useState(null);          // { mode, trip_id, trip_label, guest_name, members[] }
+  const [ratings, setRatings] = useState({});
+  const [notes, setNotes] = useState({});
   const [country, setCountry] = useState("");
-  const [showDetail, setShowDetail] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
+  const [live, setLive] = useState({});            // fresh profile stats after publish
 
   useEffect(() => {
     let on = true;
     (async () => {
       if (!CLOUD) { setState("invalid"); return; }
-      const { data, error } = await supabase
-        .from("review_tokens").select("*").eq("token", token).maybeSingle();
+      const { data: tok } = await supabase.from("review_tokens").select("used_at, expires_at").eq("token", token).maybeSingle();
       if (!on) return;
-      if (error || !data) { setState("invalid"); return; }
-      if (data.used_at) { setState("used"); return; }
-      if (new Date(data.expires_at) < new Date()) { setState("expired"); return; }
+      if (!tok) { setState("invalid"); return; }
+      if (tok.used_at) { setState("used"); return; }
+      if (new Date(tok.expires_at) < new Date()) { setState("expired"); return; }
+      const { data, error } = await supabase.rpc("review_crew", { p_token: token });
+      if (!on) return;
+      if (error || !data || !(data.members || []).length) { setState("invalid"); return; }
       setInfo(data);
-      const { data: prof } = await supabase
-        .from("profiles").select("*").eq("id", data.talent_id).maybeSingle();
-      if (!on) return;
-      if (prof) setTalent(profileToTalent(prof));
       setState("form");
     })();
     return () => { on = false; };
   }, [token]);
 
+  const members = info?.members || [];
+  const allRated = members.length > 0 && members.every((m) => (ratings[m.id] || 0) > 0);
+
   const submit = async () => {
-    if (!rating) { setErr("Please choose an overall rating."); return; }
+    if (!allRated) { setErr(members.length > 1 ? "Please rate each of them — every star becomes part of their record." : "Please choose a rating."); return; }
     setBusy(true); setErr(null);
-    const { error } = await supabase.from("guest_reviews").insert({
+    const rows = members.map((m) => ({
       token,
-      talent_id: info.talent_id,
+      talent_id: m.id,
       trip_id: info.trip_id || null,
       guest_name: info.guest_name || null,
       guest_country: country.trim() || null,
-      rating,
-      knowledge: knowledge || null,
-      care: care || null,
-      communication: comms || null,
-      body: body.trim() || null,
+      rating: ratings[m.id],
+      body: (notes[m.id] || "").trim() || null,
       trip_label: info.trip_label || null,
-    });
+    }));
+    const { error } = await supabase.from("guest_reviews").insert(rows);
     if (error) {
       setBusy(false);
-      setErr("We couldn't save your review. The link may already have been used.");
+      setErr("We couldn't save your review — this link may already have been used.");
       return;
     }
-    // consume the token so the link cannot be reused
     await supabase.from("review_tokens").update({ used_at: new Date().toISOString() }).eq("token", token);
+    const { data: fresh } = await supabase.from("profiles").select("id, guest_rating, guest_review_count").in("id", members.map((m) => m.id));
+    const map = {};
+    (fresh || []).forEach((p) => { map[p.id] = { rating: p.guest_rating, count: p.guest_review_count }; });
+    setLive(map);
     setBusy(false);
     setState("done");
   };
@@ -5989,7 +6037,7 @@ function GuestReview({ token }) {
   );
 
   if (state === "invalid") return <Message Icon={ShieldAlert} title="This link isn't valid"
-    body="Please check the link in your email, or ask your tour operator to send a new one." />;
+    body="Please check the link in your message, or ask your tour operator to send a new one." />;
 
   if (state === "used") return <Message Icon={CheckCheck} title="This review is already submitted"
     body="Thank you — each link can only be used once. If you meant to write another review, ask your operator for a new link." tone="good" />;
@@ -5997,14 +6045,11 @@ function GuestReview({ token }) {
   if (state === "expired") return <Message Icon={Clock} title="This link has expired"
     body="Review links stay open for 14 days. Ask your tour operator to send a new one and we'll be glad to hear from you." />;
 
-  if (state === "done") return <Message Icon={Check} title="Thank you"
-    body={`Your review of ${talent?.name || "your guide"} is published. It becomes part of their professional record and helps other travellers choose well.`} tone="good" />;
-
-  const BigStars = ({ value, onChange }) => (
-    <div className="flex justify-center gap-2">
+  const Stars = ({ value, onChange, size = 36 }) => (
+    <div className="flex justify-center gap-1.5">
       {[1, 2, 3, 4, 5].map((n) => (
         <button key={n} onClick={() => onChange(n)} className="tap" aria-label={`${n} out of 5`}>
-          <Star size={44} strokeWidth={1.4}
+          <Star size={size} strokeWidth={1.4}
             color={n <= value ? C.gold : C.line}
             fill={n <= value ? C.gold : "transparent"}
             style={{ transition: "transform .12s", transform: n === value ? "scale(1.08)" : "none" }} />
@@ -6013,122 +6058,127 @@ function GuestReview({ token }) {
     </div>
   );
 
-  const SmallStars = ({ label, hint, value, onChange }) => (
-    <div className="flex items-center gap-3 py-2.5">
-      <div className="flex-1 min-w-0">
-        <div className="text-[13.5px] font-medium" style={{ color: C.ink }}>{label}</div>
-        <div className="text-[11.5px]" style={{ color: C.muted }}>{hint}</div>
+  if (state === "done") return (
+    <Shell>
+      <div className="text-center mb-6 fade">
+        <div className="w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-3" style={{ background: C.pineSoft }}>
+          <Check size={30} color={C.pine} strokeWidth={2.5} />
+        </div>
+        <div className="text-[21px] font-semibold tracking-[-0.01em]" style={{ color: C.ink }}>
+          Tashi Delek{info?.guest_name ? `, ${String(info.guest_name).split(" ")[0]}` : ""}!
+        </div>
+        <p className="text-[13.5px] mt-1.5 leading-relaxed" style={{ color: C.muted }}>
+          Your review is published and live. This is exactly what you just gave:
+        </p>
       </div>
-      <div className="flex gap-1 shrink-0">
-        {[1, 2, 3, 4, 5].map((n) => (
-          <button key={n} onClick={() => onChange(n)} className="tap" aria-label={`${label} ${n} of 5`}>
-            <Star size={20} strokeWidth={1.6}
-              color={n <= value ? C.gold : C.line} fill={n <= value ? C.gold : "transparent"} />
-          </button>
-        ))}
-      </div>
-    </div>
-  );
 
-  const wordFor = [null, "Poor", "Fair", "Good", "Great", "Excellent"][rating] || "";
+      {members.map((m) => (
+        <div key={m.id} className="rounded-2xl p-4 mb-3 fade" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+          <div className="flex items-center gap-3">
+            <Avatar initials={initialsOf(m.name || "?")} size={44} />
+            <div className="flex-1 min-w-0">
+              <div className="text-[15px] font-semibold" style={{ color: C.ink }}>{m.name}</div>
+              <div className="text-[12px]" style={{ color: C.muted }}>{roleLabel(m.role)}</div>
+            </div>
+            <div className="flex gap-0.5">
+              {[1, 2, 3, 4, 5].map((n) => (
+                <Star key={n} size={15} color={n <= (ratings[m.id] || 0) ? C.gold : C.line} fill={n <= (ratings[m.id] || 0) ? C.gold : "transparent"} />
+              ))}
+            </div>
+          </div>
+          {(notes[m.id] || "").trim() && <p className="text-[13.5px] leading-snug mt-2.5" style={{ color: C.ink }}>“{(notes[m.id] || "").trim()}”</p>}
+          <div className="mt-3 pt-3 text-[12.5px] font-medium" style={{ borderTop: `1px solid ${C.lineSoft}`, color: C.pine }}>
+            Live now ✓ You are review #{live[m.id]?.count ?? "1"} on {String(m.name || "their").split(" ")[0]}'s verified profile
+            {typeof live[m.id]?.rating === "number" ? ` · rating now ${Number(live[m.id].rating).toFixed(1)}` : ""}
+          </div>
+        </div>
+      ))}
+
+      <div className="rounded-2xl p-4 text-center mt-2 fade" style={{ background: C.pineSoft }}>
+        <p className="text-[13px] leading-relaxed" style={{ color: C.pine }}>
+          Thank you for travelling with us in Bhutan — and for strengthening the people who made your journey.
+          Your words now guide the next traveller. Kadrinche la.
+        </p>
+      </div>
+    </Shell>
+  );
 
   return (
     <Shell>
-      {/* who you are reviewing */}
       <div className="text-center mb-6">
-        <div className="flex justify-center mb-3"><Avatar initials={talent?.initials || "?"} size={64} /></div>
-        <div className="text-[21px] font-semibold tracking-[-0.01em]" style={{ color: C.ink }}>{talent?.name || "Your guide"}</div>
-        <div className="text-[13.5px] mt-0.5" style={{ color: C.muted }}>
-          {talent ? roleLabel(talent.role) : ""}{talent?.base ? ` · ${talent.base}` : ""}
+        <div className="text-[19px] font-semibold tracking-[-0.01em]" style={{ color: C.ink }}>
+          {info?.guest_name ? `${String(info.guest_name).split(" ")[0]}, how` : "How"} was your journey?
         </div>
         {info?.trip_label && (
-          <div className="inline-block mt-2.5 text-[12.5px] rounded-full px-3 py-1"
+          <div className="inline-block mt-2 text-[12.5px] rounded-full px-3 py-1"
             style={{ background: C.card, border: `1px solid ${C.line}`, color: C.muted }}>
             {info.trip_label}
           </div>
         )}
-      </div>
-
-      {/* step 1 — the only thing required */}
-      <div className="rounded-2xl p-5 text-center" style={{ background: C.card, border: `1px solid ${C.line}` }}>
-        <div className="text-[17px] font-semibold mb-1" style={{ color: C.ink }}>
-          {info?.guest_name ? `${String(info.guest_name).split(" ")[0]}, how` : "How"} was your trip?
-        </div>
-        <p className="text-[13px] mb-4" style={{ color: C.muted }}>Tap a star to begin</p>
-        <BigStars value={rating} onChange={setRating} />
-        <div className="text-[14px] font-semibold mt-3" style={{ color: rating ? C.gold : "transparent" }}>
-          {wordFor || "\u00a0"}
-        </div>
-      </div>
-
-      {/* everything else appears only after they've rated */}
-      {rating > 0 && (
-        <div className="fade mt-5">
-          <div className="text-[15px] font-semibold mb-1" style={{ color: C.ink }}>Tell them why</div>
-          <p className="text-[12.5px] mb-2" style={{ color: C.muted }}>
-            A sentence or two is plenty. What did they do well? What will you remember?
+        {members.length > 1 && (
+          <p className="text-[12.5px] mt-2.5 leading-relaxed" style={{ color: C.muted }}>
+            Each rating goes to that person's own verified record — a moment for each of them.
           </p>
-          <textarea value={body} onChange={(e) => setBody(e.target.value)} rows={5} maxLength={600}
-            placeholder="e.g. Karma knew every trail on the way to Tiger's Nest and made sure my mother could take it at her own pace."
-            className="w-full px-3.5 py-3 rounded-xl text-[15px] leading-relaxed resize-none"
-            style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }} />
-          <div className="flex justify-end mt-1 mb-4">
-            <span className="text-[11px]" style={{ color: C.muted }}>{body.length}/600</span>
-          </div>
+        )}
+      </div>
 
-          {/* optional detail — collapsed by default so the form stays short */}
-          <button onClick={() => setShowDetail((v) => !v)}
-            className="tap w-full flex items-center justify-between rounded-xl px-4 py-3 mb-1"
-            style={{ background: C.card, border: `1px solid ${C.line}` }}>
-            <span className="text-[13.5px] font-medium" style={{ color: C.ink }}>Rate a few details (optional)</span>
-            <ChevronLeft size={17} color={C.muted} style={{ transform: showDetail ? "rotate(90deg)" : "rotate(-90deg)", transition: "transform .2s" }} />
-          </button>
-          {showDetail && (
-            <div className="rounded-xl px-4 py-1 mb-4 fade" style={{ background: C.card, border: `1px solid ${C.line}` }}>
-              <SmallStars label="Knowledge" hint="Culture, history, nature" value={knowledge} onChange={setKnowledge} />
-              <div style={{ height: 1, background: C.lineSoft }} />
-              <SmallStars label="Care" hint="Looking after your group" value={care} onChange={setCare} />
-              <div style={{ height: 1, background: C.lineSoft }} />
-              <SmallStars label="Communication" hint="Clear and easy to follow" value={comms} onChange={setComms} />
+      {members.map((m) => (
+        <div key={m.id} className="rounded-2xl p-5 mb-4" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+          <div className="flex items-center gap-3 mb-4">
+            <Avatar initials={initialsOf(m.name || "?")} size={48} />
+            <div>
+              <div className="text-[16px] font-semibold" style={{ color: C.ink }}>{m.name}</div>
+              <div className="text-[12.5px]" style={{ color: C.muted }}>Your {m.role === "driver" ? "driver" : "guide"} on this trip</div>
             </div>
-          )}
-
-          <div className="text-[13.5px] font-medium mb-1.5 mt-4" style={{ color: C.ink }}>
-            Where are you visiting from? <span style={{ color: C.muted }}>optional</span>
           </div>
-          <input value={country} onChange={(e) => setCountry(e.target.value)} maxLength={40}
-            placeholder="e.g. Australia"
-            className="w-full h-12 px-3.5 rounded-xl text-[15px] mb-5"
-            style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }} />
-
-          {err && <p className="text-[13px] mb-3" style={{ color: C.maroon }}>{err}</p>}
-
-          <button onClick={submit} disabled={busy}
-            className="tap w-full rounded-2xl flex items-center justify-center gap-2 text-[16px] font-semibold"
-            style={{ height: 54, background: C.pine, color: "#fff", boxShadow: `0 8px 20px ${C.pine}33` }}>
-            {busy ? <Loader2 size={18} className="animate-spin" /> : "Send my review"}
-          </button>
-
-          <p className="text-[11.5px] text-center leading-snug mt-3.5" style={{ color: C.muted }}>
-            Your review is published on {talent?.name ? String(talent.name).split(" ")[0] + "'s" : "their"} profile
-            and stays part of their professional record. Please be honest — that is what makes it worth something.
-          </p>
+          <Stars value={ratings[m.id] || 0} onChange={(n) => { setRatings((r) => ({ ...r, [m.id]: n })); setErr(null); }} />
+          <div className="text-center text-[13px] font-semibold mt-2" style={{ color: (ratings[m.id] || 0) ? C.gold : "transparent" }}>
+            {[null, "Poor", "Fair", "Good", "Great", "Excellent"][ratings[m.id] || 0] || "\u00a0"}
+          </div>
+          {(ratings[m.id] || 0) > 0 && (
+            <textarea value={notes[m.id] || ""} onChange={(e) => setNotes((x) => ({ ...x, [m.id]: e.target.value }))} rows={3} maxLength={600}
+              placeholder={m.role === "driver" ? "A line about the driving, the vehicle, the care on the road…" : "A line about what they showed you, what you'll remember…"}
+              className="w-full px-3.5 py-3 rounded-xl text-[15px] leading-relaxed resize-none mt-3 fade"
+              style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
+          )}
         </div>
-      )}
+      ))}
+
+      <div className="rounded-2xl p-4 mb-4" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+        <div className="text-[13px] font-medium mb-1.5" style={{ color: C.ink }}>Where are you from? <span style={{ color: C.muted }}>· optional</span></div>
+        <input value={country} onChange={(e) => setCountry(e.target.value)} maxLength={40} placeholder="e.g. Australia"
+          className="w-full h-11 px-3.5 rounded-xl text-[14px]" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
+      </div>
+
+      {err && <p className="text-[13px] mb-3 text-center" style={{ color: C.maroon }}>{err}</p>}
+
+      <button onClick={submit} disabled={busy} className="tap w-full rounded-xl flex items-center justify-center gap-2 text-[15.5px] font-semibold"
+        style={{ height: 54, background: allRated ? C.pine : "#C7CEC7", color: "#fff" }}>
+        {busy ? <Loader2 size={19} className="animate-spin" /> : <>Publish my review{members.length > 1 ? "s" : ""} <ArrowRight size={18} strokeWidth={2.4} /></>}
+      </button>
+      <p className="text-[11.5px] text-center mt-3" style={{ color: C.muted }}>
+        No account needed. Published instantly to their public profile on bhutantourismhub.com.
+      </p>
     </Shell>
   );
 }
 
-/* ========================================================================== */
-/*  INVITE A GUEST TO REVIEW                                                  */
-/*  Only operators and admins can issue an invite — a guide inviting their     */
-/*  own reviews would make the whole rating system worthless. Enforced in the  */
-/*  database too (issuer_is_not_subject + a role check on the insert policy).  */
-/* ========================================================================== */
+const REVIEW_CCODES = [
+  ["+91", "IN +91"], ["+1", "US +1"], ["+44", "UK +44"], ["+61", "AU +61"], ["+49", "DE +49"],
+  ["+33", "FR +33"], ["+65", "SG +65"], ["+81", "JP +81"], ["+86", "CN +86"], ["+971", "AE +971"],
+  ["+66", "TH +66"], ["+977", "NP +977"], ["+880", "BD +880"], ["+975", "BT +975"], ["+7", "RU +7"],
+  ["+34", "ES +34"], ["+39", "IT +39"], ["+31", "NL +31"], ["+41", "CH +41"], ["+64", "NZ +64"],
+];
+
 function ReviewInvite({ user, trip, onClose }) {
   const [guestName, setGuestName] = useState("");
   const [guestEmail, setGuestEmail] = useState("");
-  const [guestPhone, setGuestPhone] = useState("");
+  const [ccode, setCcode] = useState("+91");
+  const [ccodeOther, setCcodeOther] = useState("");
+  const [phoneNat, setPhoneNat] = useState("");
+  const codeVal = ccode === "other" ? ("+" + ccodeOther) : ccode;
+  const guestPhone = phoneNat.trim() ? (codeVal + phoneNat).replace(/[^0-9+]/g, "") : "";
+  const phoneValid = /^\+[1-9][0-9]{7,14}$/.test(guestPhone);
   const [issued, setIssued] = useState([]);
   const [made, setMade] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -6141,7 +6191,7 @@ function ReviewInvite({ user, trip, onClose }) {
 
   // who is being reviewed — never the person issuing the invite
   const crew = (trip.members || []).filter((m) => m.roleInTrip !== "operator" && m.id !== meId);
-  const [subject, setSubject] = useState(crew[0]?.id || "");
+  const [subject, setSubject] = useState(crew.length > 1 ? "ALL" : (crew[0]?.id || ""));
 
   const load = async () => {
     if (!CLOUD) return;
@@ -6154,18 +6204,21 @@ function ReviewInvite({ user, trip, onClose }) {
 
   const create = async () => {
     if (!subject) { setErr("Choose which crew member the review is for."); return; }
-    if (!/\S+@\S+\.\S+/.test(guestEmail)) { setErr("Enter the guest's email — it records who the review came from."); return; }
+    const emailValid = /\S+@\S+\.\S+/.test(guestEmail);
+    if (phoneNat.trim() && !phoneValid) { setErr("That WhatsApp number isn't valid — check the country code and digits."); return; }
+    if (!emailValid && !phoneValid) { setErr("Add the guest's email or a valid WhatsApp number — the review needs a verified way to reach them."); return; }
     if (issued.length >= MAX_PER_TRIP) { setErr(`Up to ${MAX_PER_TRIP} guests per trip.`); return; }
 
     setBusy(true); setErr(null);
     const token = makeReviewToken();
     const { error } = await supabase.from("review_tokens").insert({
       token,
-      talent_id: subject,
+      talent_id: subject === "ALL" ? null : subject,
       trip_id: trip.id,
       trip_label: trip.title,
       guest_name: guestName.trim() || null,
-      guest_email: guestEmail.trim(),
+      guest_email: guestEmail.trim() || null,
+      guest_phone: phoneValid ? guestPhone : null,
       issued_by: meId,
       issuer_role: isAdmin ? "admin" : "operator",
     });
@@ -6187,11 +6240,11 @@ function ReviewInvite({ user, trip, onClose }) {
   const guestMessage = () =>
 `Thank you for travelling with us in Bhutan.
 
-Would you leave a short review for ${subjectName}? It becomes part of their verified record on Bhutan Tourism Hub, and it genuinely helps them.
+Before the memories fade, we would be grateful for a one-minute review of ${subjectName}. Reviews form their verified professional record on Bhutan Tourism Hub and directly support their livelihood.
 
-It takes about a minute:
+${made}
 
-${made}`;
+The link works once and expires in 14 days.`;
 
   const copy = async () => {
     try { await navigator.clipboard.writeText(made); setCopied(true); setTimeout(() => setCopied(false), 2200); }
@@ -6220,7 +6273,7 @@ ${made}`;
     window.location.href = `mailto:${guestEmail || ""}?subject=${subject}&body=${encodeURIComponent(guestMessage())}`;
   };
 
-  const subjectName = (trip.members || []).find((m) => m.id === subject)?.name || "the guide";
+  const subjectName = subject === "ALL" ? (crew.map((m) => String(m.name || "").split(" ")[0]).filter(Boolean).join(" and ") || "your crew") : ((trip.members || []).find((m) => m.id === subject)?.name || "the guide");
 
   return createPortal((
     <div className="fixed inset-0 flex items-end" style={{ background: "rgba(8,10,8,.55)", zIndex: 230 }} onClick={onClose}>
@@ -6239,6 +6292,7 @@ ${made}`;
             <>
               <div className="text-[12.5px] font-medium mb-1.5" style={{ color: C.ink }}>Review is for</div>
               <div className="flex flex-wrap gap-2 mb-4">
+                {crew.length > 1 && <Chip on={subject === "ALL"} onClick={() => setSubject("ALL")}>Whole crew · one link</Chip>}
                 {crew.map((m) => (
                   <Chip key={m.id} on={subject === m.id} onClick={() => setSubject(m.id)}>{m.name}</Chip>
                 ))}
@@ -6257,12 +6311,22 @@ ${made}`;
                 Kept private, never shown on the review. It exists so a disputed review can be traced.
               </p>
 
-              <div className="text-[12.5px] font-medium mb-1.5" style={{ color: C.ink }}>Guest WhatsApp number <span style={{ color: C.muted }}>· optional</span></div>
-              <input value={guestPhone} onChange={(e) => setGuestPhone(e.target.value)} inputMode="tel"
-                placeholder="+61 4XX XXX XXX — with country code"
-                className="w-full h-11 px-3.5 rounded-xl text-[14px] mb-1.5" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
-              <p className="text-[11.5px] mb-4" style={{ color: C.muted }}>
-                Add it and WhatsApp opens straight to their chat. Leave it blank and you'll choose the contact in WhatsApp.
+              <div className="text-[12.5px] font-medium mb-1.5" style={{ color: C.ink }}>Guest WhatsApp number</div>
+              <div className="flex gap-2 mb-1.5">
+                <select value={ccode} onChange={(e) => setCcode(e.target.value)} className="h-11 px-1.5 rounded-xl text-[13px]"
+                  style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink, width: 96 }}>
+                  {REVIEW_CCODES.map(([c, l]) => <option key={c} value={c}>{l}</option>)}
+                  <option value="other">Other</option>
+                </select>
+                {ccode === "other" && (
+                  <input value={ccodeOther} onChange={(e) => setCcodeOther(e.target.value.replace(/[^0-9]/g, "").slice(0, 4))} inputMode="numeric" placeholder="Code"
+                    className="h-11 px-2 rounded-xl text-[14px] text-center" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink, width: 62 }} />
+                )}
+                <input value={phoneNat} onChange={(e) => setPhoneNat(e.target.value.replace(/[^0-9 ]/g, "").slice(0, 16))} inputMode="tel" placeholder="Number"
+                  className="flex-1 h-11 px-3.5 rounded-xl text-[14px]" style={{ background: C.bg, border: `1px solid ${phoneNat.trim() && !phoneValid ? C.maroon : phoneValid ? C.pine : C.line}`, color: C.ink }} />
+              </div>
+              <p className="text-[11.5px] mb-4" style={{ color: phoneNat.trim() && !phoneValid ? C.maroon : phoneValid ? C.pine : C.muted }}>
+                {phoneNat.trim() && !phoneValid ? "Not a valid number for that code yet — keep typing or fix the code." : phoneValid ? `Verified format ✓ WhatsApp will open straight to ${guestPhone}` : "Pick the country code first — the number is validated before anything sends."}
               </p>
 
               {err && <p className="text-[13px] mb-2.5" style={{ color: C.maroon }}>{err}</p>}
