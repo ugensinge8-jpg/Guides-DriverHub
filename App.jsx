@@ -1800,45 +1800,65 @@ function Pill({ Icon, children }) {
 function Discover({ onOpen, initialQuery, dirTick }) {
   const [q, setQ] = useState(initialQuery || "");
   useEffect(() => { if (initialQuery) setQ(initialQuery); }, [initialQuery]);
-  const [role, setRole] = useState("all");
+  const [tab, setTab] = useState("guide");            // guide | driver | business
   const [lang, setLang] = useState(null);
   const [onlyFree, setOnlyFree] = useState(false);
+  const [onlyVerified, setOnlyVerified] = useState(false);
+  const [bizType, setBizType] = useState(null);
 
   const POOL = useMemo(() => [...TALENT, ...Object.values(PROFILE_DIR).filter((p) => ["guide", "driver", "business"].includes(p.role))], [dirTick]);
-  const list = POOL.filter((t) => (role === "all" || t.role === role))
-    .filter((t) => (!onlyFree || (t.availability || "open") === "open"))
-    .filter((t) => (!lang || (t.languages || []).some((l) => l && l.n === lang)))
+  const counts = useMemo(() => ({
+    guide: POOL.filter((t) => t.role === "guide").length,
+    driver: POOL.filter((t) => t.role === "driver").length,
+    business: POOL.filter((t) => t.role === "business").length,
+  }), [POOL]);
+
+  const isBiz = tab === "business";
+  const list = POOL.filter((t) => t.role === tab)
+    .filter((t) => (!onlyVerified || t.verified))
+    .filter((t) => (isBiz || !onlyFree || (t.availability || "open") === "open"))
+    .filter((t) => (isBiz || !lang || (t.languages || []).some((l) => l && l.n === lang)))
+    .filter((t) => (!isBiz || !bizType || (t.tags || []).includes(bizType)))
     .filter((t) => {
       const hay = `${t.name || ""} ${t.base || ""} ${(t.tags || []).join(" ")}`.toLowerCase();
       return hay.includes(q.toLowerCase());
     })
-    .sort((a, b) => (b.rating || 0) - (a.rating || 0));
+    .sort((a, b) => (b.rating || 0) - (a.rating || 0) || String(a.name).localeCompare(String(b.name)));
 
   return (
     <div className="px-5 py-4">
-      <SectionLabel trailing={`${list.length} available`}>Find talent</SectionLabel>
+      <SectionLabel trailing={`${list.length} listed`}>{isBiz ? "Find a place" : "Find talent"}</SectionLabel>
 
-      <div className="relative mb-3">
+      <Segmented value={tab} onChange={(v) => { setTab(v); setBizType(null); }}
+        options={[["guide", `Guides (${counts.guide})`], ["driver", `Drivers (${counts.driver})`], ["business", `Hotels (${counts.business})`]]} />
+
+      <div className="relative mt-3 mb-3">
         <Search size={16} color={C.muted} className="absolute left-3.5 top-1/2 -translate-y-1/2" />
-        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search name, base or speciality"
+        <input value={q} onChange={(e) => setQ(e.target.value)}
+          placeholder={isBiz ? "Search hotels, farmstays, shops or towns" : "Search name, base or speciality"}
           className="w-full h-11 pl-10 pr-4 rounded-xl text-[14px]" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }} />
       </div>
 
-      <div className="flex gap-2 mb-3">
-        {[["all", "All"], ["guide", "Guides"], ["driver", "Drivers"], ["business", "Business"]].map(([k, l]) => {
-          const on = role === k;
-          return <button key={k} onClick={() => setRole(k)} className="tap flex-1 h-9 rounded-full text-[13px] font-semibold" style={{ background: on ? C.pine : C.card, border: `1px solid ${on ? C.pine : C.line}`, color: on ? "#fff" : C.ink }}>{l}</button>;
-        })}
-      </div>
-
-      <div className="flex gap-2 overflow-x-auto hidescroll pb-1 mb-4" style={{ scrollbarWidth: "none" }}>
-        <Chip on={onlyFree} onClick={() => setOnlyFree((v) => !v)}>Available now</Chip>
-        <Chip on={!lang} onClick={() => setLang(null)}>All languages</Chip>
-        {LANG_OPTIONS.map((l) => <Chip key={l} on={lang === l} onClick={() => setLang(lang === l ? null : l)}>{l}</Chip>)}
-      </div>
+      {isBiz ? (
+        <div className="flex gap-2 overflow-x-auto hidescroll pb-1 mb-1.5" style={{ scrollbarWidth: "none" }}>
+          <Chip on={!bizType} onClick={() => setBizType(null)}>All places</Chip>
+          {ONB_BUSINESS.map((t) => <Chip key={t} on={bizType === t} onClick={() => setBizType(bizType === t ? null : t)}>{t}</Chip>)}
+          <Chip on={onlyVerified} onClick={() => setOnlyVerified((v) => !v)}>Verified only</Chip>
+        </div>
+      ) : (
+        <div className="flex gap-2 overflow-x-auto hidescroll pb-1 mb-1.5" style={{ scrollbarWidth: "none" }}>
+          <Chip on={onlyFree} onClick={() => setOnlyFree((v) => !v)}>Available now</Chip>
+          <Chip on={onlyVerified} onClick={() => setOnlyVerified((v) => !v)}>Verified only</Chip>
+          <Chip on={!lang} onClick={() => setLang(null)}>All languages</Chip>
+          {LANG_OPTIONS.map((l) => <Chip key={l} on={lang === l} onClick={() => setLang(lang === l ? null : l)}>{l}</Chip>)}
+        </div>
+      )}
+      <p className="text-[11.5px] mb-3" style={{ color: C.muted }}>
+        {isBiz ? "Hotels, farmstays, boutiques and local businesses \u2014 tap one to see its live availability calendar." : "Tap a person to see their full profile, reviews and availability."}
+      </p>
 
       {list.length === 0 ? (
-        <Empty Icon={Search} title="No matches" body="Try a different role or language filter." />
+        <Empty Icon={Search} title="No matches" body={isBiz ? "Try another place type, or clear the filters." : "Try a different language or clear the filters."} />
       ) : (
         <div className="space-y-3">{list.map((t) => <TalentCard key={t.id} t={t} onOpen={() => onOpen(t.id)} />)}</div>
       )}
