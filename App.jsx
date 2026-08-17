@@ -2231,6 +2231,7 @@ function TalentProfile({ talent, posts, canRequest, viewer, self, contactOnly, e
               {t.pitch && <div className="mt-5 pl-4" style={{ borderLeft: `3px solid ${C.gold}` }}><p className="text-[15px] leading-relaxed" style={{ color: C.ink }}>{t.pitch}</p></div>}
 
               {t.tags && t.tags.length > 0 && (
+                {self && t.role === "guide" && <GuideLicenseCard talent={t} />}
                 <div className="mt-6"><SectionLabel>{t.role === "guide" ? "Specialities" : t.role === "business" ? "What we offer" : "Drives"}</SectionLabel>
                   <div className="flex flex-wrap gap-2">{(t.tags || []).map((x) => <span key={x} className="rounded-full px-3 py-1.5 text-[13.5px] font-medium" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }}>{x}</span>)}</div>
                   {t.vehicle && <div className="mt-2.5 text-[13.5px]" style={{ color: C.muted }}><Car size={14} color={C.gold} className="inline mr-1" /> {t.vehicle}</div>}
@@ -5295,6 +5296,79 @@ function FollowListSheet({ mode, talent, eng, onClose, onOpenProfile }) {
       </div>
     </div>
   ), document.body);
+}
+
+/* ===================== Guide licence self-service card ===================== */
+function GuideLicenseCard({ talent }) {
+  const [editing, setEditing] = useState(false);
+  const [no, setNo] = useState(talent.licenseNo || "");
+  const [exp, setExp] = useState(talent.licenseExpiry || "");
+  const [busy, setBusy] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const cls = parseGuideClass(no);
+  const valid = exp ? new Date(exp + "T00:00") > new Date() : false;
+  const current = talent.guideClass ? GUIDE_CLASSES[talent.guideClass] : null;
+  const expired = talent.licenseExpiry && new Date(talent.licenseExpiry + "T00:00") <= new Date();
+
+  const save = async () => {
+    if (!cls || !exp) return;
+    setBusy(true);
+    const { error } = await supabase.from("profiles").update({
+      license_no: no.trim(), license_expiry: exp,
+      guide_class: cls && valid ? cls : null,
+      license_status: "submitted",
+    }).eq("id", talent.id);
+    setBusy(false);
+    if (error) { console.error("license update failed:", error.message); return; }
+    setSaved(true); setEditing(false);
+    setTimeout(() => setSaved(false), 3200);
+  };
+
+  return (
+    <div className="px-5 mt-6">
+      <SectionLabel>My licence</SectionLabel>
+      <div className="rounded-2xl p-4" style={{ background: C.card, border: `1.5px solid ${current ? current.color : expired ? C.maroon : C.line}` }}>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            {current ? (
+              <span className="text-[12px] font-bold rounded-full px-2.5 py-1" style={{ background: current.color, color: "#fff" }}>
+                {current.label}{talent.verified ? "" : " · pending"}
+              </span>
+            ) : (
+              <span className="text-[12.5px] font-semibold" style={{ color: expired ? C.maroon : C.muted }}>
+                {expired ? "Licence expired — class removed" : "No class yet"}
+              </span>
+            )}
+          </div>
+          {!editing && <button onClick={() => setEditing(true)} className="tap text-[12.5px] font-semibold" style={{ color: C.pine }}>{talent.licenseNo ? "Update" : "Add"}</button>}
+        </div>
+        {!editing && (talent.licenseNo || talent.licenseExpiry) && (
+          <div className="text-[12.5px] mt-2" style={{ color: C.muted }}>
+            {talent.licenseNo || "No number"}{talent.licenseExpiry ? ` · expires ${talent.licenseExpiry}` : ""}
+          </div>
+        )}
+        {saved && <p className="text-[12.5px] mt-2 font-medium" style={{ color: C.pine }}>Saved — pending admin re-verification with DOT.</p>}
+        {editing && (
+          <div className="mt-3">
+            <input value={no} onChange={(e) => setNo(e.target.value.toUpperCase())} placeholder="Licence number — e.g. STG082308"
+              className="w-full h-11 px-3.5 rounded-xl text-[14px] mb-2" style={{ background: C.bg, border: `1px solid ${no && !cls ? C.maroon : C.line}`, color: C.ink }} />
+            <input type="date" value={exp} onChange={(e) => setExp(e.target.value)}
+              className="w-full h-11 px-3.5 rounded-xl text-[14px] mb-2" style={{ background: C.bg, border: `1px solid ${exp && !valid ? C.maroon : C.line}`, color: exp ? C.ink : C.muted }} />
+            {cls && (
+              <div className="rounded-lg px-3 py-2 mb-2 text-[12.5px] font-semibold" style={{ background: `${GUIDE_CLASSES[cls].color}14`, color: GUIDE_CLASSES[cls].color }}>
+                {GUIDE_CLASSES[cls].label}{exp ? (valid ? " · valid" : " · EXPIRED") : ""}
+              </div>
+            )}
+            <div className="flex gap-2">
+              <button onClick={() => setEditing(false)} className="tap flex-1 h-10 rounded-xl text-[13px] font-semibold" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.muted }}>Cancel</button>
+              <button onClick={save} disabled={busy || !cls || !exp} className="tap flex-1 h-10 rounded-xl text-[13px] font-semibold" style={{ background: C.pine, color: "#fff" }}>{busy ? "Saving…" : "Save"}</button>
+            </div>
+          </div>
+        )}
+        <p className="text-[11px] mt-2.5" style={{ color: C.muted }}>Class is read from the number. Every change goes back to admin for verification with DOT & GAB.</p>
+      </div>
+    </div>
+  );
 }
 
 /* ===================== Verification status banner ===================== */
