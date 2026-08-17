@@ -36,6 +36,7 @@ const profileToTalent = (p) => ({
   languages: Array.isArray(p.languages) ? p.languages : [],
   phone: p.phone || "", email: p.email || "", pitch: p.pitch || "", vehicle: p.vehicle || null,
   availability: p.availability || "open", availableFrom: p.available_from || null, availableNote: p.availability_note || "",
+  payment: p.payment_info || null,
   joinedAt: p.created_at ? new Date(p.created_at).getTime() : null,
 });
 const talentById = (id) => TALENT.find((t) => t.id === id) || PROFILE_DIR[id] || null;
@@ -1105,6 +1106,8 @@ function Shell({ user, posts, jobs, trips, listings, actions, engagement, dm, di
   const [sharedPost, setSharedPost] = useState(null);
   const [searchTerm, setSearchTerm] = useState("");
   const [alertsOpen, setAlertsOpen] = useState(false);
+  const [bkRows] = useBookings("business_id", user.kind === "business" ? user.talentId : null);
+  const pendingBookings = user.kind === "business" ? bkRows.filter((b) => b.status === "requested").length : 0;
   const lastAlertCount = useRef(0);
   const [notifyOn, setNotifyOn] = useState(typeof Notification !== "undefined" && Notification.permission === "granted");
   const [installSheet, setInstallSheet] = useState(false);
@@ -1236,7 +1239,7 @@ function Shell({ user, posts, jobs, trips, listings, actions, engagement, dm, di
             {tab === "trips" && <TripsTab user={user} trips={trips} actions={actions} />}
             {tab === "chats" && <ChatsTab user={user} me={actorId} dm={dm} trips={trips} actions={actions} posts={posts} dirTick={dirTick} onOpenPost={setSharedPost} openWith={dmWith} onOpened={() => setDmWith(null)} onOpenProfile={openProfile} />}
             {tab === "profile" && <TalentProfile talent={talentById(user.talentId)} posts={posts} eng={eng} self onSetAvailability={actions.setAvailability} onOpenProfile={openProfile} onBack={null} />}
-            {tab === "discover" && <Discover onOpen={openProfile} initialQuery={searchTerm} dirTick={dirTick} />}
+            {tab === "discover" && <Discover onOpen={openProfile} initialQuery={searchTerm} dirTick={dirTick} viewerKind={user.kind} />}
             {tab === "requests" && <OperatorJobs user={user} jobs={jobs} listings={listings} posts={posts} actions={actions} eng={eng} onOpen={openProfile} />}
             {tab === "bookings" && <BusinessBookings user={user} />}
             {tab === "feed" && <Feed posts={posts} eng={eng} admin={user.kind === "admin"} onDelete={actions.deletePost} onOpenProfile={openProfile} following={myFollowing} />}
@@ -1276,7 +1279,7 @@ function Shell({ user, posts, jobs, trips, listings, actions, engagement, dm, di
 
       <BottomNav nav={nav} tab={tab}
         setTab={(t) => { setOverlay(null); setSharedPost(null); setTab(t); }}
-        badges={{ jobs: jobsBadge, review: pendingModCount, chats: unreadDm }} />
+        badges={{ jobs: jobsBadge, review: pendingModCount, chats: unreadDm, bookings: pendingBookings }} />
     </>
   );
 }
@@ -1797,27 +1800,31 @@ function Pill({ Icon, children }) {
 }
 
 /* ============================ Discover (operator) ========================= */
-function Discover({ onOpen, initialQuery, dirTick }) {
+function Discover({ onOpen, initialQuery, dirTick, viewerKind }) {
   const [q, setQ] = useState(initialQuery || "");
   useEffect(() => { if (initialQuery) setQ(initialQuery); }, [initialQuery]);
-  const [tab, setTab] = useState("guide");            // guide | driver | business
+  const bizViewer = viewerKind === "business";
+  const [tab, setTab] = useState(bizViewer ? "operator" : "guide");
   const [lang, setLang] = useState(null);
   const [onlyFree, setOnlyFree] = useState(false);
   const [onlyVerified, setOnlyVerified] = useState(false);
   const [bizType, setBizType] = useState(null);
 
-  const POOL = useMemo(() => [...TALENT, ...Object.values(PROFILE_DIR).filter((p) => ["guide", "driver", "business"].includes(p.role))], [dirTick]);
+  const roles = bizViewer ? ["operator", "business"] : ["guide", "driver", "business"];
+  const POOL = useMemo(() => [...TALENT.filter((t) => roles.includes(t.role)), ...Object.values(PROFILE_DIR).filter((p) => roles.includes(p.role))], [dirTick, viewerKind]);
   const counts = useMemo(() => ({
     guide: POOL.filter((t) => t.role === "guide").length,
     driver: POOL.filter((t) => t.role === "driver").length,
+    operator: POOL.filter((t) => t.role === "operator").length,
     business: POOL.filter((t) => t.role === "business").length,
   }), [POOL]);
 
   const isBiz = tab === "business";
+  const peopleTab = tab === "guide" || tab === "driver";
   const list = POOL.filter((t) => t.role === tab)
     .filter((t) => (!onlyVerified || t.verified))
-    .filter((t) => (isBiz || !onlyFree || (t.availability || "open") === "open"))
-    .filter((t) => (isBiz || !lang || (t.languages || []).some((l) => l && l.n === lang)))
+    .filter((t) => (!peopleTab || !onlyFree || (t.availability || "open") === "open"))
+    .filter((t) => (!peopleTab || !lang || (t.languages || []).some((l) => l && l.n === lang)))
     .filter((t) => (!isBiz || !bizType || (t.tags || []).includes(bizType)))
     .filter((t) => {
       const hay = `${t.name || ""} ${t.base || ""} ${(t.tags || []).join(" ")}`.toLowerCase();
@@ -1827,15 +1834,17 @@ function Discover({ onOpen, initialQuery, dirTick }) {
 
   return (
     <div className="px-5 py-4">
-      <SectionLabel trailing={`${list.length} listed`}>{isBiz ? "Find a place" : "Find talent"}</SectionLabel>
+      <SectionLabel trailing={`${list.length} listed`}>{bizViewer ? (isBiz ? "Fellow places" : "Your customers") : isBiz ? "Find a place" : "Find talent"}</SectionLabel>
 
       <Segmented value={tab} onChange={(v) => { setTab(v); setBizType(null); }}
-        options={[["guide", `Guides (${counts.guide})`], ["driver", `Drivers (${counts.driver})`], ["business", `Hotels (${counts.business})`]]} />
+        options={bizViewer
+          ? [["operator", `Tour Operators (${counts.operator})`], ["business", `Hotels (${counts.business})`]]
+          : [["guide", `Guides (${counts.guide})`], ["driver", `Drivers (${counts.driver})`], ["business", `Hotels (${counts.business})`]]} />
 
       <div className="relative mt-3 mb-3">
         <Search size={16} color={C.muted} className="absolute left-3.5 top-1/2 -translate-y-1/2" />
         <input value={q} onChange={(e) => setQ(e.target.value)}
-          placeholder={isBiz ? "Search hotels, farmstays, shops or towns" : "Search name, base or speciality"}
+          placeholder={bizViewer && tab === "operator" ? "Search tour operators" : isBiz ? "Search hotels, farmstays, shops or towns" : "Search name, base or speciality"}
           className="w-full h-11 pl-10 pr-4 rounded-xl text-[14px]" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }} />
       </div>
 
@@ -1843,6 +1852,10 @@ function Discover({ onOpen, initialQuery, dirTick }) {
         <div className="flex gap-2 overflow-x-auto hidescroll pb-1 mb-1.5" style={{ scrollbarWidth: "none" }}>
           <Chip on={!bizType} onClick={() => setBizType(null)}>All places</Chip>
           {ONB_BUSINESS.map((t) => <Chip key={t} on={bizType === t} onClick={() => setBizType(bizType === t ? null : t)}>{t}</Chip>)}
+          <Chip on={onlyVerified} onClick={() => setOnlyVerified((v) => !v)}>Verified only</Chip>
+        </div>
+      ) : tab === "operator" ? (
+        <div className="flex gap-2 overflow-x-auto hidescroll pb-1 mb-1.5" style={{ scrollbarWidth: "none" }}>
           <Chip on={onlyVerified} onClick={() => setOnlyVerified((v) => !v)}>Verified only</Chip>
         </div>
       ) : (
@@ -1854,7 +1867,7 @@ function Discover({ onOpen, initialQuery, dirTick }) {
         </div>
       )}
       <p className="text-[11.5px] mb-3" style={{ color: C.muted }}>
-        {isBiz ? "Hotels, farmstays, boutiques and local businesses \u2014 tap one to see its live availability calendar." : "Tap a person to see their full profile, reviews and availability."}
+        {bizViewer && tab === "operator" ? "These operators bring the tours. Open one and message them to pitch your rooms and offers." : isBiz ? "Hotels, farmstays, boutiques and local businesses \u2014 tap one to see its live availability calendar." : "Tap a person to see their full profile, reviews and availability."}
       </p>
 
       {list.length === 0 ? (
@@ -3912,6 +3925,24 @@ function BusinessBookings({ user }) {
   const [ym, setYm] = useState([now.getFullYear(), now.getMonth()]);
   const [rows, reload] = useBookings("business_id", user.talentId);
   const [busyId, setBusyId] = useState(null);
+  const [pay, setPay] = useState(null);
+  const [payEdit, setPayEdit] = useState(false);
+  const [payForm, setPayForm] = useState({ bank: "", account_name: "", account_number: "", note: "" });
+  const [paySaving, setPaySaving] = useState(false);
+  useEffect(() => {
+    if (!CLOUD || !user.talentId) return;
+    supabase.from("profiles").select("payment_info").eq("id", user.talentId).maybeSingle()
+      .then(({ data }) => { if (data?.payment_info) { setPay(data.payment_info); setPayForm({ bank: "", account_name: "", account_number: "", note: "", ...data.payment_info }); } });
+  }, [user.talentId]);
+  const savePay = async () => {
+    const clean = { bank: payForm.bank.trim(), account_name: payForm.account_name.trim(), account_number: payForm.account_number.trim(), note: payForm.note.trim() };
+    if (!clean.bank || !clean.account_number) return;
+    setPaySaving(true);
+    const { error } = await supabase.from("profiles").update({ payment_info: clean }).eq("id", user.talentId);
+    setPaySaving(false);
+    if (error) { console.error("payment_info save failed:", error.message); return; }
+    setPay(clean); setPayEdit(false);
+  };
   const marks = useMemo(() => bookingMarks(rows), [rows]);
   const pending = rows.filter((b) => b.status === "requested");
   const todayIso = bkDay(new Date());
@@ -3939,6 +3970,37 @@ function BusinessBookings({ user }) {
 
   return (
     <div className="px-5 py-4">
+      <div className="rounded-2xl p-4 mb-4" style={{ background: C.card, border: `1px solid ${pay ? C.line : C.gold}` }}>
+        <div className="flex items-center justify-between">
+          <div className="text-[13px] font-bold tracking-[.1em] uppercase" style={{ color: C.pine }}>Get paid</div>
+          {pay && !payEdit && <button onClick={() => setPayEdit(true)} className="tap text-[12.5px] font-semibold" style={{ color: C.pine }}>Edit</button>}
+        </div>
+        {!payEdit && pay ? (
+          <>
+            <div className="text-[13.5px] mt-2 leading-relaxed" style={{ color: C.ink }}>
+              {[pay.bank, pay.account_name, pay.account_number].filter(Boolean).join(" · ")}{pay.note ? ` · ${pay.note}` : ""}
+            </div>
+            <p className="text-[11.5px] mt-1.5" style={{ color: C.muted }}>Operators see these details the moment you confirm their booking.</p>
+          </>
+        ) : !payEdit ? (
+          <>
+            <p className="text-[12.5px] mt-1.5 leading-snug" style={{ color: C.muted }}>Add your bank or MBoB details once — every operator sees them instantly when you confirm a booking. No chasing payments.</p>
+            <button onClick={() => setPayEdit(true)} className="tap w-full h-10 rounded-xl text-[13.5px] font-semibold mt-2.5" style={{ background: C.pine, color: "#fff" }}>Add payment details</button>
+          </>
+        ) : (
+          <div className="mt-2.5">
+            {[["bank", "Bank (e.g. BOB, BNB)"], ["account_name", "Account name"], ["account_number", "Account number"], ["note", "Note (e.g. MBoB 17xxxxxx) · optional"]].map(([k, ph]) => (
+              <input key={k} value={payForm[k]} onChange={(e) => setPayForm((f) => ({ ...f, [k]: e.target.value }))} placeholder={ph}
+                className="w-full h-11 px-3.5 rounded-xl text-[14px] mb-2" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
+            ))}
+            <div className="flex gap-2">
+              <button onClick={() => setPayEdit(false)} className="tap flex-1 h-10 rounded-xl text-[13.5px] font-semibold" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.muted }}>Cancel</button>
+              <button onClick={savePay} disabled={paySaving || !payForm.bank.trim() || !payForm.account_number.trim()} className="tap flex-1 h-10 rounded-xl text-[13.5px] font-semibold" style={{ background: C.pine, color: "#fff" }}>{paySaving ? "Saving…" : "Save"}</button>
+            </div>
+          </div>
+        )}
+      </div>
+
       <SectionLabel trailing={pending.length ? `${pending.length} pending` : null}>Your calendar</SectionLabel>
       <MonthCal ym={ym} marks={marks} onPrev={() => nav(-1)} onNext={() => nav(1)} onDay={dayTap} />
       <p className="text-[12px] mt-2 mb-5" style={{ color: C.muted }}>Tap a free day to block it. Tap a grey day to free it again. Operators see this calendar live.</p>
@@ -3987,6 +4049,18 @@ function BusinessAvailability({ business, viewer }) {
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState(null);
+  const [bizPay, setBizPay] = useState(null);
+  const [payCopied, setPayCopied] = useState(false);
+  useEffect(() => {
+    if (!CLOUD || !isOperator || !business?.id) return;
+    if (!rows.some((b) => b.operator_id === viewer.talentId && b.status === "confirmed")) return;
+    supabase.from("profiles").select("payment_info").eq("id", business.id).maybeSingle()
+      .then(({ data }) => setBizPay(data?.payment_info || null));
+  }, [rows, business?.id, isOperator]);
+  const payText = bizPay ? [bizPay.bank, bizPay.account_name, bizPay.account_number, bizPay.note].filter(Boolean).join(" · ") : "";
+  const copyPay = async () => {
+    try { await navigator.clipboard?.writeText(payText); setPayCopied(true); setTimeout(() => setPayCopied(false), 2200); } catch (e) {}
+  };
   const nav = (dir) => setYm(([y, m]) => { const d = new Date(y, m + dir, 1); return [d.getFullYear(), d.getMonth()]; });
 
   const request = async () => {
@@ -4037,12 +4111,21 @@ function BusinessAvailability({ business, viewer }) {
       {mine.length > 0 && (
         <div className="mt-3">
           {mine.map((b) => (
-            <div key={b.id} className="rounded-2xl p-3.5 mb-2 flex items-center justify-between gap-3" style={{ background: C.card, border: `1px solid ${C.line}` }}>
-              <div>
-                <div className="text-[13.5px] font-semibold" style={{ color: b.status === "confirmed" ? C.pine : C.ink }}>{b.status === "confirmed" ? "Confirmed" : "Awaiting reply"}</div>
-                <div className="text-[12.5px] mt-0.5" style={{ color: C.muted }}>{fmtRange(b.start_date, b.end_date)}{b.guests ? ` · ${b.guests} guests` : ""}</div>
+            <div key={b.id} className="rounded-2xl p-3.5 mb-2" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <div className="text-[13.5px] font-semibold" style={{ color: b.status === "confirmed" ? C.pine : C.ink }}>{b.status === "confirmed" ? "Confirmed" : "Awaiting reply"}</div>
+                  <div className="text-[12.5px] mt-0.5" style={{ color: C.muted }}>{fmtRange(b.start_date, b.end_date)}{b.guests ? ` · ${b.guests} guests` : ""}</div>
+                </div>
+                <button onClick={() => cancelMine(b.id)} className="tap text-[12.5px] font-semibold px-3 py-2 rounded-lg" style={{ color: C.maroon, border: `1px solid ${C.line}` }}>Cancel</button>
               </div>
-              <button onClick={() => cancelMine(b.id)} className="tap text-[12.5px] font-semibold px-3 py-2 rounded-lg" style={{ color: C.maroon, border: `1px solid ${C.line}` }}>Cancel</button>
+              {b.status === "confirmed" && bizPay && (
+                <div className="mt-2.5 pt-2.5" style={{ borderTop: `1px solid ${C.lineSoft}` }}>
+                  <div className="text-[10.5px] font-bold tracking-[.12em] uppercase mb-1" style={{ color: C.pine }}>Pay {business.name}</div>
+                  <div className="text-[12.5px] leading-relaxed" style={{ color: C.ink }}>{payText}</div>
+                  <button onClick={copyPay} className="tap w-full h-9 rounded-lg text-[12.5px] font-semibold mt-2" style={{ background: C.pineSoft, color: C.pine }}>{payCopied ? "Copied ✓" : "Copy payment details"}</button>
+                </div>
+              )}
             </div>
           ))}
         </div>
