@@ -7,7 +7,7 @@ import {
   Search, LogOut, Newspaper, User, CalendarCheck, MessageCircle,
   Map as MapIcon, MessageSquare, Users, Download, Mic, Video as VideoIcon, Heart, Share2, Trash2, Maximize2, Upload, Loader2, ArrowRight,
   Award, UserX, RefreshCw, FileCheck2, ExternalLink, UserPlus, Send as SendIcon, Lock, Eye, EyeOff, CalendarDays, UserCheck, Plus, CheckCheck, Camera, Navigation as NavIcon, Bell, Smartphone, Share, PhoneCall,
-  ShieldAlert, Store,
+  ShieldAlert, Store, Sparkles,
 } from "lucide-react";
 import mapImg from "./map.jpg";
 import { supabase } from "./supabase.js";
@@ -169,6 +169,69 @@ function videoDuration(file) {
       v.onerror = () => { URL.revokeObjectURL(url); res(null); };
       v.src = url;
     } catch (e) { res(null); }
+  });
+}
+
+/* ---- Photo enhancement: Bhutan-graded presets + per-photo adjustments ---- */
+const LUTS = [
+  { id: "none", n: "Original", p: { bright: 1, contrast: 1, sat: 1, warmth: 0, auto: false } },
+  { id: "auto", n: "Auto fix", p: { bright: 1, contrast: 1.05, sat: 1.07, warmth: 0, auto: true } },
+  { id: "himalaya", n: "Himalaya", p: { bright: 1.02, contrast: 1.14, sat: 1.12, warmth: -0.35, auto: false } },
+  { id: "dzong", n: "Dzong Gold", p: { bright: 1.05, contrast: 1.06, sat: 1.18, warmth: 0.55, auto: false } },
+  { id: "monsoon", n: "Monsoon", p: { bright: 1.03, contrast: 1.08, sat: 0.82, warmth: -0.2, auto: false } },
+  { id: "festival", n: "Festival", p: { bright: 1.02, contrast: 1.1, sat: 1.38, warmth: 0.2, auto: false } },
+  { id: "mist", n: "Mist", p: { bright: 1.08, contrast: 0.92, sat: 0.9, warmth: 0.12, auto: false } },
+];
+
+const enhanceCss = (p) => [
+  `brightness(${p.bright})`, `contrast(${p.contrast})`, `saturate(${p.sat})`,
+  p.warmth > 0 ? `sepia(${(p.warmth * 0.28).toFixed(3)}) saturate(1.05)` : "",
+  p.warmth < 0 ? `hue-rotate(${(p.warmth * 10).toFixed(1)}deg)` : "",
+  p.auto ? "contrast(1.04)" : "",
+].filter(Boolean).join(" ");
+
+function bakeEnhance(dataUri, p) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      try {
+        const c = document.createElement("canvas");
+        c.width = img.width; c.height = img.height;
+        const ctx = c.getContext("2d");
+        ctx.drawImage(img, 0, 0);
+        const id = ctx.getImageData(0, 0, c.width, c.height);
+        const d = id.data;
+        let lo = 0, hi = 255;
+        if (p.auto) {
+          const hist = new Uint32Array(256);
+          for (let i = 0; i < d.length; i += 4) hist[(d[i] * 299 + d[i + 1] * 587 + d[i + 2] * 114) / 1000 | 0]++;
+          const total = d.length / 4;
+          let acc = 0;
+          for (let v = 0; v < 256; v++) { acc += hist[v]; if (acc > total * 0.01) { lo = v; break; } }
+          acc = 0;
+          for (let v = 255; v >= 0; v--) { acc += hist[v]; if (acc > total * 0.01) { hi = v; break; } }
+          if (hi - lo < 24) { lo = 0; hi = 255; }
+        }
+        const stretch = 255 / Math.max(1, hi - lo);
+        const B = (p.bright - 1) * 150;
+        const C2 = p.contrast, S = p.sat, W = p.warmth || 0;
+        for (let i = 0; i < d.length; i += 4) {
+          let r = d[i], g = d[i + 1], b = d[i + 2];
+          if (p.auto) { r = (r - lo) * stretch; g = (g - lo) * stretch; b = (b - lo) * stretch; }
+          r = (r - 128) * C2 + 128 + B; g = (g - 128) * C2 + 128 + B; b = (b - 128) * C2 + 128 + B;
+          const l = r * 0.299 + g * 0.587 + b * 0.114;
+          r = l + (r - l) * S; g = l + (g - l) * S; b = l + (b - l) * S;
+          r += W * 18; g += W * 4; b -= W * 14;
+          d[i] = r < 0 ? 0 : r > 255 ? 255 : r;
+          d[i + 1] = g < 0 ? 0 : g > 255 ? 255 : g;
+          d[i + 2] = b < 0 ? 0 : b > 255 ? 255 : b;
+        }
+        ctx.putImageData(id, 0, 0);
+        resolve(c.toDataURL("image/jpeg", 0.9));
+      } catch (e) { resolve(dataUri); }
+    };
+    img.onerror = () => resolve(dataUri);
+    img.src = dataUri;
   });
 }
 
@@ -1392,7 +1455,7 @@ function PostTab({ user, posts, onAdd, eng, onOpenProfile }) {
                   {mine && p.status !== "approved" && <StatusBadge status={p.status} reason={p.reason} />}
                 </div>
                 {p.text && <p className="text-[15px] leading-relaxed mt-3" style={{ color: C.ink }}>{p.text}</p>}
-                {p.location && p.media && p.media.kind === "photo" ? (
+                {p.location && p.media && p.media.kind === "photo" && !(p.media.slides && p.media.slides.length > 1) ? (
                   <div className="mt-3"><MapCinema location={p.location} photo={p.media.dataUri} /></div>
                 ) : (<>
                   <PostMedia media={p.media} />
@@ -1412,6 +1475,7 @@ function Composer({ talent, onAdd }) {
   const [text, setText] = useState("");
   const [media, setMedia] = useState(null);       // { kind:'photo'|'video', dataUri, slides, ratio }
   const [cropping, setCropping] = useState(null);  // slides currently being reframed
+  const [enhancing, setEnhancing] = useState(false); // colour / light touch-ups
   const [location, setLocation] = useState(null); // { lat, lng, place, description?, source? }
   const [picking, setPicking] = useState(false);
   const [manual, setManual] = useState(false);
@@ -1534,9 +1598,9 @@ function Composer({ talent, onAdd }) {
               <div className="mt-3">
                 <div className="flex items-center justify-between mb-1.5">
                   <span className="text-[11.5px] font-semibold tracking-[.1em] uppercase" style={{ color: C.gold }}>Shape</span>
-                  {(media.slides || []).length > 1 && (
-                    <span className="text-[11.5px]" style={{ color: C.muted }}>{media.slides.length} photos · swipeable</span>
-                  )}
+                  <button onClick={() => setEnhancing(true)} className="tap inline-flex items-center gap-1 text-[11.5px] font-semibold rounded-full px-2.5 py-1" style={{ background: C.goldSoft, color: "#7a5a1e" }}>
+                    <Sparkles size={12} /> Enhance{(media.slides || []).length > 1 ? ` all ${media.slides.length}` : ""}
+                  </button>
                 </div>
                 <div className="flex gap-2">
                   {RATIOS.map((r) => {
@@ -1565,6 +1629,11 @@ function Composer({ talent, onAdd }) {
         </div>
       )}
 
+      {enhancing && media && media.kind === "photo" && (
+        <EnhanceEditor slides={media.slides || [media.dataUri]}
+          onClose={() => setEnhancing(false)}
+          onDone={(out) => { setMedia({ ...media, dataUri: out[0], slides: out }); setEnhancing(false); }} />
+      )}
       {cropping && (
         <CropEditor slides={cropping} initialRatio={media?.ratio || "4 / 5"}
           onClose={() => setCropping(null)}
@@ -1840,7 +1909,7 @@ function Feed({ posts, eng, admin, onDelete, onOpenProfile, following }) {
                   {admin && <DeletePost onConfirm={() => onDelete(p.id)} />}
                 </div>
                 {p.text && <p className="text-[15px] leading-relaxed mt-3" style={{ color: C.ink }}>{p.text}</p>}
-                {p.location && p.media && p.media.kind === "photo" ? (
+                {p.location && p.media && p.media.kind === "photo" && !(p.media.slides && p.media.slides.length > 1) ? (
                   <div className="mt-3"><MapCinema location={p.location} photo={p.media.dataUri} /></div>
                 ) : (<>
                   <PostMedia media={p.media} />
@@ -5794,6 +5863,87 @@ const RATIOS = [
   { id: "4 / 5",  label: "Portrait",  w: 4,    h: 5,    hint: "4:5" },
   { id: "16 / 9", label: "Landscape", w: 16,   h: 9,    hint: "16:9" },
 ];
+
+function EnhanceEditor({ slides, onDone, onClose }) {
+  const [i, setI] = useState(0);
+  const [params, setParams] = useState(() => slides.map(() => ({ preset: "none", bright: 1, contrast: 1, sat: 1, warmth: 0, auto: false })));
+  const [busy, setBusy] = useState(false);
+  const cur = params[i];
+  const setCur = (patch) => setParams((ps) => ps.map((p, k) => (k === i ? { ...p, ...patch, preset: "custom", ...(patch.preset ? { preset: patch.preset } : {}) } : p)));
+  const pickPreset = (l) => setParams((ps) => ps.map((p, k) => (k === i ? { preset: l.id, ...l.p } : p)));
+  const copyAll = () => setParams((ps) => ps.map(() => ({ ...cur })));
+  const many = slides.length > 1;
+
+  const apply = async () => {
+    setBusy(true);
+    const out = [];
+    for (let k = 0; k < slides.length; k++) {
+      const p = params[k];
+      const untouched = !p.auto && p.bright === 1 && p.contrast === 1 && p.sat === 1 && p.warmth === 0;
+      out.push(untouched ? slides[k] : await bakeEnhance(slides[k], p));
+    }
+    setBusy(false);
+    onDone(out);
+  };
+
+  const Slider = ({ label, min, max, step, value, onChange, mid }) => (
+    <div className="mb-2.5">
+      <div className="flex items-center justify-between mb-1">
+        <span className="text-[12px] font-medium text-white" style={{ opacity: .85 }}>{label}</span>
+        <button onClick={() => onChange(mid)} className="tap text-[10.5px]" style={{ color: "rgba(255,255,255,.5)" }}>reset</button>
+      </div>
+      <input type="range" min={min} max={max} step={step} value={value}
+        onChange={(e) => onChange(parseFloat(e.target.value))}
+        className="w-full" style={{ accentColor: C.gold }} />
+    </div>
+  );
+
+  return createPortal((
+    <div className="fixed inset-0 flex flex-col" style={{ background: "#0b0d0b", zIndex: 240, height: "100dvh" }}>
+      <div className="shrink-0 h-14 px-3 flex items-center justify-between" style={{ borderBottom: "1px solid rgba(255,255,255,.12)" }}>
+        <button onClick={onClose} className="tap w-9 h-9 rounded-full flex items-center justify-center" style={{ background: "rgba(255,255,255,.12)" }}>
+          <X size={18} color="#fff" />
+        </button>
+        <span className="text-[15px] font-semibold text-white">Enhance{many ? ` · ${i + 1}/${slides.length}` : ""}</span>
+        <button onClick={apply} disabled={busy} className="tap h-9 px-4 rounded-full text-[14px] font-semibold" style={{ background: C.gold, color: "#fff" }}>
+          {busy ? <Loader2 size={16} className="animate-spin" /> : "Done"}
+        </button>
+      </div>
+
+      <div className="flex-1 min-h-0 flex items-center justify-center relative px-3">
+        <img src={slides[i]} alt="" className="max-w-full max-h-full rounded-lg" style={{ filter: enhanceCss(cur), objectFit: "contain" }} />
+        {many && i > 0 && (
+          <button onClick={() => setI(i - 1)} className="tap absolute left-2 w-9 h-9 rounded-full flex items-center justify-center" style={{ background: "rgba(0,0,0,.5)" }}><ChevronLeft size={18} color="#fff" /></button>
+        )}
+        {many && i < slides.length - 1 && (
+          <button onClick={() => setI(i + 1)} className="tap absolute right-2 w-9 h-9 rounded-full flex items-center justify-center" style={{ background: "rgba(0,0,0,.5)" }}><ChevronLeft size={18} color="#fff" style={{ transform: "rotate(180deg)" }} /></button>
+        )}
+      </div>
+
+      <div className="shrink-0 px-4 pt-3 pb-5 safe-bottom" style={{ borderTop: "1px solid rgba(255,255,255,.12)" }}>
+        <div className="flex gap-2 overflow-x-auto hidescroll pb-2.5" style={{ scrollbarWidth: "none" }}>
+          {LUTS.map((l) => (
+            <button key={l.id} onClick={() => pickPreset(l)} className="tap shrink-0 flex flex-col items-center gap-1">
+              <div className="rounded-lg overflow-hidden" style={{ width: 56, height: 56, border: `2px solid ${cur.preset === l.id ? C.gold : "rgba(255,255,255,.15)"}` }}>
+                <img src={slides[i]} alt="" className="w-full h-full" style={{ objectFit: "cover", filter: enhanceCss(l.p) }} />
+              </div>
+              <span className="text-[10px] font-medium" style={{ color: cur.preset === l.id ? C.gold : "rgba(255,255,255,.65)" }}>{l.n}</span>
+            </button>
+          ))}
+        </div>
+        <Slider label="Brightness" min={0.7} max={1.3} step={0.01} value={cur.bright} mid={1} onChange={(v) => setCur({ bright: v })} />
+        <Slider label="Contrast" min={0.7} max={1.4} step={0.01} value={cur.contrast} mid={1} onChange={(v) => setCur({ contrast: v })} />
+        <Slider label="Colour" min={0} max={1.8} step={0.01} value={cur.sat} mid={1} onChange={(v) => setCur({ sat: v })} />
+        <Slider label="Warmth" min={-1} max={1} step={0.01} value={cur.warmth} mid={0} onChange={(v) => setCur({ warmth: v })} />
+        {many && (
+          <button onClick={copyAll} className="tap w-full h-9 rounded-lg text-[12.5px] font-semibold mt-1" style={{ background: "rgba(255,255,255,.1)", color: "#fff" }}>
+            Apply this look to all {slides.length} photos
+          </button>
+        )}
+      </div>
+    </div>
+  ), document.body);
+}
 
 function CropEditor({ slides, initialRatio, onDone, onClose }) {
   const [ratio, setRatio] = useState(initialRatio || "4 / 5");
