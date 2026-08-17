@@ -2127,6 +2127,7 @@ function TalentProfile({ talent, posts, canRequest, viewer, self, contactOnly, e
   const iFollow = allFollows.some((f) => f.follower === eng?.me && f.following === t.id);
   // Contact details are an operator feature. Guides and drivers message instead.
   const canSeeContact = Boolean(self || canRequest || contactOnly);
+  const gcp = t.role === "guide" && t.guideClass ? GUIDE_CLASSES[t.guideClass] : null;
   const myStories = (eng?.stories || []).filter((st) => st.authorId === t.id);
   const [viewStories, setViewStories] = useState(false);
   const [addStory, setAddStory] = useState(false);
@@ -2140,12 +2141,20 @@ function TalentProfile({ talent, posts, canRequest, viewer, self, contactOnly, e
         {onBack && (
           <button onClick={onBack} className="tap absolute left-4 top-4 z-10 w-9 h-9 rounded-full flex items-center justify-center" style={{ background: "rgba(255,255,255,.9)", border: `1px solid ${C.line}` }}><ChevronLeft size={19} color={C.ink} /></button>
         )}
-        <div className="h-24" style={{ background: `radial-gradient(120% 140% at 80% 0%, ${C.pine} 0%, ${C.pineDeep} 70%)` }} />
+        <div className="h-24" style={{ background: gcp
+          ? `radial-gradient(130% 150% at 80% 0%, ${gcp.color} 0%, ${gcp.color}E6 45%, #16241B 105%)`
+          : `radial-gradient(120% 140% at 80% 0%, ${C.pine} 0%, ${C.pineDeep} 70%)` }}>
+          {gcp && (
+            <span className="absolute left-4 bottom-2.5 text-[10px] font-bold tracking-[.18em] uppercase" style={{ color: "rgba(255,255,255,.9)" }}>
+              {gcp.label}{t.verified ? " ✓" : ""}
+            </span>
+          )}
+        </div>
         <div className="px-5">
           <div className="-mt-9 mb-3 flex items-end gap-3">
             <button onClick={() => myStories.length && setViewStories(true)} className="relative" style={{ cursor: myStories.length ? "pointer" : "default" }}>
               <div className="rounded-2xl flex items-center justify-center" style={{ width: 72, height: 72, background: C.pine, border: `3px solid ${C.bg}`,
-                boxShadow: myStories.length ? `0 0 0 3px ${C.gold}` : "none" }}>
+                boxShadow: myStories.length ? `0 0 0 3px ${C.gold}` : gcp ? `0 0 0 3px ${gcp.color}` : "none" }}>
                 <span className="text-[23px] font-semibold" style={{ color: C.goldSoft }}>{t.initials}</span>
               </div>
               {myStories.length > 0 && (
@@ -2168,7 +2177,17 @@ function TalentProfile({ talent, posts, canRequest, viewer, self, contactOnly, e
               <div className="flex items-center gap-1 text-[13.5px] mt-1" style={{ color: C.muted }}><MapPin size={13} /> {t.role === "guide" && t.guideClass && GUIDE_CLASSES[t.guideClass]
                   ? <span className="font-bold" style={{ color: GUIDE_CLASSES[t.guideClass].color }}>{GUIDE_CLASSES[t.guideClass].label}</span>
                   : roleLabel(t.role)}{t.base ? ` · ${t.base}` : ""}</div>
-              {!["operator", "business"].includes(t.role) && <div className="mt-2"><AvailabilityChip talent={t} /></div>}
+              {!["operator", "business"].includes(t.role) && (
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  {gcp && (
+                    <span className="inline-flex items-center gap-1 text-[11px] font-bold tracking-[.06em] uppercase rounded-lg px-2.5 py-1.5"
+                      style={{ background: gcp.color, color: "#fff" }}>
+                      {t.verified && <BadgeCheck size={12} />} {gcp.label}
+                    </span>
+                  )}
+                  <AvailabilityChip talent={t} />
+                </div>
+              )}
             </div>
           </div>
           <div className="flex items-center mt-4 mb-1">
