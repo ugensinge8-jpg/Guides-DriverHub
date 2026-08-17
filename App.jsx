@@ -3866,7 +3866,7 @@ function useBookings(filterCol, id) {
   useEffect(() => { load(); }, [id]);
   useEffect(() => {
     if (!CLOUD || !id) return;
-    const ch = supabase.channel(`bookings-live-${filterCol}-${id}`)
+    const ch = supabase.channel(`bookings-live-${filterCol}-${id}-${Math.random().toString(36).slice(2, 8)}`)
       .on("postgres_changes", { event: "*", schema: "public", table: "business_bookings" }, load)
       .subscribe();
     return () => { supabase.removeChannel(ch); };
