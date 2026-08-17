@@ -1168,7 +1168,7 @@ function Shell({ user, posts, jobs, trips, listings, actions, engagement, dm, di
       {alertsOpen && (
         <AlertsSheet items={alertItems} onClose={() => setAlertsOpen(false)}
           notifyOn={notifyOn}
-          onEnableNotify={async () => { const r = await askNotificationPermission(); setNotifyOn(r === "granted"); if (r === "granted") ensurePushSubscription(actorId); }}
+          onEnableNotify={async () => { if (typeof Notification !== "undefined" && Notification.permission === "denied") { window.alert("Notifications are blocked for this app. To turn them on: open your phone Settings, find Bhutan Tourism Hub under Apps, and allow Notifications."); return; } const r = await askNotificationPermission(); setNotifyOn(r === "granted"); if (r === "granted") { ensurePushSubscription(actorId); } else if (r === "denied") { window.alert("Notifications were declined. You can turn them on anytime from your phone Settings under Apps."); } }}
           installed={installed}
           onInstall={() => { setAlertsOpen(false); setInstallSheet(true); }}
           onOpenProfile={(id) => { setAlertsOpen(false); openProfile(id); }}
@@ -5237,11 +5237,11 @@ function AlertsSheet({ items, onClose, onOpenProfile, onOpenMessages, onOpenJobs
             <div className="text-[17px] font-semibold" style={{ color: C.ink }}>Notifications</div>
             <span className="text-[12.5px]" style={{ color: C.muted }}>{items.length}</span>
           </div>
-          {!notifyOn && (isIOS() && !installed ? (
+          {!notifyOn && (!installed ? (
             <button onClick={onInstall} className="tap w-full rounded-xl px-3.5 py-2.5 mt-3 flex items-center gap-2.5 text-left" style={{ background: C.goldSoft }}>
-              <Smartphone size={16} color={C.gold} className="shrink-0" />
+              <Download size={16} color={C.gold} className="shrink-0" />
               <span className="text-[12.5px] leading-snug" style={{ color: "#7a5a1e" }}>
-                <b>Add to Home Screen first</b> — on iPhone, alerts only work once the app is installed. Tap to see how.
+                <b>Get the app</b> — install it for fast notifications and instant updates. Tap to see how.
               </span>
             </button>
           ) : (
