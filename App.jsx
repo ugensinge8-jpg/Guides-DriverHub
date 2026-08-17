@@ -30,7 +30,9 @@ const uid = () => (crypto?.randomUUID ? crypto.randomUUID() : String(Date.now() 
 let PROFILE_DIR = {};
 const profileToTalent = (p) => ({
   id: p.id, role: p.role, name: (p.role === "business" && p.company_name) || p.full_name || "Member", base: p.base || "",
-  initials: initialsOf((p.role === "business" && p.company_name) || p.full_name || "?"), years: p.years || 0, trips: 0, rating: null,
+  initials: initialsOf((p.role === "business" && p.company_name) || p.full_name || "?"),
+  years: p.career_start_date ? Math.max(0, Math.floor((Date.now() - new Date(p.career_start_date + "T00:00").getTime()) / 31557600000)) : (p.years || 0),
+  careerStart: p.career_start_date || null, trips: 0, rating: null,
   verified: p.license_status === "verified", licenseStatus: p.license_status || "none",
   guideClass: p.guide_class || null, licenseNo: p.license_no || null, licenseExpiry: p.license_expiry || null, licensePath: p.license_path || null,
   grades: {}, tags: Array.isArray(p.tags) ? p.tags : [],
@@ -1235,6 +1237,7 @@ function Shell({ user, posts, jobs, trips, listings, actions, engagement, dm, di
             <TalentProfile talent={talentById(overlay.talentId)} posts={posts} eng={eng}
               onOpenProfile={openProfile}
               onMessage={(id) => { setOverlay(null); setTab("chats"); setDmWith(id); }}
+              onProfileSaved={actions.reloadDirectory}
               canRequest={user.kind === "operator" && ["guide", "driver"].includes(talentById(overlay.talentId)?.role)} viewer={user} self={user.talentId === overlay.talentId} contactOnly={["operator", "admin"].includes(user.kind)}
               onRequest={() => setOverlay({ type: "request", talentId: overlay.talentId })}
               onBack={() => setOverlay(null)} />
@@ -1249,7 +1252,7 @@ function Shell({ user, posts, jobs, trips, listings, actions, engagement, dm, di
             {tab === "jobs" && <JobsHub user={user} jobs={jobs} listings={listings} actions={actions} />}
             {tab === "trips" && <TripsTab user={user} trips={trips} actions={actions} onMessage={(id) => { setTab("chats"); setDmWith(id); }} />}
             {tab === "chats" && <ChatsTab user={user} me={actorId} dm={dm} trips={trips} actions={actions} posts={posts} dirTick={dirTick} onOpenPost={setSharedPost} openWith={dmWith} onOpened={() => setDmWith(null)} onOpenProfile={openProfile} />}
-            {tab === "profile" && <TalentProfile talent={talentById(user.talentId)} posts={posts} eng={eng} self onSetAvailability={actions.setAvailability} onOpenProfile={openProfile} onBack={null} />}
+            {tab === "profile" && <TalentProfile talent={talentById(user.talentId)} posts={posts} eng={eng} self onSetAvailability={actions.setAvailability} onOpenProfile={openProfile} onProfileSaved={actions.reloadDirectory} onBack={null} />}
             {tab === "discover" && <Discover onOpen={openProfile} initialQuery={searchTerm} dirTick={dirTick} viewerKind={user.kind} />}
             {tab === "requests" && <OperatorJobs user={user} jobs={jobs} listings={listings} posts={posts} actions={actions} eng={eng} onOpen={openProfile} />}
             {tab === "bookings" && <BusinessBookings user={user} />}
@@ -2127,7 +2130,7 @@ function ModCard({ post, onApprove, onReject, eng }) {
 }
 
 /* ============================= Talent profile ============================ */
-function TalentProfile({ talent, posts, canRequest, viewer, self, contactOnly, eng, onRequest, onMessage, onSetAvailability, onOpenProfile, onBack }) {
+function TalentProfile({ talent, posts, canRequest, viewer, self, contactOnly, eng, onRequest, onMessage, onSetAvailability, onOpenProfile, onProfileSaved, onBack }) {
   const t = talent;
   const live = posts.filter((p) => p.talentId === t.id && p.status === "approved").length;
   const located = posts.filter((p) => p.talentId === t.id && p.status === "approved" && p.location);
@@ -2154,6 +2157,7 @@ function TalentProfile({ talent, posts, canRequest, viewer, self, contactOnly, e
   const [shareToStory, setShareToStory] = useState(null);
   const [listMode, setListMode] = useState(null);
   const [credsOpen, setCredsOpen] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
   const [askOperator, setAskOperator] = useState(false);
   return (
     <div className="pb-6">
@@ -2217,6 +2221,10 @@ function TalentProfile({ talent, posts, canRequest, viewer, self, contactOnly, e
             <Stat n={t.years} label="yrs" />
           </div>
 
+          {self && ["guide", "driver"].includes(t.role) && (
+            <button onClick={() => setEditOpen(true)} className="tap w-full h-11 rounded-xl text-[14px] font-semibold mt-3"
+              style={{ background: C.card, border: `1.5px solid ${C.pine}`, color: C.pine }}>Edit profile</button>
+          )}
           {!self && (
             <div className="flex gap-2 mt-3">
               <button onClick={() => eng?.toggleFollow && eng.toggleFollow(t.id)}
@@ -2360,6 +2368,7 @@ function TalentProfile({ talent, posts, canRequest, viewer, self, contactOnly, e
       {addStory && <AddStory onClose={() => setAddStory(false)} onAdd={eng?.addStory} />}
       {askOperator && <OperatorInvite user={{ name: t.name, talentId: t.id, id: t.id, kind: t.role }} trip={null} onClose={() => setAskOperator(false)} />}
 
+      {editOpen && <EditProfileSheet talent={t} onClose={() => setEditOpen(false)} onSaved={onProfileSaved} />}
       {credsOpen && <CredentialsPage talent={t} self={self} onClose={() => setCredsOpen(false)} />}
       {listMode && (
         <FollowListSheet mode={listMode} talent={t} eng={eng} onClose={() => setListMode(null)}
@@ -3849,7 +3858,7 @@ function AdminUsers({ onChanged, currentAdminId }) {
                     {u.guide_class && GUIDE_CLASSES[u.guide_class] && (
                       <span className="text-[11px] font-bold rounded-full px-2 py-0.5" style={{ background: GUIDE_CLASSES[u.guide_class].color, color: "#fff" }}>{GUIDE_CLASSES[u.guide_class].label}</span>
                     )}
-                    <span className="text-[12px]" style={{ color: C.muted }}>{u.license_no || "no number"}{u.license_expiry ? ` · exp ${u.license_expiry}` : ""}</span>
+                    <span className="text-[12px]" style={{ color: C.muted }}>{u.license_no || "no number"}{u.license_expiry ? ` · exp ${u.license_expiry}` : ""}{u.career_start_date ? ` · joined ${u.career_start_date}` : ""}</span>
                   </div>
                 )}
 
@@ -5376,6 +5385,73 @@ function FollowListSheet({ mode, talent, eng, onClose, onOpenProfile }) {
             );
           })}
         </div>
+      </div>
+    </div>
+  ), document.body);
+}
+
+/* ======================= Edit profile (bio + joining date) ======================= */
+function EditProfileSheet({ talent, onClose, onSaved }) {
+  const [bio, setBio] = useState(talent.pitch || "");
+  const [start, setStart] = useState(talent.careerStart || "");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const startValid = !start || new Date(start + "T00:00") <= new Date();
+  const yearsPreview = start && startValid
+    ? Math.max(0, Math.floor((Date.now() - new Date(start + "T00:00").getTime()) / 31557600000))
+    : null;
+
+  const save = async () => {
+    if (!startValid) { setErr("The joining date can't be in the future."); return; }
+    setBusy(true); setErr(null);
+    const { error } = await supabase.from("profiles").update({
+      pitch: bio.trim() || null,
+      career_start_date: start || null,
+    }).eq("id", talent.id);
+    setBusy(false);
+    if (error) { setErr(error.message || "Couldn't save — try again."); return; }
+    onSaved && onSaved();
+    onClose();
+  };
+
+  return createPortal((
+    <div className="fixed inset-0 flex flex-col fade" style={{ background: C.bg, zIndex: 225, paddingTop: "var(--sa-top)" }}>
+      <div className="h-14 px-4 flex items-center gap-3 shrink-0" style={{ borderBottom: `1px solid ${C.lineSoft}`, background: C.card }}>
+        <button onClick={onClose} className="tap w-9 h-9 rounded-full flex items-center justify-center" style={{ border: `1px solid ${C.line}`, background: C.bg }}>
+          <ChevronLeft size={19} color={C.ink} />
+        </button>
+        <div className="text-[16px] font-semibold flex-1" style={{ color: C.ink }}>Edit profile</div>
+        <button onClick={save} disabled={busy} className="tap h-9 px-4 rounded-full text-[14px] font-semibold" style={{ background: C.pine, color: "#fff" }}>
+          {busy ? <Loader2 size={15} className="animate-spin" /> : "Save"}
+        </button>
+      </div>
+
+      <div className="flex-1 overflow-y-auto hidescroll px-5 py-5" style={{ scrollbarWidth: "none" }}>
+        <div className="text-[13px] font-semibold mb-1.5" style={{ color: C.ink }}>About you</div>
+        <textarea value={bio} onChange={(e) => setBio(e.target.value)} rows={4} maxLength={240}
+          placeholder="A short bio — who you are, what you show travellers, and what makes your trips yours."
+          className="w-full px-3.5 py-3 rounded-xl text-[14.5px] leading-relaxed resize-none"
+          style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }} />
+        <div className="text-[11px] text-right mt-1" style={{ color: C.muted }}>{bio.length}/240</div>
+
+        <div className="text-[13px] font-semibold mt-5 mb-1.5" style={{ color: C.ink }}>Working since — Date of Joining</div>
+        <input type="date" value={start} onChange={(e) => { setStart(e.target.value); setErr(null); }}
+          className="w-full h-12 px-3.5 rounded-xl text-[15px]"
+          style={{ background: C.card, border: `1px solid ${!startValid ? C.maroon : C.line}`, color: start ? C.ink : C.muted }} />
+        <p className="text-[11.5px] mt-1.5 leading-snug" style={{ color: C.muted }}>
+          Enter it exactly as printed on your government Date-of-Joining certificate, and upload that certificate in
+          Credentials & Licence so admin can verify it with the Department.
+        </p>
+        {yearsPreview != null && (
+          <div className="inline-flex items-center gap-2 rounded-xl px-3 py-2 mt-2.5" style={{ background: C.pineSoft }}>
+            <CalendarDays size={14} color={C.pine} />
+            <span className="text-[13px] font-semibold" style={{ color: C.pine }}>
+              = {yearsPreview} year{yearsPreview === 1 ? "" : "s"} of experience — updates itself every year
+            </span>
+          </div>
+        )}
+        {!startValid && <p className="text-[12.5px] mt-2" style={{ color: C.maroon }}>The joining date can't be in the future.</p>}
+        {err && <p className="text-[12.5px] mt-2" style={{ color: C.maroon }}>{err}</p>}
       </div>
     </div>
   ), document.body);
