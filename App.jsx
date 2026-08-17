@@ -922,8 +922,9 @@ export default function App() {
         .tap{ transition: transform .12s ease, background .15s ease, box-shadow .15s ease, border-color .15s ease; }
         .tap:active{ transform: scale(.985); }
         .hidescroll::-webkit-scrollbar{ display:none; }
-        @media (prefers-reduced-motion: no-preference){ .fade{ animation: fade .28s ease both; } }
+        @media (prefers-reduced-motion: no-preference){ .fade{ animation: fade .28s ease both; } .dropin{ animation: dropin .26s ease both; } }
         @keyframes fade{ from{ opacity:0; transform: translateY(4px);} }
+        @keyframes dropin{ from{ opacity:0; transform: translateY(-28px);} }
         .fade{ animation-duration:.2s; }
         textarea:focus, input:focus{ outline:none; border-color:${C.pine}!important; box-shadow:0 0 0 3px ${C.pine}1f; }
         textarea::placeholder, input::placeholder{ color:${C.muted}; opacity:.7; }
@@ -5181,11 +5182,13 @@ function FollowListSheet({ mode, talent, eng, onClose, onOpenProfile }) {
   const people = ids.map((id) => talentById(id)).filter(Boolean);
 
   return createPortal((
-    <div className="fixed inset-0 flex items-end" style={{ background: "rgba(8,10,8,.55)", zIndex: 220 }} onClick={onClose}>
-      <div className="w-full rounded-t-3xl flex flex-col safe-bottom" style={{ background: C.card, maxHeight: "80dvh" }} onClick={(e) => e.stopPropagation()}>
-        <div className="p-5 pb-2 shrink-0">
-          <div className="w-10 h-1 rounded-full mx-auto mb-4" style={{ background: C.line }} />
-          <div className="text-[17px] font-semibold" style={{ color: C.ink }}>
+    <div className="fixed inset-0 flex flex-col fade" style={{ background: C.bg, zIndex: 220, paddingTop: "var(--sa-top)" }}>
+      <div className="w-full flex-1 min-h-0 flex flex-col" style={{ background: C.bg }} onClick={(e) => e.stopPropagation()}>
+        <div className="h-14 px-4 flex items-center gap-3 shrink-0" style={{ borderBottom: `1px solid ${C.lineSoft}`, background: C.card }}>
+          <button onClick={onClose} className="tap w-9 h-9 rounded-full flex items-center justify-center" style={{ border: `1px solid ${C.line}`, background: C.bg }}>
+            <ChevronLeft size={19} color={C.ink} />
+          </button>
+          <div className="text-[16px] font-semibold" style={{ color: C.ink }}>
             {mode === "followers" ? "Followers" : "Following"} · {people.length}
           </div>
         </div>
@@ -5523,10 +5526,9 @@ function AlertsSheet({ items, onClose, onOpenProfile, onOpenMessages, onOpenJobs
   const earlier = items.filter((a) => Date.now() - a.ts >= 86400e3);
 
   return createPortal((
-    <div className="fixed inset-0 flex items-end" style={{ background: "rgba(8,10,8,.55)", zIndex: 230 }} onClick={onClose}>
-      <div className="w-full rounded-t-3xl flex flex-col safe-bottom" style={{ background: C.card, maxHeight: "80dvh" }} onClick={(e) => e.stopPropagation()}>
+    <div className="fixed inset-0 flex items-start" style={{ background: "rgba(8,10,8,.55)", zIndex: 230 }} onClick={onClose}>
+      <div className="w-full rounded-b-3xl flex flex-col dropin" style={{ background: C.card, maxHeight: "82dvh", paddingTop: "var(--sa-top)", boxShadow: "0 18px 40px rgba(8,10,8,.35)" }} onClick={(e) => e.stopPropagation()}>
         <div className="p-5 pb-2 shrink-0">
-          <div className="w-10 h-1 rounded-full mx-auto mb-4" style={{ background: C.line }} />
           <div className="flex items-center justify-between">
             <div className="text-[17px] font-semibold" style={{ color: C.ink }}>Notifications</div>
             <span className="text-[12.5px]" style={{ color: C.muted }}>{items.length}</span>
