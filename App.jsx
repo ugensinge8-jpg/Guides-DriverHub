@@ -577,6 +577,15 @@ export default function App() {
       setPosts((p) => [{ id: uid(), talentId, text, media: media || null, location: location || null, status: "pending", reason: null, createdAt: Date.now() }, ...p]);
       return;
     }
+    // Guard: the signed-in identity must match the author. Switching accounts in
+    // another tab swaps the shared session and would make the database reject the post.
+    const { data: sessData } = await supabase.auth.getSession();
+    const liveUid = sessData?.session?.user?.id || null;
+    if (!liveUid) return { ok: false, reason: "auth" };
+    if (liveUid !== talentId) {
+      console.error("addPost: session/user mismatch", { liveUid, talentId });
+      return { ok: false, reason: "session" };
+    }
     let up = { media_url: null, media_kind: null };
     let slideUrls = [];
     if (media) {
@@ -1578,8 +1587,10 @@ function Composer({ talent, onAdd }) {
   const post = () => {
     if (!text.trim() && !media) return;
     Promise.resolve(onAdd({ talentId: talent.id, text: text.trim(), media, location })).then((res) => {
-      if (res && res.ok === false) setError(res.reason === "upload"
-        ? "The photos didn't upload — check your connection and try posting again."
+      if (res && res.ok === false) setError(
+        res.reason === "upload" ? "Some photos didn't finish uploading — check your connection and try again."
+        : res.reason === "session" ? "Your signed-in account changed (another tab?). Close and reopen the app, then post again."
+        : res.reason === "auth" ? "You've been signed out — sign in again to post."
         : "The post couldn't be saved — please try again.");
     });
     setText(""); setMedia(null); setLocation(null); setPicking(false); setManual(false);
