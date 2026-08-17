@@ -600,10 +600,12 @@ export default function App() {
       talent_id: talentId, body: text || null,
       media_url: up.media_url, media_kind: up.media_kind,
       media_slides: slideUrls.length > 1 ? slideUrls : null, media_ratio: media?.ratio || null,
-      lat: location?.lat ?? null, lng: location?.lng ?? null,
-      place: location?.place ?? null, loc_desc: location?.description ?? null, loc_source: location?.source ?? null,
+      lat: location && isValidLatLng(location.lat, location.lng) ? location.lat : null,
+      lng: location && isValidLatLng(location.lat, location.lng) ? location.lng : null,
+      place: location && isValidLatLng(location.lat, location.lng) ? (location.place ?? null) : null,
+      loc_desc: location?.description ?? null, loc_source: location?.source ?? null,
       loc_altitude: location?.altitude ?? null, loc_bearing: location?.bearing ?? null, loc_taken_on: location?.takenOn ?? null,
-      loc_outside: location?.outside ?? false,
+      loc_outside: (location && isValidLatLng(location.lat, location.lng)) ? (location.outside ?? false) : false,
     });
     if (postErr) { console.error("posts.insert failed:", postErr.message); return { ok: false, reason: "insert" }; }
     fetchPosts();
@@ -1519,7 +1521,7 @@ function Composer({ talent, onAdd }) {
       setCropping(slides);
       // read location from the first photo only
       if (!existing.length) readExifGps(imgs[0]).then((gps) => {
-        if (gps && gps.lat != null) {
+        if (gps && isValidLatLng(gps.lat, gps.lng)) {
           const inBT = insideBhutan(gps.lat, gps.lng);
           setLocation({
             lat: gps.lat, lng: gps.lng, place: nearestPlace(gps.lat, gps.lng), source: "photo",
@@ -2972,6 +2974,11 @@ function parseExifGps(view, tiff) {
   let la = dec(lat), lo = dec(lng);
   if (latRef === "S") la = -la;
   if (lngRef === "W") lo = -lo;
+  // Zeroed or impossible GPS tags mean "no location" — 0,0 is Null Island in the
+  // Atlantic, where every broken GPS reading on earth ends up. Never a real photo.
+  if (!isFinite(la) || !isFinite(lo)) return null;
+  if (Math.abs(la) < 0.0005 && Math.abs(lo) < 0.0005) return null;
+  if (Math.abs(la) > 90 || Math.abs(lo) > 180) return null;
   return {
     lat: +la.toFixed(6), lng: +lo.toFixed(6),
     altitude: alt != null ? Math.round(altRef === 1 ? -alt : alt) : null,
@@ -2994,9 +3001,15 @@ function kmBetween(aLat, aLng, bLat, bLng) {
   return 2 * R * Math.asin(Math.sqrt(x));
 }
 
+function isValidLatLng(lat, lng) {
+  return Number.isFinite(lat) && Number.isFinite(lng)
+    && Math.abs(lat) <= 90 && Math.abs(lng) <= 180
+    && !(Math.abs(lat) < 0.001 && Math.abs(lng) < 0.001);   // 0,0 = Null Island = broken GPS
+}
+
 function placeLabel(loc) {
   if (!loc) return "";
-  if (loc.outside || !insideBhutan(loc.lat, loc.lng)) return "Outside Bhutan";
+  if (loc.outside || !insideBhutan(loc.lat, loc.lng)) return `Outside Bhutan (${Number(loc.lat).toFixed(3)}\u00b0, ${Number(loc.lng).toFixed(3)}\u00b0)`;
   if (!loc.place) return "Pinned in Bhutan";
   return loc.source === "viewpoint" ? loc.place : `Near ${loc.place}`;
 }
