@@ -32,6 +32,7 @@ const profileToTalent = (p) => ({
   id: p.id, role: p.role, name: (p.role === "business" && p.company_name) || p.full_name || "Member", base: p.base || "",
   initials: initialsOf((p.role === "business" && p.company_name) || p.full_name || "?"), years: p.years || 0, trips: 0, rating: null,
   verified: p.license_status === "verified", licenseStatus: p.license_status || "none",
+  guideClass: p.guide_class || null, licenseNo: p.license_no || null, licenseExpiry: p.license_expiry || null,
   grades: {}, tags: Array.isArray(p.tags) ? p.tags : [],
   languages: Array.isArray(p.languages) ? p.languages : [],
   phone: p.phone || "", email: p.email || "", pitch: p.pitch || "", vehicle: p.vehicle || null,
@@ -1356,9 +1357,12 @@ function BottomNav({ nav, tab, setTab, badges }) {
 }
 
 /* ============================== Shared bits =============================== */
-function Avatar({ initials, size = 40 }) {
+function Avatar({ initials, size = 40, ring = null, ringDashed = false }) {
+  const ringStyle = !ring ? {} : ringDashed
+    ? { outline: `2.5px dashed ${ring}`, outlineOffset: 1.5 }
+    : { boxShadow: `0 0 0 2.5px ${ring}` };
   return (
-    <div className="rounded-xl flex items-center justify-center shrink-0" style={{ width: size, height: size, background: C.pine }}>
+    <div className="rounded-xl flex items-center justify-center shrink-0" style={{ width: size, height: size, background: C.pine, ...ringStyle }}>
       <span className="font-semibold" style={{ color: C.goldSoft, fontSize: size * 0.38 }}>{initials}</span>
     </div>
   );
@@ -1438,6 +1442,19 @@ function prettyNumber(raw) {
   if (d.startsWith("+975") && d.length === 12) return `+975 ${d.slice(4, 6)} ${d.slice(6, 9)} ${d.slice(9)}`;
   return d;
 }
+
+const GUIDE_CLASSES = {
+  cultural:          { label: "Cultural Guide",      short: "Cultural",    color: "#2B5FA3", rank: 1 },
+  cultural_trekking: { label: "Cultural & Trekking", short: "Cul & Trek",  color: "#1F6B45", rank: 2 },
+  senior:            { label: "Senior Guide",        short: "Senior",      color: "#7A1F2B", rank: 3 },
+  tour_leader:       { label: "Tour Leader",         short: "Tour Leader", color: "#E8531F", rank: 4 },
+};
+const parseGuideClass = (no) => {
+  const m = String(no || "").trim().toUpperCase().match(/^(CTG|CG|STG|TL)\s?-?\s?\d{4,8}$/);
+  if (!m) return null;
+  return { CG: "cultural", CTG: "cultural_trekking", STG: "senior", TL: "tour_leader" }[m[1]] || null;
+};
+const guideClassRank = (t) => (t.guideClass && GUIDE_CLASSES[t.guideClass] ? GUIDE_CLASSES[t.guideClass].rank : 9);
 
 const roleLabel = (r) => (r === "guide" ? "Guide" : r === "operator" ? "Tour Operator" : r === "business" ? "Business" : r === "admin" ? "Admin" : r === "both" ? "Guide + Driver" : "Driver");
 
@@ -1810,6 +1827,7 @@ function Discover({ onOpen, initialQuery, dirTick, viewerKind }) {
   const [onlyFree, setOnlyFree] = useState(false);
   const [onlyVerified, setOnlyVerified] = useState(false);
   const [bizType, setBizType] = useState(null);
+  const [gClass, setGClass] = useState(null);
 
   const roles = bizViewer ? ["operator", "business"] : ["guide", "driver", "business"];
   const POOL = useMemo(() => [...TALENT.filter((t) => roles.includes(t.role)), ...Object.values(PROFILE_DIR).filter((p) => roles.includes(p.role))], [dirTick, viewerKind]);
@@ -1824,6 +1842,7 @@ function Discover({ onOpen, initialQuery, dirTick, viewerKind }) {
   const peopleTab = tab === "guide" || tab === "driver";
   const list = POOL.filter((t) => t.role === tab)
     .filter((t) => (!onlyVerified || t.verified))
+    .filter((t) => (tab !== "guide" || !gClass || t.guideClass === gClass))
     .filter((t) => (!peopleTab || !onlyFree || (t.availability || "open") === "open"))
     .filter((t) => (!peopleTab || !lang || (t.languages || []).some((l) => l && l.n === lang)))
     .filter((t) => (!isBiz || !bizType || (t.tags || []).includes(bizType)))
@@ -1831,13 +1850,13 @@ function Discover({ onOpen, initialQuery, dirTick, viewerKind }) {
       const hay = `${t.name || ""} ${t.base || ""} ${(t.tags || []).join(" ")}`.toLowerCase();
       return hay.includes(q.toLowerCase());
     })
-    .sort((a, b) => (b.rating || 0) - (a.rating || 0) || String(a.name).localeCompare(String(b.name)));
+    .sort((a, b) => (tab === "guide" ? guideClassRank(a) - guideClassRank(b) : 0) || (b.rating || 0) - (a.rating || 0) || String(a.name).localeCompare(String(b.name)));
 
   return (
     <div className="px-5 py-4">
       <SectionLabel trailing={`${list.length} listed`}>{bizViewer ? (isBiz ? "Fellow places" : "Your customers") : isBiz ? "Find a place" : "Find talent"}</SectionLabel>
 
-      <Segmented value={tab} onChange={(v) => { setTab(v); setBizType(null); }}
+      <Segmented value={tab} onChange={(v) => { setTab(v); setBizType(null); setGClass(null); }}
         options={bizViewer
           ? [["operator", `Tour Operators (${counts.operator})`], ["business", `Hotels (${counts.business})`]]
           : [["guide", `Guides (${counts.guide})`], ["driver", `Drivers (${counts.driver})`], ["business", `Hotels (${counts.business})`]]} />
@@ -1863,6 +1882,12 @@ function Discover({ onOpen, initialQuery, dirTick, viewerKind }) {
         <div className="flex gap-2 overflow-x-auto hidescroll pb-1 mb-1.5" style={{ scrollbarWidth: "none" }}>
           <Chip on={onlyFree} onClick={() => setOnlyFree((v) => !v)}>Available now</Chip>
           <Chip on={onlyVerified} onClick={() => setOnlyVerified((v) => !v)}>Verified only</Chip>
+          {tab === "guide" && Object.entries(GUIDE_CLASSES).map(([k, v]) => (
+            <button key={k} onClick={() => setGClass(gClass === k ? null : k)} className="tap shrink-0 rounded-full px-3 py-1.5 text-[13px] font-medium inline-flex items-center gap-1.5"
+              style={{ background: gClass === k ? v.color : C.card, border: `1px solid ${gClass === k ? v.color : C.line}`, color: gClass === k ? "#fff" : C.ink }}>
+              <span className="w-2 h-2 rounded-full shrink-0" style={{ background: gClass === k ? "#fff" : v.color }} /> {v.short}
+            </button>
+          ))}
           <Chip on={!lang} onClick={() => setLang(null)}>All languages</Chip>
           {LANG_OPTIONS.map((l) => <Chip key={l} on={lang === l} onClick={() => setLang(lang === l ? null : l)}>{l}</Chip>)}
         </div>
@@ -1884,10 +1909,11 @@ function Chip({ on, onClick, children }) {
 }
 
 function TalentCard({ t, onOpen }) {
+  const gc = t.role === "guide" && t.guideClass ? GUIDE_CLASSES[t.guideClass] || null : null;
   return (
     <button onClick={onOpen} className="tap w-full text-left rounded-2xl p-4" style={{ background: C.card, border: `1px solid ${C.line}` }}>
       <div className="flex items-center gap-3.5">
-        <Avatar initials={t.initials} size={48} />
+        <Avatar initials={t.initials} size={48} ring={gc ? gc.color : null} ringDashed={gc ? !t.verified : false} />
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-1.5">
             <span className="text-[15.5px] font-semibold truncate" style={{ color: C.ink }}>{t.name}</span>
@@ -1903,6 +1929,11 @@ function TalentCard({ t, onOpen }) {
         </div>
       </div>
       <div className="flex flex-wrap items-center gap-1.5 mt-3">
+        {gc && (
+          <span className="text-[11px] font-bold rounded-full px-2 py-1" style={{ background: gc.color, color: "#fff", opacity: t.verified ? 1 : 0.65 }}>
+            {gc.short}{t.verified ? "" : " · pending"}
+          </span>
+        )}
         <AvailabilityChip talent={t} />
         {(t.languages || []).slice(0, 3).map((l) => (
           <span key={l.n} className="text-[11.5px] rounded-md px-1.5 py-0.5" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.muted }}>{l.n}</span>
@@ -3767,6 +3798,14 @@ function AdminUsers({ onChanged, currentAdminId }) {
                 </div>
 
                 <div className="text-[12.5px] mt-2 break-all" style={{ color: C.muted }}>{u.email}</div>
+                {u.role === "guide" && (u.license_no || u.guide_class) && (
+                  <div className="flex flex-wrap items-center gap-2 mt-1.5">
+                    {u.guide_class && GUIDE_CLASSES[u.guide_class] && (
+                      <span className="text-[11px] font-bold rounded-full px-2 py-0.5" style={{ background: GUIDE_CLASSES[u.guide_class].color, color: "#fff" }}>{GUIDE_CLASSES[u.guide_class].label}</span>
+                    )}
+                    <span className="text-[12px]" style={{ color: C.muted }}>{u.license_no || "no number"}{u.license_expiry ? ` · exp ${u.license_expiry}` : ""}</span>
+                  </div>
+                )}
 
                 <div className="flex gap-2 mt-3">
                   <button onClick={() => viewLicense(u)} className="tap flex-1 h-10 rounded-xl text-[13px] font-semibold inline-flex items-center justify-center gap-1.5"
@@ -4189,6 +4228,10 @@ function Onboard({ mode: initialMode, session, onBack, onDone }) {
   const [showPw, setShowPw] = useState(false);
   const [reset, setReset] = useState(false);
   const [licPreview, setLicPreview] = useState(null);
+  const [licNo, setLicNo] = useState("");
+  const [licExpiry, setLicExpiry] = useState("");
+  const licClass = role === "guide" ? parseGuideClass(licNo) : null;
+  const licValid = licExpiry ? new Date(licExpiry + "T00:00") > new Date() : false;
   const licRef = useRef();
   const effUid = uid || session?.user?.id || null;
 
@@ -4271,6 +4314,9 @@ function Onboard({ mode: initialMode, session, onBack, onDone }) {
       company_name: ["operator", "business"].includes(role) ? (company.trim() || name.trim()) : null,
       years, pitch: pitch.trim() || null, languages: langs, tags,
       vehicle: role === "driver" ? vehicle : null,
+      guide_class: role === "guide" && licClass && licValid ? licClass : null,
+      license_no: role === "guide" ? (licNo.trim() || null) : null,
+      license_expiry: role === "guide" ? (licExpiry || null) : null,
       license_path: licensePath || null, license_status: licensePath ? "submitted" : "none",
     });
     if (!error && vaultEmail) {
@@ -4591,8 +4637,32 @@ function Onboard({ mode: initialMode, session, onBack, onDone }) {
             </button>
           )}
           <input ref={licRef} type="file" accept="image/*" onChange={pickLicense} className="hidden" />
+          {role === "guide" && (
+            <div className="mb-4">
+              <input value={licNo} onChange={(e) => setLicNo(e.target.value.toUpperCase())} autoCapitalize="characters"
+                placeholder="License number — e.g. CTG930769"
+                className="w-full h-12 px-4 rounded-xl text-[15px] mb-2" style={{ background: C.card, border: `1px solid ${licNo && !licClass ? C.maroon : C.line}`, color: C.ink }} />
+              <input type="date" value={licExpiry} onChange={(e) => setLicExpiry(e.target.value)}
+                className="w-full h-12 px-4 rounded-xl text-[15px] mb-2" style={{ background: C.card, border: `1px solid ${licExpiry && !licValid ? C.maroon : C.line}`, color: licExpiry ? C.ink : C.muted }} />
+              {licNo && !licClass && (
+                <p className="text-[12.5px]" style={{ color: C.maroon }}>Number not recognised — it starts with CG, CTG, STG or TL as printed on your card.</p>
+              )}
+              {licClass && (
+                <div className="rounded-xl p-3 flex items-center gap-2.5" style={{ background: `${GUIDE_CLASSES[licClass].color}14`, border: `1.5px solid ${GUIDE_CLASSES[licClass].color}` }}>
+                  <span className="w-3 h-3 rounded-full shrink-0" style={{ background: GUIDE_CLASSES[licClass].color }} />
+                  <span className="text-[13.5px] font-semibold" style={{ color: GUIDE_CLASSES[licClass].color }}>
+                    {GUIDE_CLASSES[licClass].label}{licExpiry ? (licValid ? " · valid" : " · EXPIRED") : ""}
+                  </span>
+                </div>
+              )}
+              {licClass && licExpiry && !licValid && (
+                <p className="text-[12.5px] mt-1.5" style={{ color: C.maroon }}>This license has expired — renew with the Department of Tourism. Your class colour switches on once a valid expiry is set.</p>
+              )}
+              <p className="text-[11.5px] mt-1.5" style={{ color: C.muted }}>Your class is read from the number and confirmed by our team against the photo.</p>
+            </div>
+          )}
           {err && <p className="text-[13px] mb-3" style={{ color: C.maroon }}>{err}</p>}
-          <OCta disabled={!licPreview} busy={busy} onClick={submitLicense}>Submit & enter the hub</OCta>
+          <OCta disabled={!licPreview || (role === "guide" && (!licClass || !licExpiry))} busy={busy} onClick={submitLicense}>Submit & enter the hub</OCta>
           <button onClick={() => finish(null)} disabled={busy} className="tap w-full text-[13.5px] font-medium mt-3" style={{ color: C.muted }}>Skip for now — I’ll add it later</button>
           <div className="rounded-xl p-3 flex gap-2.5 mt-4" style={{ background: C.goldSoft }}>
             <ShieldCheck size={16} color={C.maroon} className="shrink-0 mt-0.5" />
