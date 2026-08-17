@@ -32,7 +32,7 @@ const profileToTalent = (p) => ({
   id: p.id, role: p.role, name: (p.role === "business" && p.company_name) || p.full_name || "Member", base: p.base || "",
   initials: initialsOf((p.role === "business" && p.company_name) || p.full_name || "?"), years: p.years || 0, trips: 0, rating: null,
   verified: p.license_status === "verified", licenseStatus: p.license_status || "none",
-  guideClass: p.guide_class || null, licenseNo: p.license_no || null, licenseExpiry: p.license_expiry || null,
+  guideClass: p.guide_class || null, licenseNo: p.license_no || null, licenseExpiry: p.license_expiry || null, licensePath: p.license_path || null,
   grades: {}, tags: Array.isArray(p.tags) ? p.tags : [],
   languages: Array.isArray(p.languages) ? p.languages : [],
   phone: p.phone || "", email: p.email || "", pitch: p.pitch || "", vehicle: p.vehicle || null,
@@ -2132,6 +2132,7 @@ function TalentProfile({ talent, posts, canRequest, viewer, self, contactOnly, e
   const [addStory, setAddStory] = useState(false);
   const [shareToStory, setShareToStory] = useState(null);
   const [listMode, setListMode] = useState(null);
+  const [credsOpen, setCredsOpen] = useState(false);
   const [askOperator, setAskOperator] = useState(false);
   return (
     <div className="pb-6">
@@ -2164,7 +2165,9 @@ function TalentProfile({ talent, posts, canRequest, viewer, self, contactOnly, e
                 <h1 className="text-[22px] font-semibold leading-tight tracking-[-0.01em]" style={{ color: C.ink, wordBreak: "break-word" }}>{t.name}</h1>
                 {t.verified && <BadgeCheck size={17} color={C.pine} className="shrink-0 mt-1" />}
               </div>
-              <div className="flex items-center gap-1 text-[13.5px] mt-1" style={{ color: C.muted }}><MapPin size={13} /> {roleLabel(t.role)}{t.base ? ` · ${t.base}` : ""}</div>
+              <div className="flex items-center gap-1 text-[13.5px] mt-1" style={{ color: C.muted }}><MapPin size={13} /> {t.role === "guide" && t.guideClass && GUIDE_CLASSES[t.guideClass]
+                  ? <span className="font-bold" style={{ color: GUIDE_CLASSES[t.guideClass].color }}>{GUIDE_CLASSES[t.guideClass].label}</span>
+                  : roleLabel(t.role)}{t.base ? ` · ${t.base}` : ""}</div>
               {!["operator", "business"].includes(t.role) && <div className="mt-2"><AvailabilityChip talent={t} /></div>}
             </div>
           </div>
@@ -2231,6 +2234,22 @@ function TalentProfile({ talent, posts, canRequest, viewer, self, contactOnly, e
               {t.pitch && <div className="mt-5 pl-4" style={{ borderLeft: `3px solid ${C.gold}` }}><p className="text-[15px] leading-relaxed" style={{ color: C.ink }}>{t.pitch}</p></div>}
 
               {t.tags && t.tags.length > 0 && (
+                {t.role === "guide" && (self || ["operator", "admin"].includes(viewer?.kind)) && (
+                  <div className="px-5 mt-5">
+                    <button onClick={() => setCredsOpen(true)} className="tap w-full rounded-2xl p-4 flex items-center gap-3 text-left"
+                      style={{ background: C.card, border: `1px solid ${C.line}`, borderLeft: `4px solid ${t.guideClass && GUIDE_CLASSES[t.guideClass] ? GUIDE_CLASSES[t.guideClass].color : C.gold}` }}>
+                      <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0"
+                        style={{ background: t.guideClass && GUIDE_CLASSES[t.guideClass] ? `${GUIDE_CLASSES[t.guideClass].color}18` : C.goldSoft }}>
+                        <FileCheck2 size={18} color={t.guideClass && GUIDE_CLASSES[t.guideClass] ? GUIDE_CLASSES[t.guideClass].color : C.gold} />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="text-[14.5px] font-semibold" style={{ color: C.ink }}>Credentials & Licence</div>
+                        <div className="text-[12px]" style={{ color: C.muted }}>{t.guideClass && GUIDE_CLASSES[t.guideClass] ? GUIDE_CLASSES[t.guideClass].label + " · " : ""}DOT licence & certificates</div>
+                      </div>
+                      <ChevronLeft size={17} color={C.muted} style={{ transform: "rotate(180deg)" }} />
+                    </button>
+                  </div>
+                )}
                 {self && t.role === "guide" && <GuideLicenseCard talent={t} />}
                 <div className="mt-6"><SectionLabel>{t.role === "guide" ? "Specialities" : t.role === "business" ? "What we offer" : "Drives"}</SectionLabel>
                   <div className="flex flex-wrap gap-2">{(t.tags || []).map((x) => <span key={x} className="rounded-full px-3 py-1.5 text-[13.5px] font-medium" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }}>{x}</span>)}</div>
@@ -2347,6 +2366,7 @@ function TalentProfile({ talent, posts, canRequest, viewer, self, contactOnly, e
       {askOperator && <OperatorInvite user={{ name: t.name, talentId: t.id, id: t.id, kind: t.role }} trip={null} onClose={() => setAskOperator(false)} />}
 
       {listMode && (
+        {credsOpen && <CredentialsPage talent={t} self={self} onClose={() => setCredsOpen(false)} />}
         <FollowListSheet mode={listMode} talent={t} eng={eng} onClose={() => setListMode(null)}
           onOpenProfile={(id) => { setListMode(null); onOpenProfile && onOpenProfile(id); }} />
       )}
@@ -4332,11 +4352,12 @@ function Onboard({ mode: initialMode, session, onBack, onDone }) {
     }
     onDone();
   };
+  const [licCrop, setLicCrop] = useState(null);
   const pickLicense = (e) => {
     const f = e.target.files?.[0]; e.target.value = "";
     if (!f || !f.type.startsWith("image/")) { setErr("Please choose a photo of your license."); return; }
     setErr(null);
-    const r = new FileReader(); r.onload = () => setLicPreview(r.result); r.readAsDataURL(f);
+    const r = new FileReader(); r.onload = () => setLicCrop([r.result]); r.readAsDataURL(f);
   };
   const submitLicense = async () => {
     setBusy(true); setErr(null);
@@ -4634,10 +4655,19 @@ function Onboard({ mode: initialMode, session, onBack, onDone }) {
               style={{ background: C.card, border: `1.5px dashed ${C.line}` }}>
               <div className="rounded-2xl flex items-center justify-center mb-3" style={{ width: 52, height: 52, background: C.goldSoft }}><Upload size={23} color={C.gold} /></div>
               <div className="text-[15px] font-semibold" style={{ color: C.ink }}>Upload a photo of your license</div>
-              <div className="text-[13px] mt-1" style={{ color: C.muted }}>Front side · clear and readable</div>
+              <div className="text-[13px] mt-1" style={{ color: C.muted }}>Front side — we crop and scan it into a clean record</div>
             </button>
           )}
           <input ref={licRef} type="file" accept="image/*" onChange={pickLicense} className="hidden" />
+          {licCrop && (
+            <CropEditor slides={licCrop} initialRatio="8 / 5"
+              onClose={() => setLicCrop(null)}
+              onDone={async (cropped) => {
+                setLicCrop(null);
+                try { setLicPreview(await bakeEnhance(cropped[0], { bright: 1.02, contrast: 1.1, sat: 1.05, warmth: 0, auto: true })); }
+                catch (e) { setLicPreview(cropped[0]); }
+              }} />
+          )}
           {role === "guide" && (
             <div className="mb-4">
               <input value={licNo} onChange={(e) => setLicNo(e.target.value.toUpperCase())} autoCapitalize="characters"
@@ -5294,6 +5324,183 @@ function FollowListSheet({ mode, talent, eng, onClose, onOpenProfile }) {
           })}
         </div>
       </div>
+    </div>
+  ), document.body);
+}
+
+/* ==================== Credentials page (licence + certificates) ==================== */
+function CredentialsPage({ talent, self, onClose }) {
+  const t = talent;
+  const gc = t.guideClass ? GUIDE_CLASSES[t.guideClass] : null;
+  const [licUrl, setLicUrl] = useState(null);
+  const [certs, setCerts] = useState(null);
+  const [certUrls, setCertUrls] = useState({});
+  const [adding, setAdding] = useState(false);
+  const [cTitle, setCTitle] = useState("");
+  const [certCrop, setCertCrop] = useState(null);
+  const [certImg, setCertImg] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const [bigView, setBigView] = useState(null);
+  const certFileRef = useRef();
+
+  const load = async () => {
+    if (t.licensePath) {
+      const { data } = await supabase.storage.from("licenses").createSignedUrl(t.licensePath, 600);
+      setLicUrl(data?.signedUrl || null);
+    }
+    const { data: rows, error } = await supabase.from("certificates").select("*").eq("profile_id", t.id).order("created_at", { ascending: false });
+    if (error) { setCerts([]); return; }
+    setCerts(rows || []);
+    const urls = {};
+    for (const c of rows || []) {
+      const { data } = await supabase.storage.from("certs").createSignedUrl(c.file_path, 600);
+      if (data?.signedUrl) urls[c.id] = data.signedUrl;
+    }
+    setCertUrls(urls);
+  };
+  useEffect(() => { load(); }, [t.id]);
+
+  const pickCert = (e) => {
+    const f = e.target.files?.[0]; e.target.value = "";
+    if (!f || !f.type.startsWith("image/")) return;
+    const r = new FileReader(); r.onload = () => setCertCrop([r.result]); r.readAsDataURL(f);
+  };
+  const saveCert = async () => {
+    if (!cTitle.trim() || !certImg) { setErr("Give it a title and add the photo."); return; }
+    setBusy(true); setErr(null);
+    try {
+      const small = await shrinkImage(certImg, 1600, 0.85);
+      const blob = dataUriToBlob(small);
+      const path = `${t.id}/${Date.now()}.jpg`;
+      const { error: upErr } = await supabase.storage.from("certs").upload(path, blob, { contentType: "image/jpeg" });
+      if (upErr) throw upErr;
+      const { error: insErr } = await supabase.from("certificates").insert({ profile_id: t.id, title: cTitle.trim(), file_path: path });
+      if (insErr) throw insErr;
+      setCTitle(""); setCertImg(null); setAdding(false);
+      load();
+    } catch (e2) { setErr(e2.message || "Couldn't save the certificate."); }
+    setBusy(false);
+  };
+  const removeCert = async (c) => {
+    await supabase.storage.from("certs").remove([c.file_path]);
+    await supabase.from("certificates").delete().eq("id", c.id);
+    load();
+  };
+
+  return createPortal((
+    <div className="fixed inset-0 flex flex-col fade" style={{ background: C.bg, zIndex: 225, paddingTop: "var(--sa-top)" }}>
+      <div className="h-14 px-4 flex items-center gap-3 shrink-0" style={{ borderBottom: `1px solid ${C.lineSoft}`, background: C.card }}>
+        <button onClick={onClose} className="tap w-9 h-9 rounded-full flex items-center justify-center" style={{ border: `1px solid ${C.line}`, background: C.bg }}>
+          <ChevronLeft size={19} color={C.ink} />
+        </button>
+        <div className="flex-1 min-w-0">
+          <div className="text-[16px] font-semibold truncate" style={{ color: C.ink }}>Credentials</div>
+          <div className="text-[11.5px]" style={{ color: C.muted }}>{t.name}</div>
+        </div>
+      </div>
+
+      <div className="flex-1 overflow-y-auto hidescroll px-5 py-4" style={{ scrollbarWidth: "none" }}>
+        <SectionLabel>Department of Tourism licence</SectionLabel>
+        <div className="rounded-2xl overflow-hidden" style={{ background: C.card, border: `2px solid ${gc ? gc.color : C.line}` }}>
+          {licUrl ? (
+            <button onClick={() => setBigView(licUrl)} className="tap w-full block">
+              <img src={licUrl} alt="Licence" className="w-full block" style={{ maxHeight: 240, objectFit: "cover" }} />
+            </button>
+          ) : (
+            <div className="px-4 py-8 text-center text-[13px]" style={{ color: C.muted }}>No licence photo on record.</div>
+          )}
+          <div className="p-4">
+            {gc && (
+              <span className="text-[12px] font-bold rounded-full px-2.5 py-1" style={{ background: gc.color, color: "#fff" }}>{gc.label}</span>
+            )}
+            <div className="text-[13px] mt-2.5" style={{ color: C.ink }}>
+              {t.licenseNo || "Number not on file"}{t.licenseExpiry ? ` · expires ${t.licenseExpiry}` : ""}
+            </div>
+            <div className="inline-flex items-center gap-1.5 mt-2 text-[12.5px] font-semibold rounded-full px-2.5 py-1"
+              style={{ background: t.verified ? C.pineSoft : C.goldSoft, color: t.verified ? C.pine : "#7a5a1e" }}>
+              {t.verified ? <><BadgeCheck size={13} /> Verified by admin with DOT & GAB</> : <><Clock size={13} /> Pending admin verification</>}
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-6 flex items-center justify-between">
+          <SectionLabel trailing={certs ? `${certs.length}` : null}>Other certificates</SectionLabel>
+          {self && !adding && (
+            <button onClick={() => setAdding(true)} className="tap text-[13px] font-semibold" style={{ color: C.pine }}>+ Add</button>
+          )}
+        </div>
+
+        {self && adding && (
+          <div className="rounded-2xl p-4 mb-3" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+            <input value={cTitle} onChange={(e) => setCTitle(e.target.value)} maxLength={60} placeholder="Certificate title — e.g. Wilderness First Aid 2025"
+              className="w-full h-11 px-3.5 rounded-xl text-[14px] mb-2" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
+            {certImg ? (
+              <div className="relative rounded-xl overflow-hidden mb-2" style={{ border: `1px solid ${C.line}` }}>
+                <img src={certImg} alt="" className="w-full block" style={{ maxHeight: 200, objectFit: "cover" }} />
+                <button onClick={() => setCertImg(null)} className="tap absolute top-2 right-2 w-7 h-7 rounded-full flex items-center justify-center" style={{ background: "rgba(0,0,0,.55)" }}><X size={14} color="#fff" /></button>
+              </div>
+            ) : (
+              <button onClick={() => certFileRef.current?.click()} className="tap w-full rounded-xl p-5 flex flex-col items-center mb-2"
+                style={{ background: C.bg, border: `1.5px dashed ${C.line}` }}>
+                <Upload size={19} color={C.gold} />
+                <span className="text-[13px] font-semibold mt-1.5" style={{ color: C.ink }}>Add certificate photo</span>
+                <span className="text-[11.5px] mt-0.5" style={{ color: C.muted }}>Cropped and scanned automatically</span>
+              </button>
+            )}
+            <input ref={certFileRef} type="file" accept="image/*" onChange={pickCert} className="hidden" />
+            {err && <p className="text-[12.5px] mb-2" style={{ color: C.maroon }}>{err}</p>}
+            <div className="flex gap-2">
+              <button onClick={() => { setAdding(false); setCertImg(null); setErr(null); }} className="tap flex-1 h-10 rounded-xl text-[13px] font-semibold" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.muted }}>Cancel</button>
+              <button onClick={saveCert} disabled={busy} className="tap flex-1 h-10 rounded-xl text-[13px] font-semibold" style={{ background: C.pine, color: "#fff" }}>{busy ? "Saving…" : "Save"}</button>
+            </div>
+          </div>
+        )}
+
+        {certs === null ? (
+          <div className="flex items-center gap-2 py-8 justify-center text-[13px]" style={{ color: C.muted }}><Loader2 size={16} className="animate-spin" /> Loading…</div>
+        ) : certs.length === 0 && !adding ? (
+          <p className="text-[13px] py-6 text-center" style={{ color: C.muted }}>
+            {self ? "Add first-aid, trekking, language or any other certificates — operators see them here." : "No additional certificates on record."}
+          </p>
+        ) : (
+          certs.map((c) => (
+            <div key={c.id} className="rounded-2xl overflow-hidden mb-3" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+              {certUrls[c.id] && (
+                <button onClick={() => setBigView(certUrls[c.id])} className="tap w-full block">
+                  <img src={certUrls[c.id]} alt="" className="w-full block" style={{ maxHeight: 190, objectFit: "cover" }} />
+                </button>
+              )}
+              <div className="px-4 py-3 flex items-center gap-2.5">
+                <div className="flex-1 min-w-0">
+                  <div className="text-[13.5px] font-semibold truncate" style={{ color: C.ink }}>{c.title}</div>
+                  <div className="text-[11.5px] mt-0.5" style={{ color: c.status === "verified" ? C.pine : C.muted }}>
+                    {c.status === "verified" ? "Admin verified ✓" : "As provided by the guide"}
+                  </div>
+                </div>
+                {self && <button onClick={() => removeCert(c)} className="tap text-[12px] font-semibold shrink-0" style={{ color: C.maroon }}>Remove</button>}
+              </div>
+            </div>
+          ))
+        )}
+        <div className="h-6" />
+      </div>
+
+      {certCrop && (
+        <CropEditor slides={certCrop} initialRatio="8 / 5"
+          onClose={() => setCertCrop(null)}
+          onDone={async (cropped) => {
+            setCertCrop(null);
+            try { setCertImg(await bakeEnhance(cropped[0], { bright: 1.02, contrast: 1.1, sat: 1.05, warmth: 0, auto: true })); }
+            catch (e) { setCertImg(cropped[0]); }
+          }} />
+      )}
+      {bigView && (
+        <div className="fixed inset-0 flex items-center justify-center" style={{ background: "rgba(8,10,8,.92)", zIndex: 260 }} onClick={() => setBigView(null)}>
+          <img src={bigView} alt="" className="max-w-full max-h-full" style={{ objectFit: "contain" }} />
+          <button onClick={() => setBigView(null)} className="tap absolute w-10 h-10 rounded-full flex items-center justify-center" style={{ top: "calc(var(--sa-top) + 10px)", right: 14, background: "rgba(255,255,255,.14)" }}><X size={19} color="#fff" /></button>
+        </div>
+      )}
     </div>
   ), document.body);
 }
