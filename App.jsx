@@ -31,8 +31,8 @@ let PROFILE_DIR = {};
 const profileToTalent = (p) => ({
   id: p.id, role: p.role, name: (p.role === "business" && p.company_name) || p.full_name || "Member", base: p.base || "",
   initials: initialsOf((p.role === "business" && p.company_name) || p.full_name || "?"),
-  years: p.career_start_date ? Math.max(0, Math.floor((Date.now() - new Date(p.career_start_date + "T00:00").getTime()) / 31557600000)) : 0,
-  careerStart: p.career_start_date || null, trips: 0, rating: null,
+  years: licenseExperienceYears(p.license_no) ?? 0,
+  trips: 0, rating: null,
   verified: p.license_status === "verified", licenseStatus: p.license_status || "none",
   guideClass: p.guide_class || null, licenseNo: p.license_no || null, licenseExpiry: p.license_expiry || null, licensePath: p.license_path || null,
   grades: {}, tags: Array.isArray(p.tags) ? p.tags : [],
@@ -1511,6 +1511,21 @@ const GUIDE_CLASSES = {
   senior:            { label: "Senior Guide",        short: "Senior",      color: "#7A1F2B", rank: 3 },
   tour_leader:       { label: "Tour Leader",         short: "Tour Leader", color: "#E8531F", rank: 4 },
 };
+const licenseJoinYear = (no) => {
+  // The Department of Tourism encodes the year of joining as the two digits
+  // right after the class prefix (e.g. CTG19... -> joined 2019).
+  const m = String(no || "").trim().toUpperCase().match(/^(CTG|CG|STG|TL)\s?-?\s?(\d{2})(\d{2,6})$/);
+  if (!m) return null;
+  const yy = parseInt(m[2], 10);
+  const nowY = new Date().getFullYear();
+  const y2000 = 2000 + yy;
+  return y2000 <= nowY ? y2000 : 1900 + yy;
+};
+const licenseExperienceYears = (no) => {
+  const jy = licenseJoinYear(no);
+  return jy == null ? null : Math.max(0, new Date().getFullYear() - jy);
+};
+
 const parseGuideClass = (no) => {
   const m = String(no || "").trim().toUpperCase().match(/^(CTG|CG|STG|TL)\s?-?\s?\d{4,8}$/);
   if (!m) return null;
@@ -2336,18 +2351,16 @@ function TalentProfile({ talent, posts, canRequest, viewer, self, contactOnly, e
       </div>
 
       <div className="px-5">
-        {self && ["guide", "driver"].includes(t.role) && !t.careerStart && (
+        {self && ["guide", "driver"].includes(t.role) && licenseJoinYear(t.licenseNo) == null && (
           <div className="rounded-2xl p-4 mt-5" style={{ background: C.goldSoft, border: `1.5px solid ${C.gold}` }}>
             <div className="flex items-center gap-2">
               <CalendarDays size={16} color={C.gold} />
               <span className="text-[14px] font-semibold" style={{ color: "#7a5a1e" }}>Your experience shows 0 years</span>
             </div>
             <p className="text-[12.5px] mt-1.5 leading-snug" style={{ color: "#7a5a1e" }}>
-              Experience counts only from your Government of Bhutan Date-of-Joining certificate. Add the date, then upload the
-              certificate in Credentials &amp; Licence for admin verification.
+              Experience is read straight from your Department of Tourism licence number \u2014 no separate document needed.
+              Add your licence number below and it appears automatically.
             </p>
-            <button onClick={() => setEditOpen(true)} className="tap w-full h-10 rounded-xl text-[13.5px] font-semibold mt-2.5"
-              style={{ background: C.gold, color: "#fff" }}>Add Date of Joining</button>
           </div>
         )}
         {self && !["operator", "business"].includes(t.role) && <TalentAvailability talent={t} onSet={onSetAvailability} />}
@@ -3941,7 +3954,7 @@ function AdminUsers({ onChanged, currentAdminId }) {
                     {u.guide_class && GUIDE_CLASSES[u.guide_class] && (
                       <span className="text-[11px] font-bold rounded-full px-2 py-0.5" style={{ background: GUIDE_CLASSES[u.guide_class].color, color: "#fff" }}>{GUIDE_CLASSES[u.guide_class].label}</span>
                     )}
-                    <span className="text-[12px]" style={{ color: C.muted }}>{u.license_no || "no number"}{u.license_expiry ? ` · exp ${u.license_expiry}` : ""}{u.career_start_date ? ` · joined ${u.career_start_date}` : ""}</span>
+                    <span className="text-[12px]" style={{ color: C.muted }}>{u.license_no || "no number"}{u.license_expiry ? ` · exp ${u.license_expiry}` : ""}{licenseJoinYear(u.license_no) != null ? ` · joined ${licenseJoinYear(u.license_no)} (${licenseExperienceYears(u.license_no)}y)` : ""}</span>
                   </div>
                 )}
 
@@ -5476,20 +5489,13 @@ function FollowListSheet({ mode, talent, eng, onClose, onOpenProfile }) {
 /* ======================= Edit profile (bio + joining date) ======================= */
 function EditProfileSheet({ talent, onClose, onSaved }) {
   const [bio, setBio] = useState(talent.pitch || "");
-  const [start, setStart] = useState(talent.careerStart || "");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
-  const startValid = !start || new Date(start + "T00:00") <= new Date();
-  const yearsPreview = start && startValid
-    ? Math.max(0, Math.floor((Date.now() - new Date(start + "T00:00").getTime()) / 31557600000))
-    : null;
 
   const save = async () => {
-    if (!startValid) { setErr("The joining date can't be in the future."); return; }
     setBusy(true); setErr(null);
     const { error } = await supabase.from("profiles").update({
       pitch: bio.trim() || null,
-      career_start_date: start || null,
     }).eq("id", talent.id);
     setBusy(false);
     if (error) { setErr(error.message || "Couldn't save — try again."); return; }
@@ -5517,22 +5523,13 @@ function EditProfileSheet({ talent, onClose, onSaved }) {
           style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }} />
         <div className="text-[11px] text-right mt-1" style={{ color: C.muted }}>{bio.length}/240</div>
 
-        <div className="text-[13px] font-semibold mt-5 mb-1.5" style={{ color: C.ink }}>Working since — Date of Joining</div>
-        <input type="date" value={start} onChange={(e) => { setStart(e.target.value); setErr(null); }}
-          className="w-full h-12 px-3.5 rounded-xl text-[15px]"
-          style={{ background: C.card, border: `1px solid ${!startValid ? C.maroon : C.line}`, color: start ? C.ink : C.muted }} />
-        <p className="text-[11.5px] mt-1.5 leading-snug" style={{ color: C.muted }}>
-          Enter it exactly as printed on your government Date-of-Joining certificate, and upload that certificate in
-          Credentials & Licence so admin can verify it with the Department.
-        </p>
-        {yearsPreview != null && (
-          <div className="inline-flex items-center gap-2 rounded-xl px-3 py-2 mt-2.5" style={{ background: C.pineSoft }}>
-            <CalendarDays size={14} color={C.pine} />
-            <span className="text-[13px] font-semibold" style={{ color: C.pine }}>
-              = {yearsPreview} year{yearsPreview === 1 ? "" : "s"} of experience — updates itself every year
-            </span>
-          </div>
-        )}
+        <div className="rounded-xl px-3.5 py-3 mt-5" style={{ background: C.pineSoft }}>
+          <div className="text-[12.5px] font-semibold" style={{ color: C.pine }}>Experience is automatic</div>
+          <p className="text-[11.5px] mt-1 leading-snug" style={{ color: C.pine }}>
+            Your years of experience are read straight from your Department of Tourism licence number \u2014 no separate
+            entry needed here. Set it once under My licence and it stays current forever.
+          </p>
+        </div>
         {!startValid && <p className="text-[12.5px] mt-2" style={{ color: C.maroon }}>The joining date can't be in the future.</p>}
         {err && <p className="text-[12.5px] mt-2" style={{ color: C.maroon }}>{err}</p>}
       </div>
@@ -5776,6 +5773,7 @@ function GuideLicenseCard({ talent }) {
             {cls && (
               <div className="rounded-lg px-3 py-2 mb-2 text-[12.5px] font-semibold" style={{ background: `${GUIDE_CLASSES[cls].color}14`, color: GUIDE_CLASSES[cls].color }}>
                 {GUIDE_CLASSES[cls].label}{exp ? (valid ? " · valid" : " · EXPIRED") : ""}
+                {licenseJoinYear(no) != null ? ` · joined ${licenseJoinYear(no)} · ${licenseExperienceYears(no)} yrs experience` : ""}
               </div>
             )}
             <div className="flex gap-2">
