@@ -800,6 +800,7 @@ export default function App() {
     setTrips(T.map((tr) => ({
       id: tr.id, operatorId: tr.operator_id, operator: tr.operator_name, title: tr.title,
       start: tr.start_date, end: tr.end_date, meetingPoint: tr.meeting_point || "To be set by operator",
+      meetingSet: !!tr.meeting_point, meetingLat: tr.meeting_lat ?? null, meetingLng: tr.meeting_lng ?? null, meetingNote: tr.meeting_note || "",
       members: (M || []).filter((m) => m.trip_id === tr.id).map((m) => {
         const p = talentById(m.user_id);
         return { id: m.user_id, name: p?.name || m.display_name || "Member", initials: p?.initials || initialsOf(m.display_name || "?"), roleInTrip: m.role_in_trip };
@@ -997,7 +998,7 @@ export default function App() {
           <Login onPick={setAccountId} session={session} myProfile={myProfile} onAuthed={reloadMe} onBusy={setAuthBusy} />
         ) : (
           <Shell key={user.id} user={user} posts={posts} jobs={jobs} trips={trips} listings={listings} dirTick={dirTick}
-            actions={{ addPost, approve, reject, deletePost, reloadDirectory: loadProfiles, setAvailability, toggleFollow, sendJob, setJobStatus, postChat, openChat, postListing, applyToListing, setApplicant, hireApplicant }} engagement={{ likes, comments, toggleLike, addComment, deleteComment, follows, toggleFollow, stories, addStory, deleteStory }} dm={{ dms, sendDm, markRead, sharePostTo }} onLogout={async () => { if (session) { await Promise.race([removePushSubscription(), new Promise((res) => setTimeout(res, 1500))]); supabase.auth.signOut(); } setAccountId(null); }} />
+            actions={{ addPost, approve, reject, deletePost, reloadDirectory: loadProfiles, fetchTrips, setAvailability, toggleFollow, sendJob, setJobStatus, postChat, openChat, postListing, applyToListing, setApplicant, hireApplicant }} engagement={{ likes, comments, toggleLike, addComment, deleteComment, follows, toggleFollow, stories, addStory, deleteStory }} dm={{ dms, sendDm, markRead, sharePostTo }} onLogout={async () => { if (session) { await Promise.race([removePushSubscription(), new Promise((res) => setTimeout(res, 1500))]); supabase.auth.signOut(); } setAccountId(null); }} />
         )}
       </div>
     </div>
@@ -2296,6 +2297,14 @@ function TalentProfile({ talent, posts, canRequest, viewer, self, contactOnly, e
                   <AvailabilityChip talent={t} />
                 </div>
               )}
+              {(t.tags || []).length > 0 && (
+                <div className="flex flex-wrap gap-1.5 mt-2.5">
+                  {(t.tags || []).slice(0, 6).map((tag) => (
+                    <span key={tag} className="text-[11.5px] rounded-full px-2.5 py-1" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }}>{tag}</span>
+                  ))}
+                  {(t.tags || []).length > 6 && <span className="text-[11.5px] py-1" style={{ color: C.muted }}>+{(t.tags || []).length - 6} more</span>}
+                </div>
+              )}
             </div>
           </div>
           <div className="flex items-center mt-4 mb-1">
@@ -2410,7 +2419,7 @@ function TalentProfile({ talent, posts, canRequest, viewer, self, contactOnly, e
                   </button>
                 </div>
               )}
-              {self && t.role === "guide" && <GuideLicenseCard talent={t} />}
+              {self && t.role === "guide" && <GuideLicenseCard talent={t} onSaved={onProfileSaved} />}
 
               {t.tags && t.tags.length > 0 && (
                 <div className="mt-6"><SectionLabel>{t.role === "guide" ? "Specialities" : t.role === "business" ? "What we offer" : "Drives"}</SectionLabel>
@@ -2591,6 +2600,48 @@ function TripCard({ trip, onOpen }) {
 function TripHub({ user, meId, trip, actions, onMessage, onBack }) {
   const state = tripStateNow(trip);
   const [inviting, setInviting] = useState(false);
+  const isTripOperator = trip.operatorId === meId;
+  const [mpEdit, setMpEdit] = useState(false);
+  const [mpPlace, setMpPlace] = useState("");
+  const [mpNote, setMpNote] = useState("");
+  const [mpLat, setMpLat] = useState(null);
+  const [mpLng, setMpLng] = useState(null);
+  const [mpAcc, setMpAcc] = useState(null);
+  const [mpBusy, setMpBusy] = useState(false);
+  const [mpErr, setMpErr] = useState(null);
+  const openMpEdit = () => {
+    setMpPlace(trip.meetingSet ? trip.meetingPoint : "");
+    setMpNote(trip.meetingNote || "");
+    setMpLat(trip.meetingLat); setMpLng(trip.meetingLng);
+    setMpAcc(null); setMpErr(null); setMpEdit(true);
+  };
+  const mpPin = () => {
+    if (!navigator.geolocation) { setMpErr("This phone doesn't share location."); return; }
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const { latitude, longitude, accuracy } = pos.coords;
+        if (!isValidLatLng(latitude, longitude)) { setMpErr("Couldn't read a valid position."); return; }
+        setMpErr(null);
+        setMpLat(+latitude.toFixed(6)); setMpLng(+longitude.toFixed(6));
+        setMpAcc(Math.round(accuracy || 0));
+      },
+      () => setMpErr("Location was blocked — allow it in browser settings, or save without a pin."),
+      { enableHighAccuracy: true, timeout: 12000, maximumAge: 0 }
+    );
+  };
+  const mpSave = async () => {
+    if (!mpPlace.trim()) { setMpErr("Name the meeting place — e.g. Clock Tower Square, Thimphu."); return; }
+    setMpBusy(true); setMpErr(null);
+    const { error } = await supabase.from("trips").update({
+      meeting_point: mpPlace.trim(),
+      meeting_note: mpNote.trim() || null,
+      meeting_lat: mpLat, meeting_lng: mpLng,
+    }).eq("id", trip.id);
+    setMpBusy(false);
+    if (error) { setMpErr(error.message || "Couldn't save."); return; }
+    setMpEdit(false);
+    actions.fetchTrips && actions.fetchTrips();
+  };
   const [askingOperator, setAskingOperator] = useState(false);
   const tripDone = state === "active" || state === "completed";
   const canInvite = tripDone && (user.kind === "operator" || user.kind === "admin");
@@ -2605,9 +2656,56 @@ function TripHub({ user, meId, trip, actions, onMessage, onBack }) {
       </div>
 
       <div className="px-5 py-4">
-        <div className="rounded-2xl p-4 mb-4" style={{ background: C.card, border: `1px solid ${C.line}` }}>
-          <div className="flex items-center gap-2 text-[13px] font-medium" style={{ color: C.ink }}><MapPin size={15} color={C.gold} /> Meeting point</div>
-          <div className="text-[13.5px] mt-1" style={{ color: C.muted }}>{trip.meetingPoint}</div>
+        <div className="rounded-2xl p-4 mb-4" style={{ background: C.card, border: `1px solid ${trip.meetingSet ? C.line : C.gold}` }}>
+          <div className="flex items-center gap-2 text-[13px] font-medium" style={{ color: C.ink }}>
+            <MapPin size={15} color={C.gold} /> <span className="flex-1">Meeting point</span>
+            {isTripOperator && !mpEdit && (
+              <button onClick={openMpEdit} className="tap text-[12.5px] font-semibold" style={{ color: C.pine }}>{trip.meetingSet ? "Edit" : "Set"}</button>
+            )}
+          </div>
+
+          {!mpEdit && (
+            <>
+              <div className="text-[13.5px] mt-1" style={{ color: trip.meetingSet ? C.ink : C.muted, fontWeight: trip.meetingSet ? 600 : 400 }}>{trip.meetingPoint}</div>
+              {trip.meetingNote ? <div className="text-[12.5px] mt-0.5" style={{ color: C.muted }}>{trip.meetingNote}</div> : null}
+              {isValidLatLng(trip.meetingLat, trip.meetingLng) && (
+                <button onClick={() => window.open(`https://www.google.com/maps?q=${trip.meetingLat},${trip.meetingLng}`, "_blank", "noopener")}
+                  className="tap inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 mt-2 text-[12.5px] font-semibold"
+                  style={{ background: C.pineSoft, color: C.pine }}>
+                  Open in Google Maps <ExternalLink size={12} />
+                </button>
+              )}
+            </>
+          )}
+
+          {mpEdit && (
+            <div className="mt-2.5">
+              <input value={mpPlace} onChange={(e) => setMpPlace(e.target.value)} maxLength={80}
+                placeholder="Place — e.g. Clock Tower Square, Thimphu"
+                className="w-full h-11 px-3.5 rounded-xl text-[14px] mb-2" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
+              <input value={mpNote} onChange={(e) => setMpNote(e.target.value)} maxLength={120}
+                placeholder="Note — e.g. 7:30 AM, white Coaster bus · optional"
+                className="w-full h-11 px-3.5 rounded-xl text-[14px] mb-2" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
+              <div className="flex items-center gap-2 mb-2">
+                <button onClick={mpPin} className="tap flex-1 h-10 rounded-xl text-[13px] font-semibold inline-flex items-center justify-center gap-1.5"
+                  style={{ background: C.pineSoft, color: C.pine }}>
+                  <NavIcon size={14} /> {isValidLatLng(mpLat, mpLng) ? "Re-pin my location" : "Pin my exact location"}
+                </button>
+                {isValidLatLng(mpLat, mpLng) && (
+                  <button onClick={() => { setMpLat(null); setMpLng(null); setMpAcc(null); }} className="tap h-10 px-3 rounded-xl text-[12.5px] font-semibold"
+                    style={{ background: C.card, border: `1px solid ${C.line}`, color: C.maroon }}>Remove pin</button>
+                )}
+              </div>
+              {isValidLatLng(mpLat, mpLng) && (
+                <p className="text-[12px] mb-2" style={{ color: C.pine }}>Pinned ✓ {mpLat}, {mpLng}{mpAcc != null ? ` · ±${mpAcc}m` : ""} — crew get a one-tap Google Maps button.</p>
+              )}
+              {mpErr && <p className="text-[12.5px] mb-2" style={{ color: C.maroon }}>{mpErr}</p>}
+              <div className="flex gap-2">
+                <button onClick={() => setMpEdit(false)} className="tap flex-1 h-10 rounded-xl text-[13px] font-semibold" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.muted }}>Cancel</button>
+                <button onClick={mpSave} disabled={mpBusy || !mpPlace.trim()} className="tap flex-1 h-10 rounded-xl text-[13px] font-semibold" style={{ background: mpPlace.trim() ? C.pine : "#C7CEC7", color: "#fff" }}>{mpBusy ? "Saving…" : "Save"}</button>
+              </div>
+            </div>
+          )}
         </div>
 
         {canInvite && (
@@ -3803,7 +3901,7 @@ function ProfileTabs({ cv, gallery, galleryCount }) {
     startX.current = null; locked.current = false;
   };
 
-  const TABS = [{ label: "Posts", Icon: ImagePlus, count: galleryCount }, { label: "Reviews", Icon: Award }];
+  const TABS = [{ label: "Posts", Icon: ImagePlus, count: galleryCount }, { label: "Portfolio", Icon: Award }];
 
   return (
     <div className="mt-5">
@@ -5715,12 +5813,36 @@ function CredentialsPage({ talent, self, onClose }) {
 }
 
 /* ===================== Guide licence self-service card ===================== */
-function GuideLicenseCard({ talent }) {
+function GuideLicenseCard({ talent, onSaved }) {
   const [editing, setEditing] = useState(false);
   const [no, setNo] = useState(talent.licenseNo || "");
   const [exp, setExp] = useState(talent.licenseExpiry || "");
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [photoCrop, setPhotoCrop] = useState(null);
+  const [photoBusy, setPhotoBusy] = useState(false);
+  const [photoMsg, setPhotoMsg] = useState(null);
+  const photoRef = useRef();
+  const pickPhoto = (e) => {
+    const f = e.target.files?.[0]; e.target.value = "";
+    if (!f || !f.type.startsWith("image/")) return;
+    const r = new FileReader(); r.onload = () => setPhotoCrop([r.result]); r.readAsDataURL(f);
+  };
+  const savePhoto = async (scannedUri) => {
+    setPhotoBusy(true); setPhotoMsg(null);
+    try {
+      const small = await shrinkImage(scannedUri, 1600, 0.85);
+      const blob = dataUriToBlob(small);
+      const path = `${talent.id}/lic-${Date.now()}.jpg`;
+      const { error: upErr } = await supabase.storage.from("licenses").upload(path, blob, { contentType: "image/jpeg" });
+      if (upErr) throw upErr;
+      const { error: prErr } = await supabase.from("profiles").update({ license_path: path, license_status: "submitted" }).eq("id", talent.id);
+      if (prErr) throw prErr;
+      setPhotoMsg("Photo saved — scanned and pending admin re-verification.");
+      onSaved && onSaved();
+    } catch (e2) { setPhotoMsg(e2.message || "Couldn't save the photo — try again."); }
+    setPhotoBusy(false);
+  };
   const cls = parseGuideClass(no);
   const valid = exp ? new Date(exp + "T00:00") > new Date() : false;
   const current = talent.guideClass ? GUIDE_CLASSES[talent.guideClass] : null;
@@ -5781,6 +5903,28 @@ function GuideLicenseCard({ talent }) {
               <button onClick={save} disabled={busy || !cls || !exp} className="tap flex-1 h-10 rounded-xl text-[13px] font-semibold" style={{ background: C.pine, color: "#fff" }}>{busy ? "Saving…" : "Save"}</button>
             </div>
           </div>
+        )}
+        <div className="flex items-center gap-2.5 mt-3 pt-3" style={{ borderTop: `1px solid ${C.lineSoft}` }}>
+          <div className="flex-1 text-[12.5px]" style={{ color: talent.licensePath ? C.pine : C.muted }}>
+            {photoBusy ? "Scanning & uploading…" : talent.licensePath ? "Licence photo on record ✓" : "No licence photo yet — operators see it in Credentials."}
+          </div>
+          <button onClick={() => photoRef.current?.click()} disabled={photoBusy}
+            className="tap h-9 px-3.5 rounded-xl text-[12.5px] font-semibold shrink-0"
+            style={{ background: talent.licensePath ? C.card : C.gold, border: talent.licensePath ? `1px solid ${C.line}` : "none", color: talent.licensePath ? C.pine : "#fff" }}>
+            {talent.licensePath ? "Replace photo" : "Add photo"}
+          </button>
+          <input ref={photoRef} type="file" accept="image/*" onChange={pickPhoto} className="hidden" />
+        </div>
+        {photoMsg && <p className="text-[12px] mt-1.5" style={{ color: photoMsg.startsWith("Photo saved") ? C.pine : C.maroon }}>{photoMsg}</p>}
+        {photoCrop && (
+          <CropEditor slides={photoCrop} initialRatio="8 / 5"
+            onClose={() => setPhotoCrop(null)}
+            onDone={async (cropped) => {
+              setPhotoCrop(null);
+              let scanned = cropped[0];
+              try { scanned = await bakeEnhance(cropped[0], { bright: 1.02, contrast: 1.1, sat: 1.05, warmth: 0, auto: true }); } catch (e) {}
+              savePhoto(scanned);
+            }} />
         )}
         <p className="text-[11px] mt-2.5" style={{ color: C.muted }}>Class is read from the number. Every change goes back to admin for verification with DOT & GAB.</p>
       </div>
