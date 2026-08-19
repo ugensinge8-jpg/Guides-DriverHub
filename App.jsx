@@ -4888,12 +4888,12 @@ function Onboard({ mode: initialMode, session, onBack, onDone }) {
           )}
           <input ref={licRef} type="file" accept="image/*" onChange={pickLicense} className="hidden" />
           {licCrop && (
-            <CropEditor slides={licCrop} initialRatio="8 / 5"
+            <CardScanEditor image={licCrop[0]}
               onClose={() => setLicCrop(null)}
-              onDone={async (cropped) => {
+              onDone={async (flat) => {
                 setLicCrop(null);
-                try { setLicPreview(await bakeEnhance(cropped[0], { bright: 1.02, contrast: 1.1, sat: 1.05, warmth: 0, auto: true })); }
-                catch (e) { setLicPreview(cropped[0]); }
+                try { setLicPreview(await bakeEnhance(flat, { bright: 1.02, contrast: 1.1, sat: 1.05, warmth: 0, auto: true })); }
+                catch (e) { setLicPreview(flat); }
               }} />
           )}
           {role === "guide" && (
@@ -5794,12 +5794,12 @@ function CredentialsPage({ talent, self, onClose }) {
       </div>
 
       {certCrop && (
-        <CropEditor slides={certCrop} initialRatio="8 / 5"
+        <CardScanEditor image={certCrop[0]}
           onClose={() => setCertCrop(null)}
-          onDone={async (cropped) => {
+          onDone={async (flat) => {
             setCertCrop(null);
-            try { setCertImg(await bakeEnhance(cropped[0], { bright: 1.02, contrast: 1.1, sat: 1.05, warmth: 0, auto: true })); }
-            catch (e) { setCertImg(cropped[0]); }
+            try { setCertImg(await bakeEnhance(flat, { bright: 1.02, contrast: 1.1, sat: 1.05, warmth: 0, auto: true })); }
+            catch (e) { setCertImg(flat); }
           }} />
       )}
       {bigView && (
@@ -5917,12 +5917,12 @@ function GuideLicenseCard({ talent, onSaved }) {
         </div>
         {photoMsg && <p className="text-[12px] mt-1.5" style={{ color: photoMsg.startsWith("Photo saved") ? C.pine : C.maroon }}>{photoMsg}</p>}
         {photoCrop && (
-          <CropEditor slides={photoCrop} initialRatio="8 / 5"
+          <CardScanEditor image={photoCrop[0]}
             onClose={() => setPhotoCrop(null)}
-            onDone={async (cropped) => {
+            onDone={async (flat) => {
               setPhotoCrop(null);
-              let scanned = cropped[0];
-              try { scanned = await bakeEnhance(cropped[0], { bright: 1.02, contrast: 1.1, sat: 1.05, warmth: 0, auto: true }); } catch (e) {}
+              let scanned = flat;
+              try { scanned = await bakeEnhance(flat, { bright: 1.02, contrast: 1.1, sat: 1.05, warmth: 0, auto: true }); } catch (e) {}
               savePhoto(scanned);
             }} />
         )}
@@ -6948,6 +6948,284 @@ function EnhanceEditor({ slides, onDone, onClose }) {
             Apply this look to all {slides.length} photos
           </button>
         )}
+      </div>
+    </div>
+  ), document.body);
+}
+
+/* ================= Card scanning: perspective warp + auto corner detect ================= */
+/* Rung 2: a 4-point homography solved by Gaussian elimination (the classical
+   getPerspectiveTransform), then inverse-mapped with bilinear sampling.
+   Rung 3: a lean gradient heuristic that finds the card's corners on clean
+   shots and falls back to an inset rectangle when unsure. No dependencies. */
+
+function solveHomography(dst, src) {
+  // Returns [a..h] such that:  srcX=(a x+b y+c)/(g x+h y+1), srcY=(d x+e y+f)/(g x+h y+1)
+  const A = [];
+  for (let i = 0; i < 4; i++) {
+    const [x, y] = dst[i], [X, Y] = src[i];
+    A.push([x, y, 1, 0, 0, 0, -x * X, -y * X, X]);
+    A.push([0, 0, 0, x, y, 1, -x * Y, -y * Y, Y]);
+  }
+  for (let col = 0; col < 8; col++) {
+    let piv = col;
+    for (let r = col + 1; r < 8; r++) if (Math.abs(A[r][col]) > Math.abs(A[piv][col])) piv = r;
+    if (Math.abs(A[piv][col]) < 1e-10) return null;
+    if (piv !== col) { const t = A[piv]; A[piv] = A[col]; A[col] = t; }
+    for (let r = 0; r < 8; r++) {
+      if (r === col) continue;
+      const f = A[r][col] / A[col][col];
+      for (let c = col; c < 9; c++) A[r][c] -= f * A[col][c];
+    }
+  }
+  const h = new Array(8);
+  for (let i = 0; i < 8; i++) {
+    h[i] = A[i][8] / A[i][i];
+    if (!isFinite(h[i])) return null;
+  }
+  return h;
+}
+
+function warpCardFromImage(imgEl, ptsNatural, outW, outH) {
+  // Cap the working size for speed; scale the corner points to match.
+  const natW = imgEl.naturalWidth, natH = imgEl.naturalHeight;
+  const cap = 1600;
+  const k = Math.min(1, cap / Math.max(natW, natH));
+  const sw = Math.max(1, Math.round(natW * k)), sh = Math.max(1, Math.round(natH * k));
+  const sc = document.createElement("canvas");
+  sc.width = sw; sc.height = sh;
+  const sctx = sc.getContext("2d");
+  sctx.drawImage(imgEl, 0, 0, sw, sh);
+  const srcData = sctx.getImageData(0, 0, sw, sh);
+  const S = srcData.data;
+  const srcPts = ptsNatural.map(([x, y]) => [x * k, y * k]);
+  const dstPts = [[0, 0], [outW, 0], [outW, outH], [0, outH]];
+  const h = solveHomography(dstPts, srcPts);
+
+  const oc = document.createElement("canvas");
+  oc.width = outW; oc.height = outH;
+  const octx = oc.getContext("2d");
+
+  if (!h) {
+    // Degenerate quad: never fail hard — fall back to the quad's bounding box.
+    const xs = srcPts.map((p) => p[0]), ys = srcPts.map((p) => p[1]);
+    const x0 = Math.max(0, Math.min(...xs)), y0 = Math.max(0, Math.min(...ys));
+    const bw = Math.max(2, Math.min(sw, Math.max(...xs)) - x0);
+    const bh = Math.max(2, Math.min(sh, Math.max(...ys)) - y0);
+    octx.drawImage(sc, x0, y0, bw, bh, 0, 0, outW, outH);
+    return oc.toDataURL("image/jpeg", 0.92);
+  }
+
+  const [a, b, c, d, e, f, g, hh] = h;
+  const out = octx.createImageData(outW, outH);
+  const O = out.data;
+  for (let y = 0; y < outH; y++) {
+    for (let x = 0; x < outW; x++) {
+      const den = g * x + hh * y + 1;
+      const sx = (a * x + b * y + c) / den;
+      const sy = (d * x + e * y + f) / den;
+      const di = (y * outW + x) * 4;
+      if (sx < 0 || sy < 0 || sx > sw - 1 || sy > sh - 1) {
+        O[di] = O[di + 1] = O[di + 2] = 245; O[di + 3] = 255;
+        continue;
+      }
+      const x0 = sx | 0, y0 = sy | 0;
+      const x1 = Math.min(sw - 1, x0 + 1), y1 = Math.min(sh - 1, y0 + 1);
+      const fx = sx - x0, fy = sy - y0;
+      const i00 = (y0 * sw + x0) * 4, i10 = (y0 * sw + x1) * 4;
+      const i01 = (y1 * sw + x0) * 4, i11 = (y1 * sw + x1) * 4;
+      const w00 = (1 - fx) * (1 - fy), w10 = fx * (1 - fy), w01 = (1 - fx) * fy, w11 = fx * fy;
+      O[di]     = S[i00] * w00 + S[i10] * w10 + S[i01] * w01 + S[i11] * w11;
+      O[di + 1] = S[i00 + 1] * w00 + S[i10 + 1] * w10 + S[i01 + 1] * w01 + S[i11 + 1] * w11;
+      O[di + 2] = S[i00 + 2] * w00 + S[i10 + 2] * w10 + S[i01 + 2] * w01 + S[i11 + 2] * w11;
+      O[di + 3] = 255;
+    }
+  }
+  octx.putImageData(out, 0, 0);
+  return oc.toDataURL("image/jpeg", 0.92);
+}
+
+function detectCardCorners(imgEl) {
+  // Rung 3: Sobel edges on a small grayscale copy, then corner-by-diagonal
+  // extremes over the strong-edge cloud. Returns natural-coord points or null.
+  try {
+    const natW = imgEl.naturalWidth, natH = imgEl.naturalHeight;
+    const dw = 256, dh = Math.max(32, Math.round((natH / natW) * dw));
+    const c = document.createElement("canvas");
+    c.width = dw; c.height = dh;
+    const ctx = c.getContext("2d");
+    ctx.drawImage(imgEl, 0, 0, dw, dh);
+    const D = ctx.getImageData(0, 0, dw, dh).data;
+    const gray = new Float32Array(dw * dh);
+    for (let i = 0; i < dw * dh; i++) gray[i] = D[i * 4] * 0.299 + D[i * 4 + 1] * 0.587 + D[i * 4 + 2] * 0.114;
+    const mag = new Float32Array(dw * dh);
+    let sum = 0, sumSq = 0, cnt = 0;
+    for (let y = 1; y < dh - 1; y++) {
+      for (let x = 1; x < dw - 1; x++) {
+        const i = y * dw + x;
+        const gx = -gray[i - dw - 1] - 2 * gray[i - 1] - gray[i + dw - 1] + gray[i - dw + 1] + 2 * gray[i + 1] + gray[i + dw + 1];
+        const gy = -gray[i - dw - 1] - 2 * gray[i - dw] - gray[i - dw + 1] + gray[i + dw - 1] + 2 * gray[i + dw] + gray[i + dw + 1];
+        const m = Math.sqrt(gx * gx + gy * gy);
+        mag[i] = m; sum += m; sumSq += m * m; cnt++;
+      }
+    }
+    const mean = sum / cnt;
+    const std = Math.sqrt(Math.max(0, sumSq / cnt - mean * mean));
+    const thr = Math.max(40, mean + std);
+    let tl = null, tr = null, br = null, bl = null;
+    let vTL = Infinity, vTR = -Infinity, vBR = -Infinity, vBL = Infinity;
+    for (let y = 1; y < dh - 1; y++) {
+      for (let x = 1; x < dw - 1; x++) {
+        if (mag[y * dw + x] < thr) continue;
+        const su = x + y, di = x - y;
+        if (su < vTL) { vTL = su; tl = [x, y]; }
+        if (su > vBR) { vBR = su; br = [x, y]; }
+        if (di > vTR) { vTR = di; tr = [x, y]; }
+        if (di < vBL) { vBL = di; bl = [x, y]; }
+      }
+    }
+    if (!tl || !tr || !br || !bl) return null;
+    const quad = [tl, tr, br, bl];
+    // sanity: convex-ish, sensible area, sides not collapsed
+    const area = Math.abs(
+      (tr[0] - tl[0]) * (bl[1] - tl[1]) - (bl[0] - tl[0]) * (tr[1] - tl[1]) +
+      (br[0] - tr[0]) * (bl[1] - tr[1]) - (bl[0] - tr[0]) * (br[1] - tr[1])
+    ) / 2;
+    const frame = dw * dh;
+    if (area < frame * 0.15 || area > frame * 0.97) return null;
+    const side = (p, q) => Math.hypot(p[0] - q[0], p[1] - q[1]);
+    const minSide = Math.min(side(tl, tr), side(tr, br), side(br, bl), side(bl, tl));
+    if (minSide < Math.min(dw, dh) * 0.18) return null;
+    const kx = natW / dw, ky = natH / dh;
+    return quad.map(([x, y]) => [x * kx, y * ky]);
+  } catch (e) { return null; }
+}
+
+function CardScanEditor({ image, onDone, onClose }) {
+  const wrapRef = useRef(null);
+  const imgRef = useRef(null);
+  const [view, setView] = useState(null);        // { scale, offX, offY, natW, natH }
+  const [pts, setPts] = useState(null);          // natural coords, TL TR BR BL
+  const [note, setNote] = useState("Finding the card…");
+  const [busy, setBusy] = useState(false);
+  const dragIdx = useRef(-1);
+
+  const measure = () => {
+    const wrap = wrapRef.current, img = imgRef.current;
+    if (!wrap || !img || !img.naturalWidth) return;
+    const cw = wrap.clientWidth, ch = wrap.clientHeight;
+    const scale = Math.min(cw / img.naturalWidth, ch / img.naturalHeight);
+    setView({
+      scale,
+      offX: (cw - img.naturalWidth * scale) / 2,
+      offY: (ch - img.naturalHeight * scale) / 2,
+      natW: img.naturalWidth, natH: img.naturalHeight,
+    });
+  };
+
+  const runAuto = () => {
+    const img = imgRef.current;
+    if (!img || !img.naturalWidth) return;
+    const found = detectCardCorners(img);
+    if (found) {
+      setPts(found);
+      setNote("Card detected — drag any corner to fine-tune.");
+    } else {
+      const w = img.naturalWidth, h = img.naturalHeight, ix = w * 0.1, iy = h * 0.1;
+      setPts([[ix, iy], [w - ix, iy], [w - ix, h - iy], [ix, h - iy]]);
+      setNote("Drag the four corners onto the card's corners.");
+    }
+  };
+
+  const onImgLoad = () => { measure(); runAuto(); };
+  useEffect(() => {
+    const onR = () => measure();
+    window.addEventListener("resize", onR);
+    return () => window.removeEventListener("resize", onR);
+  }, []);
+
+  const toScreen = ([x, y]) => [view.offX + x * view.scale, view.offY + y * view.scale];
+  const toImage = (cx, cy) => {
+    const r = wrapRef.current.getBoundingClientRect();
+    const x = (cx - r.left - view.offX) / view.scale;
+    const y = (cy - r.top - view.offY) / view.scale;
+    return [Math.max(0, Math.min(view.natW, x)), Math.max(0, Math.min(view.natH, y))];
+  };
+
+  const startDrag = (i) => (e) => {
+    e.preventDefault();
+    dragIdx.current = i;
+    const move = (ev) => {
+      if (dragIdx.current < 0 || !view) return;
+      const t = ev.touches ? ev.touches[0] : ev;
+      const p = toImage(t.clientX, t.clientY);
+      setPts((P) => P.map((q, k) => (k === dragIdx.current ? p : q)));
+    };
+    const up = () => {
+      dragIdx.current = -1;
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
+
+  const scan = () => {
+    if (!pts || !imgRef.current || busy) return;
+    setBusy(true);
+    setTimeout(() => {
+      try {
+        const flat = warpCardFromImage(imgRef.current, pts, 1280, 807);
+        onDone(flat);
+      } catch (e) {
+        console.error("scan failed:", e);
+        setBusy(false);
+        setNote("Couldn't scan — adjust the corners and try again.");
+        return;
+      }
+    }, 30);
+  };
+
+  return createPortal((
+    <div className="fixed inset-0 flex flex-col" style={{ background: "#0b0d0b", zIndex: 245, height: "100dvh" }}>
+      <div className="shrink-0 h-14 px-3 flex items-center justify-between" style={{ borderBottom: "1px solid rgba(255,255,255,.12)", paddingTop: "var(--sa-top)" }}>
+        <button onClick={onClose} className="tap w-9 h-9 rounded-full flex items-center justify-center" style={{ background: "rgba(255,255,255,.12)" }}>
+          <X size={18} color="#fff" />
+        </button>
+        <span className="text-[15px] font-semibold text-white">Scan card</span>
+        <button onClick={scan} disabled={busy || !pts} className="tap h-9 px-4 rounded-full text-[14px] font-semibold inline-flex items-center gap-1.5" style={{ background: C.gold, color: "#fff" }}>
+          {busy ? <Loader2 size={16} className="animate-spin" /> : <>Scan <Check size={15} strokeWidth={2.6} /></>}
+        </button>
+      </div>
+
+      <div ref={wrapRef} className="flex-1 min-h-0 relative overflow-hidden">
+        <img ref={imgRef} src={image} alt="" onLoad={onImgLoad}
+          className="absolute inset-0 w-full h-full" style={{ objectFit: "contain" }} draggable={false} />
+        {view && pts && (
+          <svg className="absolute inset-0 w-full h-full" style={{ touchAction: "none" }}>
+            <polygon points={pts.map((p) => toScreen(p).join(",")).join(" ")}
+              fill="rgba(212,164,76,0.12)" stroke={C.gold} strokeWidth="2.5" />
+            {pts.map((p, i) => {
+              const [sx, sy] = toScreen(p);
+              return (
+                <g key={i} onPointerDown={startDrag(i)} style={{ cursor: "grab" }}>
+                  <circle cx={sx} cy={sy} r="24" fill="rgba(212,164,76,0.12)" />
+                  <circle cx={sx} cy={sy} r="11" fill="#fff" stroke={C.gold} strokeWidth="3" />
+                </g>
+              );
+            })}
+          </svg>
+        )}
+      </div>
+
+      <div className="shrink-0 px-4 pt-3 pb-5 safe-bottom" style={{ borderTop: "1px solid rgba(255,255,255,.12)" }}>
+        <div className="flex items-center gap-2.5">
+          <p className="flex-1 text-[12.5px] leading-snug" style={{ color: "rgba(255,255,255,.75)" }}>{note}</p>
+          <button onClick={runAuto} className="tap h-9 px-3.5 rounded-full text-[12.5px] font-semibold inline-flex items-center gap-1.5 shrink-0"
+            style={{ background: "rgba(255,255,255,.12)", color: "#fff" }}>
+            <Sparkles size={13} /> Auto
+          </button>
+        </div>
       </div>
     </div>
   ), document.body);
