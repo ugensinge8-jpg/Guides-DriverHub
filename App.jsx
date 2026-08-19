@@ -2360,7 +2360,7 @@ function TalentProfile({ talent, posts, canRequest, viewer, self, contactOnly, e
       </div>
 
       <div className="px-5">
-        {self && ["guide", "driver"].includes(t.role) && licenseJoinYear(t.licenseNo) == null && (
+        {self && t.role === "guide" && licenseJoinYear(t.licenseNo) == null && (
           <div className="rounded-2xl p-4 mt-5" style={{ background: C.goldSoft, border: `1.5px solid ${C.gold}` }}>
             <div className="flex items-center gap-2">
               <CalendarDays size={16} color={C.gold} />
@@ -2403,7 +2403,7 @@ function TalentProfile({ talent, posts, canRequest, viewer, self, contactOnly, e
 
               {t.pitch && <div className="mt-5 pl-4" style={{ borderLeft: `3px solid ${C.gold}` }}><p className="text-[15px] leading-relaxed" style={{ color: C.ink }}>{t.pitch}</p></div>}
 
-              {t.role === "guide" && (self || ["operator", "admin"].includes(viewer?.kind)) && (
+              {["guide", "driver"].includes(t.role) && (self || ["operator", "admin"].includes(viewer?.kind)) && (
                 <div className="mt-5">
                   <button onClick={() => setCredsOpen(true)} className="tap w-full rounded-2xl p-4 flex items-center gap-3 text-left"
                     style={{ background: C.card, border: `1px solid ${C.line}`, borderLeft: `4px solid ${t.guideClass && GUIDE_CLASSES[t.guideClass] ? GUIDE_CLASSES[t.guideClass].color : C.gold}` }}>
@@ -5708,6 +5708,8 @@ function CredentialsPage({ talent, self, onClose }) {
       </div>
 
       <div className="flex-1 overflow-y-auto hidescroll px-5 py-4" style={{ scrollbarWidth: "none" }}>
+        {t.role === "guide" && (
+        <>
         <SectionLabel>Department of Tourism licence</SectionLabel>
         <div className="rounded-2xl overflow-hidden" style={{ background: C.card, border: `2px solid ${gc ? gc.color : C.line}` }}>
           {licUrl ? (
@@ -5730,6 +5732,8 @@ function CredentialsPage({ talent, self, onClose }) {
             </div>
           </div>
         </div>
+        </>
+        )}
 
         <div className="mt-6 flex items-center justify-between">
           <SectionLabel trailing={certs ? `${certs.length}` : null}>Other certificates</SectionLabel>
@@ -6986,6 +6990,52 @@ function solveHomography(dst, src) {
   return h;
 }
 
+function deskewCardCanvas(oc) {
+  // Measure the angle of the card's own white strip (name/number area) via PCA
+  // and rotate the output level. Guarantees horizontal scans even when the
+  // corners were set carelessly. Silent no-op on any doubt.
+  try {
+    const w = oc.width, h = oc.height;
+    const D = oc.getContext("2d").getImageData(0, 0, w, h).data;
+    const x0 = (w * 0.03) | 0, x1 = (w * 0.60) | 0;
+    const y0 = (h * 0.70) | 0, y1 = (h * 0.97) | 0;
+    const xs = [], ys = [];
+    for (let y = y0; y < y1; y += 2) {
+      for (let x = x0; x < x1; x += 2) {
+        const i = (y * w + x) * 4;
+        const r = D[i], g = D[i + 1], b = D[i + 2];
+        const mx = Math.max(r, g, b), mn = Math.min(r, g, b);
+        if (r > 168 && g > 168 && b > 168 && mx - mn < 42) { xs.push(x); ys.push(y); }
+      }
+    }
+    const n = xs.length;
+    if (n < 300) return oc;
+    let mx2 = 0, my2 = 0;
+    for (let i = 0; i < n; i++) { mx2 += xs[i]; my2 += ys[i]; }
+    mx2 /= n; my2 /= n;
+    let cxx = 0, cxy = 0, cyy = 0;
+    for (let i = 0; i < n; i++) {
+      const dx = xs[i] - mx2, dy = ys[i] - my2;
+      cxx += dx * dx; cxy += dx * dy; cyy += dy * dy;
+    }
+    let a = 0.5 * Math.atan2(2 * cxy, cxx - cyy) * 180 / Math.PI;
+    if (a > 45) a -= 90;
+    if (a < -45) a += 90;
+    if (Math.abs(a) <= 0.3 || Math.abs(a) > 15) return oc;
+    const rc = document.createElement("canvas");
+    rc.width = w; rc.height = h;
+    const rctx = rc.getContext("2d");
+    rctx.translate(w / 2, h / 2);
+    rctx.rotate(-a * Math.PI / 180);
+    rctx.drawImage(oc, -w / 2, -h / 2);
+    const k = 0.012, cw = (w * (1 - 2 * k)) | 0, ch = (h * (1 - 2 * k)) | 0;
+    const cc = document.createElement("canvas");
+    cc.width = cw; cc.height = ch;
+    cc.getContext("2d").drawImage(rc, (w * k) | 0, (h * k) | 0, cw, ch, 0, 0, cw, ch);
+    return cc;
+  } catch (e) { return oc; }
+}
+
 function warpCardFromImage(imgEl, ptsNatural, outW, outH) {
   // Cap the working size for speed; scale the corner points to match.
   const natW = imgEl.naturalWidth, natH = imgEl.naturalHeight;
@@ -7013,7 +7063,7 @@ function warpCardFromImage(imgEl, ptsNatural, outW, outH) {
     const bw = Math.max(2, Math.min(sw, Math.max(...xs)) - x0);
     const bh = Math.max(2, Math.min(sh, Math.max(...ys)) - y0);
     octx.drawImage(sc, x0, y0, bw, bh, 0, 0, outW, outH);
-    return oc.toDataURL("image/jpeg", 0.92);
+    return deskewCardCanvas(oc).toDataURL("image/jpeg", 0.92);
   }
 
   const [a, b, c, d, e, f, g, hh] = h;
@@ -7042,64 +7092,268 @@ function warpCardFromImage(imgEl, ptsNatural, outW, outH) {
     }
   }
   octx.putImageData(out, 0, 0);
-  return oc.toDataURL("image/jpeg", 0.92);
+  return deskewCardCanvas(oc).toDataURL("image/jpeg", 0.92);
+}
+
+function refineCardQuad(imgEl, quadNat) {
+  // Coarse-to-fine: each edge slides along its normal to the outermost point
+  // where (R - B) rises from card-level and stays risen — white and teal keep
+  // R\u2248B; every surround (gold, skin, fabric) runs red-heavy. Glare bands on the
+  // card also rise but the true edge is the LAST card-origin crossing.
+  try {
+    const natW = imgEl.naturalWidth, natH = imgEl.naturalHeight;
+    const cap = 1600;
+    const k = Math.min(1, cap / Math.max(natW, natH));
+    const w = Math.max(2, Math.round(natW * k)), h = Math.max(2, Math.round(natH * k));
+    const c = document.createElement("canvas");
+    c.width = w; c.height = h;
+    const ctx = c.getContext("2d");
+    ctx.drawImage(imgEl, 0, 0, w, h);
+    const D = ctx.getImageData(0, 0, w, h).data;
+    const rb = (x, y) => {
+      const xi = Math.round(x), yi = Math.round(y);
+      if (xi < 0 || yi < 0 || xi >= w || yi >= h) return 60;
+      const i = (yi * w + xi) * 4;
+      return D[i] - D[i + 2];
+    };
+    let fq = quadNat.map(([x, y]) => [x * k, y * k]);
+
+    const onePass = (Q) => {
+      const cx = (Q[0][0] + Q[1][0] + Q[2][0] + Q[3][0]) / 4;
+      const cy = (Q[0][1] + Q[1][1] + Q[2][1] + Q[3][1]) / 4;
+      const edge = (p, q) => {
+        let ex = q[0] - p[0], ey = q[1] - p[1];
+        const L = Math.hypot(ex, ey);
+        if (L < 20) return null;
+        ex /= L; ey /= L;
+        let nx = -ey, ny = ex;
+        const mx2 = (p[0] + q[0]) / 2, my2 = (p[1] + q[1]) / 2;
+        if ((mx2 - cx) * nx + (my2 - cy) * ny < 0) { nx = -nx; ny = -ny; }
+        const pts = [];
+        const nSamp = Math.max(10, Math.round(L / 22));
+        for (let i = 1; i < nSamp; i++) {
+          const t = i / nSamp;
+          const bx = p[0] + ex * L * t, by = p[1] + ey * L * t;
+          const prof = [];
+          for (let sIdx = -55; sIdx <= 80; sIdx += 2) prof.push(rb(bx + nx * sIdx, by + ny * sIdx));
+          const S = prof.map((_, j) => {
+            let acc = 0, cnt = 0;
+            for (let m = -2; m <= 2; m++) {
+              const jj = j + m;
+              if (jj >= 0 && jj < prof.length) { acc += prof[jj]; cnt++; }
+            }
+            return acc / cnt;
+          });
+          let chosen = -1;
+          for (let kk = 7; kk < S.length - 7; kk++) {
+            let pre = 0;
+            for (let m = kk - 6; m < kk; m++) pre += S[m];
+            pre /= 6;
+            let post = 0;
+            for (let m = kk + 1; m <= kk + 7; m++) post += S[m];
+            post /= 7;
+            let far = 0;
+            for (let m = kk + 4; m <= kk + 7; m++) far += S[m];
+            far /= 4;
+            if (pre < 10 && post - pre > 18 && far - pre > 14) chosen = kk;
+          }
+          if (chosen < 0) continue;
+          const sVal = -55 + 2 * chosen;
+          pts.push([bx + nx * sVal, by + ny * sVal]);
+        }
+        return pts.length >= 5 ? pts : null;
+      };
+      const fitL = (pts, vertical) => {
+        let U = pts.map((p) => (vertical ? p[1] : p[0]));
+        let V2 = pts.map((p) => (vertical ? p[0] : p[1]));
+        const solve = () => {
+          let su = 0, sv = 0, suu = 0, suv = 0;
+          const m2 = U.length;
+          for (let i = 0; i < m2; i++) { su += U[i]; sv += V2[i]; suu += U[i] * U[i]; suv += U[i] * V2[i]; }
+          const dd = m2 * suu - su * su;
+          if (Math.abs(dd) < 1e-9) return null;
+          const a2 = (m2 * suv - su * sv) / dd;
+          return [a2, (sv - a2 * su) / m2];
+        };
+        let ab = solve();
+        if (!ab) return null;
+        const res = U.map((u, i) => Math.abs(V2[i] - (ab[0] * u + ab[1])));
+        const med = res.slice().sort((p2, q2) => p2 - q2)[res.length >> 1] || 0;
+        const thr = Math.max(3, 2.2 * med);
+        const kept = [];
+        for (let i = 0; i < U.length; i++) if (res[i] < thr) kept.push(i);
+        if (kept.length >= 5) {
+          U = kept.map((i) => U[i]); V2 = kept.map((i) => V2[i]);
+          const ab2 = solve();
+          if (ab2) ab = ab2;
+        }
+        return ab;
+      };
+      const tp = edge(Q[0], Q[1]), bp = edge(Q[3], Q[2]);
+      const lp = edge(Q[0], Q[3]), rp = edge(Q[1], Q[2]);
+      if (!tp || !bp || !lp || !rp) return null;
+      const T = fitL(tp, false), Bo = fitL(bp, false), Lf = fitL(lp, true), Rf = fitL(rp, true);
+      if (!T || !Bo || !Lf || !Rf) return null;
+      const hv = (ha, hb, va, vb) => {
+        const y = (ha * vb + hb) / (1 - ha * va);
+        return [va * y + vb, y];
+      };
+      return [hv(T[0], T[1], Lf[0], Lf[1]), hv(T[0], T[1], Rf[0], Rf[1]),
+              hv(Bo[0], Bo[1], Rf[0], Rf[1]), hv(Bo[0], Bo[1], Lf[0], Lf[1])];
+    };
+
+    for (let pass = 0; pass < 2; pass++) {
+      const nq = onePass(fq);
+      if (!nq) break;
+      fq = nq.map(([x, y]) => [Math.max(0, Math.min(w - 1, x)), Math.max(0, Math.min(h - 1, y))]);
+    }
+    return fq.map(([x, y]) => [x / k, y / k]);
+  } catch (e) { return null; }
 }
 
 function detectCardCorners(imgEl) {
-  // Rung 3: Sobel edges on a small grayscale copy, then corner-by-diagonal
-  // extremes over the strong-edge cloud. Returns natural-coord points or null.
+  // Careless-path detector: finds the licence by its colour physics (card white
+  // has R\u2248B; gold/skin/pink never do; card bodies are saturated), isolates the
+  // central connected blob so screenshots and backgrounds can't hijack corners,
+  // demands thickness at every border (glints are thin, cards are thick), and
+  // locks opposite edges to coherent slopes. Returns natural coords or null.
   try {
     const natW = imgEl.naturalWidth, natH = imgEl.naturalHeight;
-    const dw = 256, dh = Math.max(32, Math.round((natH / natW) * dw));
+    const dw = 256, dh = Math.max(48, Math.round((natH / natW) * dw));
     const c = document.createElement("canvas");
     c.width = dw; c.height = dh;
     const ctx = c.getContext("2d");
     ctx.drawImage(imgEl, 0, 0, dw, dh);
     const D = ctx.getImageData(0, 0, dw, dh).data;
-    const gray = new Float32Array(dw * dh);
-    for (let i = 0; i < dw * dh; i++) gray[i] = D[i * 4] * 0.299 + D[i * 4 + 1] * 0.587 + D[i * 4 + 2] * 0.114;
-    const mag = new Float32Array(dw * dh);
-    let sum = 0, sumSq = 0, cnt = 0;
-    for (let y = 1; y < dh - 1; y++) {
-      for (let x = 1; x < dw - 1; x++) {
-        const i = y * dw + x;
-        const gx = -gray[i - dw - 1] - 2 * gray[i - 1] - gray[i + dw - 1] + gray[i - dw + 1] + 2 * gray[i + 1] + gray[i + dw + 1];
-        const gy = -gray[i - dw - 1] - 2 * gray[i - dw] - gray[i - dw + 1] + gray[i + dw - 1] + 2 * gray[i + dw] + gray[i + dw + 1];
-        const m = Math.sqrt(gx * gx + gy * gy);
-        mag[i] = m; sum += m; sumSq += m * m; cnt++;
+    const mask = new Uint8Array(dw * dh);
+    for (let i = 0; i < dw * dh; i++) {
+      const r = D[i * 4], g = D[i * 4 + 1], b = D[i * 4 + 2];
+      const mx = Math.max(r, g, b), mn = Math.min(r, g, b);
+      const v = (r + g + b) / 3;
+      const vv = v + 1e-6;
+      const isWhite = Math.abs(r - b) / vv < 0.14 && (mx - mn) / vv < 0.30 && vv > 55;
+      const isBody = (mx - mn) / vv > 0.22 && vv > 22 && !((r - b) / vv > 0.18) && g >= r - 6;
+      if (isWhite || isBody) mask[i] = 1;
+    }
+    // largest connected blob among center seeds
+    const seen = new Uint8Array(dw * dh);
+    const seeds = [
+      [dw >> 1, dh >> 1], [dw >> 1, (dh * 0.38) | 0], [dw >> 1, (dh * 0.62) | 0],
+      [(dw * 0.35) | 0, dh >> 1], [(dw * 0.65) | 0, dh >> 1],
+    ];
+    let best = null;
+    for (const [sx0, sy0] of seeds) {
+      const s0 = sy0 * dw + sx0;
+      if (!mask[s0] || seen[s0]) continue;
+      const stack = [s0]; const pts = []; seen[s0] = 1;
+      while (stack.length) {
+        const p = stack.pop(); pts.push(p);
+        const px = p % dw, py = (p / dw) | 0;
+        if (px > 0 && mask[p - 1] && !seen[p - 1]) { seen[p - 1] = 1; stack.push(p - 1); }
+        if (px < dw - 1 && mask[p + 1] && !seen[p + 1]) { seen[p + 1] = 1; stack.push(p + 1); }
+        if (py > 0 && mask[p - dw] && !seen[p - dw]) { seen[p - dw] = 1; stack.push(p - dw); }
+        if (py < dh - 1 && mask[p + dw] && !seen[p + dw]) { seen[p + dw] = 1; stack.push(p + dw); }
+      }
+      if (!best || pts.length > best.length) best = pts;
+    }
+    if (!best || best.length < dw * dh * 0.10) return null;
+    const blob = new Uint8Array(dw * dh);
+    for (const p of best) blob[p] = 1;
+
+    const RUN = 4, THICK = 10, FILL = 0.8;
+    const colOK = (x, y) => {
+      let cnt = 0;
+      for (let k = 0; k < THICK; k++) cnt += blob[Math.min(dh - 1, y + k) * dw + x];
+      return cnt / THICK > FILL;
+    };
+    const colOKup = (x, y) => {
+      let cnt = 0;
+      for (let k = 0; k < THICK; k++) cnt += blob[Math.max(0, y - k) * dw + x];
+      return cnt / THICK > FILL;
+    };
+    const rowOK = (x, y) => {
+      let cnt = 0;
+      for (let k = 0; k < THICK; k++) cnt += blob[y * dw + Math.min(dw - 1, x + k)];
+      return cnt / THICK > FILL;
+    };
+    const rowOKleft = (x, y) => {
+      let cnt = 0;
+      for (let k = 0; k < THICK; k++) cnt += blob[y * dw + Math.max(0, x - k)];
+      return cnt / THICK > FILL;
+    };
+
+    const topP = [], botP = [], lefP = [], rigP = [];
+    for (let x = 4; x < dw - 4; x += 4) {
+      for (let y = 1; y < dh - RUN; y++) {
+        if (blob[y * dw + x] && colOK(x, y)) { topP.push([x, y]); break; }
+      }
+      for (let y = dh - 2; y >= RUN; y--) {
+        if (blob[y * dw + x] && colOKup(x, y)) { botP.push([x, y]); break; }
       }
     }
-    const mean = sum / cnt;
-    const std = Math.sqrt(Math.max(0, sumSq / cnt - mean * mean));
-    const thr = Math.max(40, mean + std);
-    let tl = null, tr = null, br = null, bl = null;
-    let vTL = Infinity, vTR = -Infinity, vBR = -Infinity, vBL = Infinity;
-    for (let y = 1; y < dh - 1; y++) {
-      for (let x = 1; x < dw - 1; x++) {
-        if (mag[y * dw + x] < thr) continue;
-        const su = x + y, di = x - y;
-        if (su < vTL) { vTL = su; tl = [x, y]; }
-        if (su > vBR) { vBR = su; br = [x, y]; }
-        if (di > vTR) { vTR = di; tr = [x, y]; }
-        if (di < vBL) { vBL = di; bl = [x, y]; }
+    for (let y = 4; y < dh - 4; y += 4) {
+      for (let x = 1; x < dw - RUN; x++) {
+        if (blob[y * dw + x] && rowOK(x, y)) { lefP.push([y, x]); break; }
+      }
+      for (let x = dw - 2; x >= RUN; x--) {
+        if (blob[y * dw + x] && rowOKleft(x, y)) { rigP.push([y, x]); break; }
       }
     }
-    if (!tl || !tr || !br || !bl) return null;
-    const quad = [tl, tr, br, bl];
-    // sanity: convex-ish, sensible area, sides not collapsed
+
+    const fitLine = (pts) => {
+      const solve = (P) => {
+        let su = 0, sv = 0, suu = 0, suv = 0;
+        const n2 = P.length;
+        for (const [u, v] of P) { su += u; sv += v; suu += u * u; suv += u * v; }
+        const dd = n2 * suu - su * su;
+        if (Math.abs(dd) < 1e-9) return null;
+        const a = (n2 * suv - su * sv) / dd;
+        return [a, (sv - a * su) / n2];
+      };
+      if (pts.length < 6) return null;
+      let ab = solve(pts);
+      if (!ab) return null;
+      const res = pts.map(([u, v]) => Math.abs(v - (ab[0] * u + ab[1])));
+      const med = res.slice().sort((p, q) => p - q)[res.length >> 1] || 0;
+      const keep = pts.filter((_, i) => res[i] < Math.max(2.5, 2.5 * med));
+      if (keep.length >= 6) { const ab2 = solve(keep); if (ab2) ab = ab2; }
+      return ab;
+    };
+
+    const T = fitLine(topP), Bo = fitLine(botP), L = fitLine(lefP), Rg = fitLine(rigP);
+    if (!T || !Bo) return null;
+    let [ta, tb] = T, [ba, bb2] = Bo;
+    const deg = (m) => Math.atan(m) * 180 / Math.PI;
+    if (Math.abs(deg(ta) - deg(ba)) > 1.6) {
+      const meds = topP.map(([u, v]) => v - ba * u).sort((p, q) => p - q);
+      tb = meds[meds.length >> 1]; ta = ba;
+    }
+    const edgeL = L ? [L[0], L[1]] : [0, 1];
+    const edgeR = Rg ? [Rg[0], Rg[1]] : [0, dw - 2];
+    const hv = (ha, hb, va, vb) => {
+      const y = (ha * vb + hb) / (1 - ha * va);
+      return [va * y + vb, y];
+    };
+    let quad = [hv(ta, tb, edgeL[0], edgeL[1]), hv(ta, tb, edgeR[0], edgeR[1]),
+                hv(ba, bb2, edgeR[0], edgeR[1]), hv(ba, bb2, edgeL[0], edgeL[1])];
+    quad = quad.map(([x, y]) => [Math.max(0, Math.min(dw - 1, x)), Math.max(0, Math.min(dh - 1, y))]);
+
     const area = Math.abs(
-      (tr[0] - tl[0]) * (bl[1] - tl[1]) - (bl[0] - tl[0]) * (tr[1] - tl[1]) +
-      (br[0] - tr[0]) * (bl[1] - tr[1]) - (bl[0] - tr[0]) * (br[1] - tr[1])
+      (quad[1][0] - quad[0][0]) * (quad[3][1] - quad[0][1]) - (quad[3][0] - quad[0][0]) * (quad[1][1] - quad[0][1]) +
+      (quad[2][0] - quad[1][0]) * (quad[3][1] - quad[1][1]) - (quad[3][0] - quad[1][0]) * (quad[2][1] - quad[1][1])
     ) / 2;
-    const frame = dw * dh;
-    if (area < frame * 0.15 || area > frame * 0.97) return null;
+    if (area < dw * dh * 0.15 || area > dw * dh * 0.97) return null;
     const side = (p, q) => Math.hypot(p[0] - q[0], p[1] - q[1]);
-    const minSide = Math.min(side(tl, tr), side(tr, br), side(br, bl), side(bl, tl));
+    const minSide = Math.min(side(quad[0], quad[1]), side(quad[1], quad[2]), side(quad[2], quad[3]), side(quad[3], quad[0]));
     if (minSide < Math.min(dw, dh) * 0.18) return null;
+
     const kx = natW / dw, ky = natH / dh;
-    return quad.map(([x, y]) => [x * kx, y * ky]);
+    let natQuad = quad.map(([x, y]) => [x * kx, y * ky]);
+    natQuad = refineCardQuad(imgEl, natQuad) || natQuad;
+    return natQuad;
   } catch (e) { return null; }
 }
+
 
 function CardScanEditor({ image, onDone, onClose }) {
   const wrapRef = useRef(null);
