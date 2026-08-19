@@ -30,6 +30,7 @@ const uid = () => (crypto?.randomUUID ? crypto.randomUUID() : String(Date.now() 
 let PROFILE_DIR = {};
 const profileToTalent = (p) => ({
   id: p.id, role: p.role, name: (p.role === "business" && p.company_name) || p.full_name || "Member", base: p.base || "",
+  handle: p.handle || null,
   initials: initialsOf((p.role === "business" && p.company_name) || p.full_name || "?"),
   years: licenseExperienceYears(p.license_no) ?? 0,
   trips: 0, rating: null,
@@ -1155,9 +1156,9 @@ function WelcomeBullet({ Icon, title, body }) {
 
 /* ================================= Shell ================================== */
 const NAV = {
-  guide: [{ id: "post", label: "Feed", Icon: Newspaper }, { id: "jobs", label: "Jobs", Icon: Briefcase }, { id: "trips", label: "Trips", Icon: MapIcon }, { id: "chats", label: "Messages", Icon: MessageSquare }, { id: "profile", label: "Profile", Icon: User }],
-  driver: [{ id: "post", label: "Feed", Icon: Newspaper }, { id: "jobs", label: "Jobs", Icon: Briefcase }, { id: "trips", label: "Trips", Icon: MapIcon }, { id: "chats", label: "Messages", Icon: MessageSquare }, { id: "profile", label: "Profile", Icon: User }],
-  operator: [{ id: "discover", label: "Discover", Icon: Search }, { id: "requests", label: "Jobs", Icon: Briefcase }, { id: "trips", label: "Trips", Icon: MapIcon }, { id: "chats", label: "Messages", Icon: MessageSquare }, { id: "feed", label: "Feed", Icon: Newspaper }],
+  guide: [{ id: "post", label: "Feed", Icon: Newspaper }, { id: "trips", label: "Trips", Icon: Briefcase }, { id: "chats", label: "Messages", Icon: MessageSquare }, { id: "profile", label: "Profile", Icon: User }],
+  driver: [{ id: "post", label: "Feed", Icon: Newspaper }, { id: "trips", label: "Trips", Icon: Briefcase }, { id: "chats", label: "Messages", Icon: MessageSquare }, { id: "profile", label: "Profile", Icon: User }],
+  operator: [{ id: "discover", label: "Discover", Icon: Search }, { id: "trips", label: "Trips", Icon: Briefcase }, { id: "chats", label: "Messages", Icon: MessageSquare }, { id: "post", label: "Feed", Icon: Newspaper }, { id: "profile", label: "Profile", Icon: User }],
   business: [{ id: "post", label: "Feed", Icon: Newspaper }, { id: "bookings", label: "Bookings", Icon: CalendarDays }, { id: "discover", label: "Discover", Icon: Search }, { id: "chats", label: "Messages", Icon: MessageSquare }, { id: "profile", label: "Profile", Icon: User }],
   admin: [{ id: "review", label: "Review", Icon: ShieldCheck }, { id: "users", label: "Users", Icon: Users }, { id: "feed", label: "Feed", Icon: Newspaper }, { id: "discover", label: "Discover", Icon: Search }, { id: "chats", label: "Messages", Icon: MessageSquare }],
 };
@@ -1300,12 +1301,14 @@ function Shell({ user, posts, jobs, trips, listings, actions, engagement, dm, di
         ) : (
           <div key={tab} className="fade">
             {tab === "post" && <PostTab user={user} posts={posts} onAdd={actions.addPost} eng={eng} onOpenProfile={openProfile} />}
-            {tab === "jobs" && <JobsHub user={user} jobs={jobs} listings={listings} actions={actions} />}
-            {tab === "trips" && <TripsTab user={user} trips={trips} actions={actions} onMessage={(id) => { setTab("chats"); setDmWith(id); }} />}
+            {["trips", "jobs", "requests"].includes(tab) && (
+              <WorkHub user={user} jobs={jobs} listings={listings} posts={posts} trips={trips} actions={actions} eng={eng}
+                onOpenProfile={openProfile} onMessage={(id) => { setTab("chats"); setDmWith(id); }}
+                initialDial={tab === "trips" ? "trips" : "hiring"} />
+            )}
             {tab === "chats" && <ChatsTab user={user} me={actorId} dm={dm} trips={trips} actions={actions} posts={posts} dirTick={dirTick} onOpenPost={setSharedPost} openWith={dmWith} onOpened={() => setDmWith(null)} onOpenProfile={openProfile} />}
             {tab === "profile" && <TalentProfile talent={talentById(user.talentId)} posts={posts} eng={eng} self onSetAvailability={actions.setAvailability} onOpenProfile={openProfile} onProfileSaved={actions.reloadDirectory} onBack={null} />}
             {tab === "discover" && <Discover onOpen={openProfile} initialQuery={searchTerm} dirTick={dirTick} viewerKind={user.kind} />}
-            {tab === "requests" && <OperatorJobs user={user} jobs={jobs} listings={listings} posts={posts} actions={actions} eng={eng} onOpen={openProfile} />}
             {tab === "bookings" && <BusinessBookings user={user} />}
             {tab === "feed" && <Feed posts={posts} eng={eng} admin={user.kind === "admin"} onDelete={actions.deletePost} onOpenProfile={openProfile} following={myFollowing} />}
             {tab === "review" && <Review posts={posts} onApprove={actions.approve} onReject={actions.reject} eng={eng} />}
@@ -1537,12 +1540,74 @@ const guideClassRank = (t) => (t.guideClass && GUIDE_CLASSES[t.guideClass] ? GUI
 const roleLabel = (r) => (r === "guide" ? "Guide" : r === "operator" ? "Tour Operator" : r === "business" ? "Business" : r === "admin" ? "Admin" : r === "both" ? "Guide + Driver" : "Driver");
 
 /* ======================== Feed tab (guides & drivers) ===================== */
+function PushNudgeCard({ profileId }) {
+  // Browsers only grant notification permission from a deliberate user tap —
+  // the silent auto-ask at sign-in dies every time. This card supplies the tap,
+  // states the reason, and disappears forever once this device is subscribed.
+  const [state, setState] = useState("checking"); // checking | show | blocked | busy | done
+  useEffect(() => {
+    let on = true;
+    (async () => {
+      try {
+        if (!("Notification" in window) || !("serviceWorker" in navigator) || !("PushManager" in window)) {
+          if (on) setState("done"); return;
+        }
+        if (Notification.permission === "denied") { if (on) setState("blocked"); return; }
+        const reg = await navigator.serviceWorker.ready;
+        const sub = await reg.pushManager.getSubscription();
+        if (on) setState(sub ? "done" : "show");
+      } catch (e) { if (on) setState("done"); }
+    })();
+    return () => { on = false; };
+  }, []);
+  const enable = async () => {
+    setState("busy");
+    try {
+      await ensurePushSubscription(profileId);
+      const reg = await navigator.serviceWorker.ready;
+      const sub = await reg.pushManager.getSubscription();
+      setState(sub ? "done" : (Notification.permission === "denied" ? "blocked" : "show"));
+    } catch (e) {
+      setState(Notification.permission === "denied" ? "blocked" : "show");
+    }
+  };
+  if (state === "checking" || state === "done") return null;
+  return (
+    <div className="rounded-2xl p-4 mb-5" style={{ background: C.pineSoft, border: `1.5px solid ${C.pine}` }}>
+      <div className="flex items-start gap-2.5">
+        <div className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0" style={{ background: C.pine }}>
+          <Bell size={17} color="#fff" />
+        </div>
+        <div className="flex-1">
+          <div className="text-[14px] font-semibold" style={{ color: C.pine }}>Turn on notifications</div>
+          <p className="text-[12.5px] leading-snug mt-0.5" style={{ color: C.pine }}>
+            Get realtime updates the moment they happen — job offers, booking requests, messages and
+            admin approvals reach your phone instantly, even when the app is closed.
+          </p>
+        </div>
+      </div>
+      {state === "blocked" ? (
+        <p className="text-[12px] mt-2.5" style={{ color: C.maroon }}>
+          Notifications are blocked for this site — allow them in your browser's site settings, then reopen the app.
+        </p>
+      ) : (
+        <button onClick={enable} disabled={state === "busy"}
+          className="tap w-full h-11 rounded-xl text-[14px] font-semibold mt-3"
+          style={{ background: C.pine, color: "#fff" }}>
+          {state === "busy" ? "Turning on…" : "Enable notifications"}
+        </button>
+      )}
+    </div>
+  );
+}
+
 function PostTab({ user, posts, onAdd, eng, onOpenProfile }) {
   const me = user.talentId;
   const t = talentById(me) || { id: me, name: user.name || "You", initials: user.initials || "?" };
   const visible = posts.filter((p) => p.status === "approved" || p.talentId === me);
   return (
     <div className="px-5 py-4">
+      <PushNudgeCard profileId={me} />
       <Composer talent={t} onAdd={onAdd} />
       <div className="mt-7"><SectionLabel trailing={`${visible.length}`}>Feed</SectionLabel></div>
       {visible.length === 0 ? (
@@ -2281,6 +2346,7 @@ function TalentProfile({ talent, posts, canRequest, viewer, self, contactOnly, e
             <div>
               <div className="flex items-start gap-1.5">
                 <h1 className="text-[22px] font-semibold leading-tight tracking-[-0.01em]" style={{ color: C.ink, wordBreak: "break-word" }}>{t.name}</h1>
+                {t.handle && <div className="text-[13px] mt-0.5" style={{ color: C.muted }}>@{t.handle}</div>}
                 {t.verified && <BadgeCheck size={17} color={C.pine} className="shrink-0 mt-1" />}
               </div>
               <div className="flex items-center gap-1 text-[13.5px] mt-1" style={{ color: C.muted }}><MapPin size={13} /> {t.role === "guide" && t.guideClass && GUIDE_CLASSES[t.guideClass]
@@ -2311,7 +2377,7 @@ function TalentProfile({ talent, posts, canRequest, viewer, self, contactOnly, e
             <Stat n={gallery.length} label="posts" />
             <Stat n={followerCount} label={followerCount === 1 ? "follower" : "followers"} onClick={() => setListMode("followers")} />
             <Stat n={followingCount} label="following" onClick={() => setListMode("following")} />
-            <Stat n={t.years} label="yrs" />
+            {["guide", "driver"].includes(t.role) && <Stat n={t.years} label="yrs" />}
           </div>
 
           {self && ["guide", "driver"].includes(t.role) && (
@@ -2557,6 +2623,215 @@ function CrewAvatars({ members, size = 26 }) {
           <span className="font-semibold" style={{ color: C.goldSoft, fontSize: size * 0.34 }}>{m.initials}</span>
         </div>
       ))}
+    </div>
+  );
+}
+
+function TripCalendar({ user, trips }) {
+  const me = user.talentId;
+  const isOp = user.kind === "operator";
+  const mine = (trips || []).filter((t) => (isOp ? t.operatorId === me : (t.members || []).some((m) => m.id === me)));
+  const today = new Date();
+  const [ym, setYm] = useState({ y: today.getFullYear(), m: today.getMonth() });
+  const [sel, setSel] = useState(null);
+  const [notes, setNotes] = useState([]);
+  const [adding, setAdding] = useState(false);
+  const [nTitle, setNTitle] = useState("");
+  const [nBody, setNBody] = useState("");
+  const [nEnd, setNEnd] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const load = async () => {
+    const { data } = await supabase.from("calendar_notes").select("*").eq("profile_id", me).order("date");
+    setNotes(data || []);
+  };
+  useEffect(() => { load(); }, [me]);
+
+  const iso = (y, m, d) => `${y}-${String(m + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+  const fD = (x) => new Date(x + "T00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+  const inRange = (day, a, b) => !!a && day >= a && day <= (b || a);
+  const tripsOn = (day) => mine.filter((t) => inRange(day, t.start, t.end));
+  const notesOn = (day) => notes.filter((x) => inRange(day, x.date, x.end_date));
+
+  const first = new Date(ym.y, ym.m, 1);
+  const startPad = first.getDay();
+  const dim = new Date(ym.y, ym.m + 1, 0).getDate();
+  const monthName = first.toLocaleDateString("en-GB", { month: "long", year: "numeric" });
+  const todayIso = iso(today.getFullYear(), today.getMonth(), today.getDate());
+  const curYm = `${ym.y}-${String(ym.m + 1).padStart(2, "0")}`;
+  const monthTrips = mine.filter((t) => t.start && t.start.slice(0, 7) <= curYm && (t.end || t.start).slice(0, 7) >= curYm);
+
+  const addNote = async () => {
+    if (!nTitle.trim() || !sel || busy) return;
+    setBusy(true);
+    await supabase.from("calendar_notes").insert({
+      profile_id: me, date: sel, end_date: nEnd || null, title: nTitle.trim(), body: nBody.trim() || null,
+    });
+    setBusy(false); setAdding(false); setNTitle(""); setNBody(""); setNEnd("");
+    load();
+  };
+  const delNote = async (id) => { await supabase.from("calendar_notes").delete().eq("id", id); load(); };
+
+  const shift = (d) => {
+    const nm = new Date(ym.y, ym.m + d, 1);
+    setYm({ y: nm.getFullYear(), m: nm.getMonth() });
+    setSel(null); setAdding(false);
+  };
+
+  return (
+    <div className="px-5 py-4">
+      <div className="rounded-2xl p-4" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+        <div className="flex items-center justify-between mb-3">
+          <button onClick={() => shift(-1)} className="tap w-9 h-9 rounded-full flex items-center justify-center" style={{ background: C.bg, border: `1px solid ${C.line}` }}>
+            <ChevronLeft size={17} color={C.ink} />
+          </button>
+          <div className="text-[15px] font-semibold" style={{ color: C.ink }}>{monthName}</div>
+          <button onClick={() => shift(1)} className="tap w-9 h-9 rounded-full flex items-center justify-center" style={{ background: C.bg, border: `1px solid ${C.line}` }}>
+            <ChevronLeft size={17} color={C.ink} style={{ transform: "rotate(180deg)" }} />
+          </button>
+        </div>
+        <div className="grid grid-cols-7 mb-1">
+          {["S", "M", "T", "W", "T", "F", "S"].map((d, i) => (
+            <div key={i} className="text-center text-[10.5px] font-semibold py-1" style={{ color: C.muted }}>{d}</div>
+          ))}
+        </div>
+        <div className="grid grid-cols-7 gap-y-1">
+          {Array.from({ length: startPad }).map((_, i) => <div key={"p" + i} />)}
+          {Array.from({ length: dim }).map((_, i) => {
+            const d = i + 1;
+            const day = iso(ym.y, ym.m, d);
+            const hasTrip = tripsOn(day).length > 0;
+            const hasNote = notesOn(day).length > 0;
+            const isSel = sel === day;
+            const isToday = day === todayIso;
+            return (
+              <button key={d} onClick={() => { setSel(isSel ? null : day); setAdding(false); }}
+                className="tap relative h-11 rounded-lg flex flex-col items-center justify-center"
+                style={{
+                  background: hasTrip ? C.pineSoft : "transparent",
+                  border: isSel ? `2px solid ${C.pine}` : isToday ? `1.5px dashed ${C.gold}` : "1.5px solid transparent",
+                }}>
+                <span className="text-[13px] font-medium" style={{ color: hasTrip ? C.pine : C.ink }}>{d}</span>
+                <span className="flex gap-0.5 mt-0.5" style={{ height: 4 }}>
+                  {hasTrip && <span className="rounded-full" style={{ width: 10, height: 3, background: C.pine }} />}
+                  {hasNote && <span className="rounded-full" style={{ width: 4, height: 4, background: C.gold }} />}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {monthTrips.length > 0 && (
+        <div className="mt-4">
+          <SectionLabel trailing={`${monthTrips.length}`}>Trips this month</SectionLabel>
+          <div className="space-y-2">
+            {monthTrips.map((t) => (
+              <div key={t.id} className="flex items-center gap-3 rounded-xl px-3.5 py-3" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+                <span className="rounded-full shrink-0" style={{ width: 4, height: 30, background: C.pine }} />
+                <div className="flex-1 min-w-0">
+                  <div className="text-[13.5px] font-semibold truncate" style={{ color: C.ink }}>{t.title}</div>
+                  <div className="text-[12px]" style={{ color: C.muted }}>{fD(t.start)}{t.end && t.end !== t.start ? ` \u2013 ${fD(t.end)}` : ""}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="mt-4">
+        {!sel ? (
+          <p className="text-[12.5px] text-center py-3" style={{ color: C.muted }}>Tap a day to see its trips and notes — or to add a note.</p>
+        ) : (
+          <div className="rounded-2xl p-4" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+            <div className="text-[14px] font-semibold mb-2.5" style={{ color: C.ink }}>
+              {new Date(sel + "T00:00").toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" })}
+            </div>
+            {tripsOn(sel).map((t) => (
+              <div key={t.id} className="flex items-center gap-2.5 rounded-xl px-3 py-2.5 mb-2" style={{ background: C.pineSoft }}>
+                <MapIcon size={15} color={C.pine} />
+                <div className="flex-1 min-w-0">
+                  <div className="text-[13px] font-semibold truncate" style={{ color: C.pine }}>{t.title}</div>
+                  <div className="text-[11.5px]" style={{ color: C.pine }}>{fD(t.start)}{t.end && t.end !== t.start ? ` \u2013 ${fD(t.end)}` : ""}</div>
+                </div>
+              </div>
+            ))}
+            {notesOn(sel).map((x) => (
+              <div key={x.id} className="flex items-start gap-2.5 rounded-xl px-3 py-2.5 mb-2" style={{ background: C.goldSoft }}>
+                <div className="flex-1 min-w-0">
+                  <div className="text-[13px] font-semibold" style={{ color: "#7a5a1e" }}>{x.title}</div>
+                  {x.body && <div className="text-[12px] mt-0.5 leading-snug" style={{ color: "#7a5a1e" }}>{x.body}</div>}
+                  {x.end_date && <div className="text-[11px] mt-0.5" style={{ color: "#7a5a1e" }}>until {fD(x.end_date)}</div>}
+                </div>
+                <button onClick={() => delNote(x.id)} className="tap w-7 h-7 rounded-full flex items-center justify-center shrink-0" style={{ background: "rgba(122,90,30,.12)" }}>
+                  <X size={13} color="#7a5a1e" />
+                </button>
+              </div>
+            ))}
+            {tripsOn(sel).length === 0 && notesOn(sel).length === 0 && !adding && (
+              <p className="text-[12.5px] mb-2" style={{ color: C.muted }}>Nothing on this day yet.</p>
+            )}
+            {!adding ? (
+              <button onClick={() => setAdding(true)} className="tap w-full h-10 rounded-xl text-[13px] font-semibold" style={{ background: C.goldSoft, color: "#7a5a1e" }}>
+                + Add a note
+              </button>
+            ) : (
+              <div className="mt-1">
+                <input value={nTitle} onChange={(e) => setNTitle(e.target.value)} maxLength={60} placeholder="Title — e.g. Airport pickup, Hotel booked"
+                  className="w-full h-11 px-3.5 rounded-xl text-[14px] mb-2" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
+                <textarea value={nBody} onChange={(e) => setNBody(e.target.value)} rows={2} maxLength={200} placeholder="Details — optional"
+                  className="w-full px-3.5 py-2.5 rounded-xl text-[13.5px] resize-none mb-2" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
+                <div className="flex items-center gap-2 mb-2">
+                  <span className="text-[12px]" style={{ color: C.muted }}>Until (optional)</span>
+                  <input type="date" value={nEnd} min={sel} onChange={(e) => setNEnd(e.target.value)}
+                    className="flex-1 h-10 px-3 rounded-xl text-[13px]" style={{ background: C.bg, border: `1px solid ${C.line}`, color: nEnd ? C.ink : C.muted }} />
+                </div>
+                <div className="flex gap-2">
+                  <button onClick={() => { setAdding(false); setNTitle(""); setNBody(""); setNEnd(""); }}
+                    className="tap flex-1 h-10 rounded-xl text-[13px] font-semibold" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.muted }}>Cancel</button>
+                  <button onClick={addNote} disabled={busy || !nTitle.trim()}
+                    className="tap flex-1 h-10 rounded-xl text-[13px] font-semibold" style={{ background: nTitle.trim() ? C.pine : "#C7CEC7", color: "#fff" }}>
+                    {busy ? "Saving\u2026" : "Save note"}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function WorkHub({ user, jobs, listings, posts, trips, actions, eng, onOpenProfile, onMessage, initialDial }) {
+  const [dial, setDial] = useState(initialDial || "hiring");
+  useEffect(() => { if (initialDial) setDial(initialDial); }, [initialDial]);
+  const isOp = user.kind === "operator";
+  const DIALS = [
+    { id: "hiring", label: isOp ? "Hiring" : "Jobs" },
+    { id: "trips", label: isOp ? "Confirmed trips" : "My trips" },
+    { id: "cal", label: "Calendar" },
+  ];
+  return (
+    <div>
+      <div className="px-5 pt-4 pb-1">
+        <div className="flex gap-2">
+          {DIALS.map((d) => (
+            <button key={d.id} onClick={() => setDial(d.id)}
+              className="tap px-3.5 h-10 rounded-full text-[13px] font-semibold"
+              style={dial === d.id
+                ? { background: C.pineDeep, color: "#fff" }
+                : { background: C.card, border: `1px solid ${C.line}`, color: C.ink }}>
+              {d.label}
+            </button>
+          ))}
+        </div>
+      </div>
+      {dial === "hiring" && (isOp
+        ? <OperatorJobs user={user} jobs={jobs} listings={listings} posts={posts} actions={actions} eng={eng} onOpen={onOpenProfile} />
+        : <JobsHub user={user} jobs={jobs} listings={listings} actions={actions} />)}
+      {dial === "trips" && <TripsTab user={user} trips={trips} actions={actions} onMessage={onMessage} />}
+      {dial === "cal" && <TripCalendar user={user} trips={trips} />}
     </div>
   );
 }
@@ -4482,6 +4757,9 @@ function Onboard({ mode: initialMode, session, onBack, onDone }) {
   const licClass = role === "guide" ? parseGuideClass(licNo) : null;
   const licValid = licExpiry ? new Date(licExpiry + "T00:00") > new Date() : false;
   const licRef = useRef();
+  const licCamRef = useRef();
+  const [licSrcOpen, setLicSrcOpen] = useState(false);
+  const [licCamOpen, setLicCamOpen] = useState(false);
   const effUid = uid || session?.user?.id || null;
 
   const toggleTag = (t) => setTags((T) => (T.includes(t) ? T.filter((x) => x !== t) : [...T, t]));
@@ -4879,7 +5157,7 @@ function Onboard({ mode: initialMode, session, onBack, onDone }) {
               <button onClick={() => setLicPreview(null)} className="tap absolute top-2 right-2 w-8 h-8 rounded-full flex items-center justify-center" style={{ background: "rgba(0,0,0,.55)" }}><X size={16} color="#fff" /></button>
             </div>
           ) : (
-            <button onClick={() => licRef.current?.click()} className="tap w-full rounded-2xl p-8 flex flex-col items-center justify-center text-center mb-4"
+            <button onClick={() => setLicSrcOpen(true)} className="tap w-full rounded-2xl p-8 flex flex-col items-center justify-center text-center mb-4"
               style={{ background: C.card, border: `1.5px dashed ${C.line}` }}>
               <div className="rounded-2xl flex items-center justify-center mb-3" style={{ width: 52, height: 52, background: C.goldSoft }}><Upload size={23} color={C.gold} /></div>
               <div className="text-[15px] font-semibold" style={{ color: C.ink }}>Upload a photo of your license</div>
@@ -4887,6 +5165,16 @@ function Onboard({ mode: initialMode, session, onBack, onDone }) {
             </button>
           )}
           <input ref={licRef} type="file" accept="image/*" onChange={pickLicense} className="hidden" />
+          <input ref={licCamRef} type="file" accept="image/*" capture="environment" onChange={pickLicense} className="hidden" />
+          {licSrcOpen && (
+            <PhotoSourceSheet title="Licence photo" onClose={() => setLicSrcOpen(false)}
+              onCamera={() => { setLicSrcOpen(false); if (navigator.mediaDevices?.getUserMedia) setLicCamOpen(true); else licCamRef.current?.click(); }}
+              onUpload={() => { setLicSrcOpen(false); licRef.current?.click(); }} />
+          )}
+          {licCamOpen && (
+            <CameraCaptureSheet onClose={() => setLicCamOpen(false)} onFallback={() => licCamRef.current?.click()}
+              onShot={(uri) => { setLicCamOpen(false); setErr(null); setLicCrop([uri]); }} />
+          )}
           {licCrop && (
             <CardScanEditor image={licCrop[0]}
               onClose={() => setLicCrop(null)}
@@ -5150,7 +5438,7 @@ function PickContact({ me, dirTick, onPick, onBack }) {
   }, [me, dirTick]);
 
   const list = (people || []).filter((p) =>
-    `${p.name} ${p.base || ""} ${roleLabel(p.role)}`.toLowerCase().includes(q.toLowerCase()));
+    `${p.name} ${p.handle || ""} ${p.base || ""} ${roleLabel(p.role)}`.toLowerCase().includes(q.toLowerCase()));
 
   return (
     <div className="fade">
@@ -5449,7 +5737,7 @@ function SharePostSheet({ post, eng, onExternal, onClose, onSent }) {
   const unique = fetched || [];
   const inCircle = unique.filter((p) => circle.includes(p.id));
   const others = unique.filter((p) => !circle.includes(p.id));
-  const match = (p) => `${p.name} ${p.base || ""}`.toLowerCase().includes(q.toLowerCase());
+  const match = (p) => `${p.name} ${p.handle || ""} ${p.base || ""}`.toLowerCase().includes(q.toLowerCase());
 
   const toggle = (id) => setPicked((P) => (P.includes(id) ? P.filter((x) => x !== id) : [...P, id]));
 
@@ -5587,16 +5875,29 @@ function FollowListSheet({ mode, talent, eng, onClose, onOpenProfile }) {
 /* ======================= Edit profile (bio + joining date) ======================= */
 function EditProfileSheet({ talent, onClose, onSaved }) {
   const [bio, setBio] = useState(talent.pitch || "");
+  const [name, setName] = useState(talent.name || "");
+  const [handle, setHandle] = useState(talent.handle || "");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
+  const handleClean = handle.trim().toLowerCase().replace(/^@+/, "");
+  const handleValid = !handleClean || /^[a-z0-9_.]{3,20}$/.test(handleClean);
 
   const save = async () => {
+    if (!name.trim()) { setErr("Your name can't be empty."); return; }
+    if (!handleValid) { setErr("Handles are 3\u201320 characters: letters, numbers, dots or underscores."); return; }
     setBusy(true); setErr(null);
     const { error } = await supabase.from("profiles").update({
       pitch: bio.trim() || null,
+      full_name: name.trim(),
+      handle: handleClean || null,
     }).eq("id", talent.id);
     setBusy(false);
-    if (error) { setErr(error.message || "Couldn't save — try again."); return; }
+    if (error) {
+      setErr(error.code === "23505" || /handle/i.test(error.message || "")
+        ? "That handle is already taken \u2014 try another."
+        : (error.message || "Couldn't save \u2014 try again."));
+      return;
+    }
     onSaved && onSaved();
     onClose();
   };
@@ -5614,6 +5915,23 @@ function EditProfileSheet({ talent, onClose, onSaved }) {
       </div>
 
       <div className="flex-1 overflow-y-auto hidescroll px-5 py-5" style={{ scrollbarWidth: "none" }}>
+        <div className="text-[13px] font-semibold mb-1.5" style={{ color: C.ink }}>Name</div>
+        <input value={name} onChange={(e) => { setName(e.target.value); setErr(null); }} maxLength={60}
+          className="w-full h-12 px-3.5 rounded-xl text-[15px] mb-4"
+          style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }} />
+
+        <div className="text-[13px] font-semibold mb-1.5" style={{ color: C.ink }}>Handle <span className="font-normal" style={{ color: C.muted }}>· optional</span></div>
+        <div className="relative mb-1">
+          <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-[15px]" style={{ color: C.muted }}>@</span>
+          <input value={handle} onChange={(e) => { setHandle(e.target.value); setErr(null); }} maxLength={21}
+            placeholder="yourname" autoCapitalize="none" autoCorrect="off"
+            className="w-full h-12 pl-8 pr-3.5 rounded-xl text-[15px]"
+            style={{ background: C.card, border: `1px solid ${handleValid ? C.line : C.maroon}`, color: C.ink }} />
+        </div>
+        <p className="text-[11.5px] mb-4" style={{ color: handleValid ? C.muted : C.maroon }}>
+          A unique short name people can search you by \u2014 letters, numbers, dots, underscores.
+        </p>
+
         <div className="text-[13px] font-semibold mb-1.5" style={{ color: C.ink }}>About you</div>
         <textarea value={bio} onChange={(e) => setBio(e.target.value)} rows={4} maxLength={240}
           placeholder="A short bio — who you are, what you show travellers, and what makes your trips yours."
@@ -5628,7 +5946,6 @@ function EditProfileSheet({ talent, onClose, onSaved }) {
             entry needed here. Set it once under My licence and it stays current forever.
           </p>
         </div>
-        {!startValid && <p className="text-[12.5px] mt-2" style={{ color: C.maroon }}>The joining date can't be in the future.</p>}
         {err && <p className="text-[12.5px] mt-2" style={{ color: C.maroon }}>{err}</p>}
       </div>
     </div>
@@ -5650,6 +5967,9 @@ function CredentialsPage({ talent, self, onClose }) {
   const [err, setErr] = useState(null);
   const [bigView, setBigView] = useState(null);
   const certFileRef = useRef();
+  const certCamRef = useRef();
+  const [certSrcOpen, setCertSrcOpen] = useState(false);
+  const [certCamOpen, setCertCamOpen] = useState(false);
 
   const load = async () => {
     if (t.licensePath) {
@@ -5752,7 +6072,7 @@ function CredentialsPage({ talent, self, onClose }) {
                 <button onClick={() => setCertImg(null)} className="tap absolute top-2 right-2 w-7 h-7 rounded-full flex items-center justify-center" style={{ background: "rgba(0,0,0,.55)" }}><X size={14} color="#fff" /></button>
               </div>
             ) : (
-              <button onClick={() => certFileRef.current?.click()} className="tap w-full rounded-xl p-5 flex flex-col items-center mb-2"
+              <button onClick={() => setCertSrcOpen(true)} className="tap w-full rounded-xl p-5 flex flex-col items-center mb-2"
                 style={{ background: C.bg, border: `1.5px dashed ${C.line}` }}>
                 <Upload size={19} color={C.gold} />
                 <span className="text-[13px] font-semibold mt-1.5" style={{ color: C.ink }}>Add certificate photo</span>
@@ -5760,6 +6080,16 @@ function CredentialsPage({ talent, self, onClose }) {
               </button>
             )}
             <input ref={certFileRef} type="file" accept="image/*" onChange={pickCert} className="hidden" />
+            <input ref={certCamRef} type="file" accept="image/*" capture="environment" onChange={pickCert} className="hidden" />
+            {certSrcOpen && (
+              <PhotoSourceSheet title="Certificate photo" onClose={() => setCertSrcOpen(false)}
+                onCamera={() => { setCertSrcOpen(false); if (navigator.mediaDevices?.getUserMedia) setCertCamOpen(true); else certCamRef.current?.click(); }}
+                onUpload={() => { setCertSrcOpen(false); certFileRef.current?.click(); }} />
+            )}
+            {certCamOpen && (
+              <CameraCaptureSheet onClose={() => setCertCamOpen(false)} onFallback={() => certCamRef.current?.click()}
+                onShot={(uri) => { setCertCamOpen(false); setCertCrop([uri]); }} />
+            )}
             {err && <p className="text-[12.5px] mb-2" style={{ color: C.maroon }}>{err}</p>}
             <div className="flex gap-2">
               <button onClick={() => { setAdding(false); setCertImg(null); setErr(null); }} className="tap flex-1 h-10 rounded-xl text-[13px] font-semibold" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.muted }}>Cancel</button>
@@ -5827,6 +6157,9 @@ function GuideLicenseCard({ talent, onSaved }) {
   const [photoBusy, setPhotoBusy] = useState(false);
   const [photoMsg, setPhotoMsg] = useState(null);
   const photoRef = useRef();
+  const photoCamRef = useRef();
+  const [photoSrcOpen, setPhotoSrcOpen] = useState(false);
+  const [photoCamOpen, setPhotoCamOpen] = useState(false);
   const pickPhoto = (e) => {
     const f = e.target.files?.[0]; e.target.value = "";
     if (!f || !f.type.startsWith("image/")) return;
@@ -5912,12 +6245,24 @@ function GuideLicenseCard({ talent, onSaved }) {
           <div className="flex-1 text-[12.5px]" style={{ color: talent.licensePath ? C.pine : C.muted }}>
             {photoBusy ? "Scanning & uploading…" : talent.licensePath ? "Licence photo on record ✓" : "No licence photo yet — operators see it in Credentials."}
           </div>
-          <button onClick={() => photoRef.current?.click()} disabled={photoBusy}
+          <button onClick={() => setPhotoSrcOpen(true)} disabled={photoBusy}
             className="tap h-9 px-3.5 rounded-xl text-[12.5px] font-semibold shrink-0"
             style={{ background: talent.licensePath ? C.card : C.gold, border: talent.licensePath ? `1px solid ${C.line}` : "none", color: talent.licensePath ? C.pine : "#fff" }}>
             {talent.licensePath ? "Replace photo" : "Add photo"}
           </button>
           <input ref={photoRef} type="file" accept="image/*" onChange={pickPhoto} className="hidden" />
+          <input ref={photoCamRef} type="file" accept="image/*" capture="environment" onChange={pickPhoto} className="hidden" />
+        </div>
+        {photoSrcOpen && (
+          <PhotoSourceSheet title="Licence photo" onClose={() => setPhotoSrcOpen(false)}
+            onCamera={() => { setPhotoSrcOpen(false); if (navigator.mediaDevices?.getUserMedia) setPhotoCamOpen(true); else photoCamRef.current?.click(); }}
+            onUpload={() => { setPhotoSrcOpen(false); photoRef.current?.click(); }} />
+        )}
+        {photoCamOpen && (
+          <CameraCaptureSheet onClose={() => setPhotoCamOpen(false)} onFallback={() => photoCamRef.current?.click()}
+            onShot={(uri) => { setPhotoCamOpen(false); setPhotoCrop([uri]); }} />
+        )}
+        <div className="hidden">
         </div>
         {photoMsg && <p className="text-[12px] mt-1.5" style={{ color: photoMsg.startsWith("Photo saved") ? C.pine : C.maroon }}>{photoMsg}</p>}
         {photoCrop && (
@@ -6990,6 +7335,91 @@ function solveHomography(dst, src) {
   return h;
 }
 
+function PhotoSourceSheet({ title, onCamera, onUpload, onClose }) {
+  return createPortal((
+    <div className="fixed inset-0 flex items-end fade" style={{ background: "rgba(15,23,18,.5)", zIndex: 252 }} onClick={onClose}>
+      <div className="w-full rounded-t-3xl p-5 pb-9" style={{ background: C.card }} onClick={(e) => e.stopPropagation()}>
+        <div className="w-10 h-1 rounded-full mx-auto mb-4" style={{ background: C.line }} />
+        <div className="text-[15px] font-semibold mb-3.5" style={{ color: C.ink }}>{title}</div>
+        <button onClick={onCamera} className="tap w-full rounded-2xl flex items-center gap-3 px-4 mb-2.5" style={{ background: C.pine, height: 54 }}>
+          <Camera size={19} color="#fff" />
+          <span className="text-[14.5px] font-semibold text-white flex-1 text-left">Take a photo of the card</span>
+        </button>
+        <button onClick={onUpload} className="tap w-full rounded-2xl flex items-center gap-3 px-4" style={{ background: C.bg, border: `1px solid ${C.line}`, height: 54 }}>
+          <Upload size={18} color={C.ink} />
+          <span className="text-[14.5px] font-semibold flex-1 text-left" style={{ color: C.ink }}>Upload from this phone</span>
+        </button>
+      </div>
+    </div>
+  ), document.body);
+}
+
+function CameraCaptureSheet({ onShot, onClose, onFallback }) {
+  // Live camera with a card-shaped template — the licence lands where the
+  // detector expects it. Falls back to the phone's own camera app if blocked.
+  const videoRef = useRef(null);
+  const streamRef = useRef(null);
+  const [err, setErr] = useState(false);
+  useEffect(() => {
+    let live = true;
+    (async () => {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: "environment", width: { ideal: 1920 } }, audio: false,
+        });
+        if (!live) { stream.getTracks().forEach((t) => t.stop()); return; }
+        streamRef.current = stream;
+        if (videoRef.current) videoRef.current.srcObject = stream;
+      } catch (e) { if (live) setErr(true); }
+    })();
+    return () => { live = false; try { streamRef.current?.getTracks().forEach((t) => t.stop()); } catch (e) {} };
+  }, []);
+  const shoot = () => {
+    const v = videoRef.current;
+    if (!v || !v.videoWidth) return;
+    const c = document.createElement("canvas");
+    c.width = v.videoWidth; c.height = v.videoHeight;
+    c.getContext("2d").drawImage(v, 0, 0);
+    try { streamRef.current?.getTracks().forEach((t) => t.stop()); } catch (e) {}
+    onShot(c.toDataURL("image/jpeg", 0.92));
+  };
+  return createPortal((
+    <div className="fixed inset-0 flex flex-col" style={{ background: "#000", zIndex: 252, height: "100dvh" }}>
+      {err ? (
+        <div className="flex-1 flex flex-col items-center justify-center px-8 text-center">
+          <p className="text-[14.5px] leading-relaxed" style={{ color: "rgba(255,255,255,.88)" }}>
+            The in-app camera couldn't open — your phone's own camera works exactly the same.
+          </p>
+          <button onClick={() => { onClose(); onFallback && onFallback(); }}
+            className="tap h-11 px-5 rounded-xl text-[14px] font-semibold mt-5" style={{ background: C.gold, color: "#fff" }}>
+            Open phone camera
+          </button>
+          <button onClick={onClose} className="tap text-[13px] mt-4" style={{ color: "rgba(255,255,255,.7)" }}>Cancel</button>
+        </div>
+      ) : (
+        <>
+          <video ref={videoRef} autoPlay playsInline muted className="absolute inset-0 w-full h-full" style={{ objectFit: "cover" }} />
+          <div className="absolute inset-0 flex flex-col">
+            <div className="text-center" style={{ paddingTop: "calc(var(--sa-top) + 20px)" }}>
+              <span className="text-[13.5px] font-medium px-3.5 py-1.5 rounded-full" style={{ color: "#fff", background: "rgba(0,0,0,.45)" }}>
+                Place the licence inside the frame
+              </span>
+            </div>
+            <div className="flex-1 flex items-center justify-center px-6">
+              <div className="w-full rounded-2xl" style={{ aspectRatio: "1.586", border: "2.5px solid rgba(255,255,255,.95)", boxShadow: "0 0 0 9999px rgba(0,0,0,.45)" }} />
+            </div>
+            <div className="pb-10 pt-4 flex items-center justify-center gap-10">
+              <button onClick={onClose} className="tap text-[14px] font-medium w-16" style={{ color: "rgba(255,255,255,.85)" }}>Cancel</button>
+              <button onClick={shoot} className="tap rounded-full" style={{ width: 72, height: 72, background: "#fff", border: "5px solid rgba(255,255,255,.35)" }} />
+              <span className="w-16" />
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  ), document.body);
+}
+
 function deskewCardCanvas(oc) {
   // Measure the angle of the card's own white strip (name/number area) via PCA
   // and rotate the output level. Guarantees horizontal scans even when the
@@ -7363,6 +7793,7 @@ function CardScanEditor({ image, onDone, onClose }) {
   const [note, setNote] = useState("Finding the card…");
   const [busy, setBusy] = useState(false);
   const dragIdx = useRef(-1);
+  const [dragging, setDragging] = useState(-1); // which handle is held — powers the loupe
 
   const measure = () => {
     const wrap = wrapRef.current, img = imgRef.current;
@@ -7409,6 +7840,7 @@ function CardScanEditor({ image, onDone, onClose }) {
   const startDrag = (i) => (e) => {
     e.preventDefault();
     dragIdx.current = i;
+    setDragging(i);
     const move = (ev) => {
       if (dragIdx.current < 0 || !view) return;
       const t = ev.touches ? ev.touches[0] : ev;
@@ -7417,6 +7849,7 @@ function CardScanEditor({ image, onDone, onClose }) {
     };
     const up = () => {
       dragIdx.current = -1;
+      setDragging(-1);
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
     };
@@ -7470,6 +7903,28 @@ function CardScanEditor({ image, onDone, onClose }) {
             })}
           </svg>
         )}
+        {dragging >= 0 && pts && view && (() => {
+          // Magnifier: your thumb hides the corner — this box shows it zoomed,
+          // floating in whichever half of the screen your finger isn't.
+          const Zn = 1.5, SZ = 132;
+          const p = pts[dragging];
+          const sy = view.offY + p[1] * view.scale;
+          const half = (wrapRef.current ? wrapRef.current.clientHeight : 600) / 2;
+          const place = sy < half ? { bottom: 16 } : { top: 16 };
+          return (
+            <div className="absolute left-1/2 -translate-x-1/2 rounded-2xl overflow-hidden pointer-events-none"
+              style={{ width: SZ, height: SZ, ...place, border: `2.5px solid ${C.gold}`,
+                boxShadow: "0 5px 20px rgba(0,0,0,.55)", backgroundColor: "#111",
+                backgroundImage: `url(${image})`, backgroundRepeat: "no-repeat",
+                backgroundSize: `${view.natW * Zn}px ${view.natH * Zn}px`,
+                backgroundPosition: `${-(p[0] * Zn - SZ / 2)}px ${-(p[1] * Zn - SZ / 2)}px` }}>
+              <div className="absolute left-1/2 top-0 bottom-0" style={{ width: 1, background: "rgba(212,164,76,.9)" }} />
+              <div className="absolute top-1/2 left-0 right-0" style={{ height: 1, background: "rgba(212,164,76,.9)" }} />
+              <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full"
+                style={{ width: 15, height: 15, border: `2px solid ${C.gold}` }} />
+            </div>
+          );
+        })()}
       </div>
 
       <div className="shrink-0 px-4 pt-3 pb-5 safe-bottom" style={{ borderTop: "1px solid rgba(255,255,255,.12)" }}>
