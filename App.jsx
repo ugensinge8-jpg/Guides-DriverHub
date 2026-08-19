@@ -33,7 +33,7 @@ const profileToTalent = (p) => ({
   handle: p.handle || null,
   initials: initialsOf((p.role === "business" && p.company_name) || p.full_name || "?"),
   years: licenseExperienceYears(p.license_no) ?? 0,
-  trips: 0, rating: null,
+  trips: 0, rating: p.guest_rating ?? null, ratingCount: p.guest_review_count || 0,
   verified: p.license_status === "verified", licenseStatus: p.license_status || "none",
   guideClass: p.guide_class || null, licenseNo: p.license_no || null, licenseExpiry: p.license_expiry || null, licensePath: p.license_path || null,
   grades: {}, tags: Array.isArray(p.tags) ? p.tags : [],
@@ -1307,7 +1307,9 @@ function Shell({ user, posts, jobs, trips, listings, actions, engagement, dm, di
                 initialDial={tab === "trips" ? "trips" : "hiring"} />
             )}
             {tab === "chats" && <ChatsTab user={user} me={actorId} dm={dm} trips={trips} actions={actions} posts={posts} dirTick={dirTick} onOpenPost={setSharedPost} openWith={dmWith} onOpened={() => setDmWith(null)} onOpenProfile={openProfile} />}
-            {tab === "profile" && <TalentProfile talent={talentById(user.talentId)} posts={posts} eng={eng} self onSetAvailability={actions.setAvailability} onOpenProfile={openProfile} onProfileSaved={actions.reloadDirectory} onBack={null} />}
+            {tab === "profile" && (user.kind === "operator"
+              ? <OperatorDesk user={user} trips={trips} listings={listings} jobs={jobs} actions={actions} onOpenProfile={openProfile} onNavigate={setTab} />
+              : <TalentProfile talent={talentById(user.talentId)} posts={posts} eng={eng} self onSetAvailability={actions.setAvailability} onOpenProfile={openProfile} onProfileSaved={actions.reloadDirectory} onBack={null} />)}
             {tab === "discover" && <Discover onOpen={openProfile} initialQuery={searchTerm} dirTick={dirTick} viewerKind={user.kind} />}
             {tab === "bookings" && <BusinessBookings user={user} />}
             {tab === "feed" && <Feed posts={posts} eng={eng} admin={user.kind === "admin"} onDelete={actions.deletePost} onOpenProfile={openProfile} following={myFollowing} />}
@@ -2443,10 +2445,11 @@ function TalentProfile({ talent, posts, canRequest, viewer, self, contactOnly, e
         <ProfileTabs
           cv={
             <>
-              <GuestReviews talentId={t.id} isAdmin={eng?.isAdmin} isSelf={self} onAskOperator={() => setAskOperator(true)} />
+              {["guide", "driver"].includes(t.role) && <GuestReviews talentId={t.id} isAdmin={eng?.isAdmin} isSelf={self} onAskOperator={() => setAskOperator(true)} />}
 
               <div className="mt-6" />
 
+              {["guide", "driver"].includes(t.role) && (<>
               {/* trip record */}
               <div className="rounded-2xl overflow-hidden" style={{ border: `1px solid ${C.line}` }}>
                 <div className="px-4 py-3.5 flex items-center justify-between" style={{ background: C.pine }}>
@@ -2463,6 +2466,7 @@ function TalentProfile({ talent, posts, canRequest, viewer, self, contactOnly, e
                   ))}
                 </div>
               </div>
+              </>)}
 
               {t.role === "business" && <BusinessAvailability business={t} viewer={viewer} />}
               {["guide", "driver"].includes(t.role) && !self && ["operator", "admin"].includes(viewer?.kind) && <TalentAvailability talent={t} viewerOnly />}
@@ -2627,6 +2631,209 @@ function CrewAvatars({ members, size = 26 }) {
   );
 }
 
+function OperatorDesk({ user, trips, listings, jobs, actions, onOpenProfile, onNavigate }) {
+  const me = user.talentId;
+  const t = talentById(me) || { id: me, name: user.name || "You", initials: user.initials || "?", role: "operator", tags: [] };
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const addD = (iso, k) => { const d = new Date(iso + "T00:00"); d.setDate(d.getDate() + k); return d.toISOString().slice(0, 10); };
+  const daysTo = (iso) => Math.ceil((new Date(iso + "T00:00") - new Date(todayIso + "T00:00")) / 86400000);
+  const fD = (x) => new Date(x + "T00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+
+  const myTrips = (trips || []).filter((x) => x.operatorId === me);
+  const myListings = (listings || []).filter((l) => l.operatorId === me);
+  const myJobs = (jobs || []).filter((j) => j.operatorId === me);
+
+  const [rv, setRv] = useState({ reviews: [], tokens: [] });
+  const [inviteTrip, setInviteTrip] = useState(null);
+  const [editOpen, setEditOpen] = useState(false);
+  const loadRv = async () => {
+    const ids = myTrips.map((x) => x.id);
+    if (!ids.length) { setRv({ reviews: [], tokens: [] }); return; }
+    const [{ data: R }, { data: T }] = await Promise.all([
+      supabase.from("guest_reviews").select("trip_id, rating, body, guest_name, created_at").in("trip_id", ids),
+      supabase.from("review_tokens").select("trip_id, token, used_at, expires_at, guest_phone").in("trip_id", ids),
+    ]);
+    setRv({ reviews: R || [], tokens: T || [] });
+  };
+  useEffect(() => { loadRv(); }, [myTrips.length]);
+
+  const compAvg = rv.reviews.length ? rv.reviews.reduce((a, r) => a + r.rating, 0) / rv.reviews.length : null;
+  const quotes = rv.reviews.filter((r) => r.body && r.body.length > 12)
+    .sort((a, b) => (a.created_at < b.created_at ? 1 : -1)).slice(0, 2);
+
+  const soon = myTrips.filter((x) => x.start && x.start >= todayIso && x.start <= addD(todayIso, 7));
+  const openL = myListings.filter((l) => l.status !== "filled");
+  const pendApps = openL.reduce((a, l) => a + (l.applicants || []).filter((ap) => ap.status === "applied").length, 0);
+  const pendReq = myJobs.filter((j) => j.status === "pending").length;
+  const attention = openL.length + pendApps + pendReq + soon.length;
+
+  const crewMap = {};
+  myTrips.slice().sort((a, b) => ((a.start || "") < (b.start || "") ? -1 : 1)).forEach((x) => {
+    (x.members || []).forEach((m) => {
+      if (m.id === me || m.roleInTrip === "operator") return;
+      crewMap[m.id] = { id: m.id, last: x };
+    });
+  });
+  const crew = Object.values(crewMap).map((c) => ({ ...c, p: talentById(c.id) })).filter((c) => c.p);
+
+  const tripReviewRow = (x) => {
+    const revs = rv.reviews.filter((r) => r.trip_id === x.id);
+    const toks = rv.tokens.filter((k) => k.trip_id === x.id);
+    const openTok = toks.find((k) => !k.used_at && (!k.expires_at || k.expires_at > new Date().toISOString()));
+    const avg = revs.length ? (revs.reduce((a, r) => a + r.rating, 0) / revs.length).toFixed(1) : null;
+    const resend = () => {
+      if (!openTok) return;
+      const link = `https://www.bhutantourismhub.com/?review=${openTok.token}`;
+      const msg = `Kuzuzangpo la! A gentle reminder from ${t.name} — we'd love your review of your Bhutan trip "${x.title}". It takes one minute, no sign-in: ${link}`;
+      const num = (openTok.guest_phone || "").replace(/[^0-9]/g, "");
+      window.open(num ? `https://wa.me/${num}?text=${encodeURIComponent(msg)}` : `https://wa.me/?text=${encodeURIComponent(msg)}`, "_blank", "noopener");
+    };
+    return (
+      <div key={x.id} className="flex items-center gap-3 rounded-xl px-3.5 py-3" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+        <div className="flex-1 min-w-0">
+          <div className="text-[13.5px] font-semibold truncate" style={{ color: C.ink }}>{x.title}</div>
+          <div className="text-[11.5px]" style={{ color: C.muted }}>{x.start ? fD(x.start) : ""}{x.end && x.end !== x.start ? ` \u2013 ${fD(x.end)}` : ""}</div>
+        </div>
+        {revs.length > 0 ? (
+          <span className="text-[12px] font-semibold rounded-full px-2.5 py-1 shrink-0" style={{ background: C.pineSoft, color: C.pine }}>
+            \u2605 {avg} \u00b7 {revs.length}
+          </span>
+        ) : openTok ? (
+          <button onClick={resend} className="tap text-[12px] font-semibold rounded-full px-3 py-1.5 shrink-0" style={{ background: C.goldSoft, color: "#7a5a1e" }}>
+            Awaiting \u00b7 resend
+          </button>
+        ) : (
+          <button onClick={() => setInviteTrip(x)} className="tap text-[12px] font-semibold rounded-full px-3 py-1.5 shrink-0" style={{ background: C.pine, color: "#fff" }}>
+            Send invite
+          </button>
+        )}
+      </div>
+    );
+  };
+
+  const AV = { open: ["Available", C.pine, C.pineSoft], busy: ["On a trip", "#7a5a1e", C.goldSoft] };
+
+  return (
+    <div className="px-5 py-4 pb-8">
+      {/* header */}
+      <div className="flex items-center gap-3.5">
+        <div className="w-14 h-14 rounded-2xl flex items-center justify-center text-[19px] font-semibold shrink-0"
+          style={{ background: C.pineDeep, color: C.goldSoft }}>{t.initials}</div>
+        <div className="flex-1 min-w-0">
+          <div className="text-[19px] font-semibold leading-tight truncate" style={{ color: C.ink }}>{t.name}</div>
+          {t.handle && <div className="text-[12.5px]" style={{ color: C.muted }}>@{t.handle}</div>}
+          <div className="text-[12px] mt-0.5" style={{ color: C.muted }}>Tour operator{t.base ? ` \u00b7 ${t.base}` : ""}</div>
+        </div>
+      </div>
+      <div className="flex gap-2 mt-3.5">
+        <button onClick={() => setEditOpen(true)} className="tap flex-1 h-10 rounded-xl text-[13px] font-semibold"
+          style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }}>Edit profile</button>
+        <button onClick={() => onOpenProfile(me)} className="tap flex-1 h-10 rounded-xl text-[13px] font-semibold"
+          style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }}>View public profile</button>
+      </div>
+
+      {/* attention strip */}
+      <div className="mt-6"><SectionLabel>Needs your attention</SectionLabel></div>
+      {attention === 0 ? (
+        <div className="rounded-xl px-4 py-3.5 text-[13px]" style={{ background: C.pineSoft, color: C.pine }}>
+          All clear — nothing is waiting on you right now.
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {openL.length > 0 && (
+            <button onClick={() => onNavigate("requests")} className="tap w-full flex items-center gap-3 rounded-xl px-3.5 py-3 text-left"
+              style={{ background: C.card, border: `1.5px solid ${C.gold}` }}>
+              <Briefcase size={16} color={C.gold} />
+              <span className="flex-1 text-[13.5px] font-medium" style={{ color: C.ink }}>
+                {openL.length} role{openL.length > 1 ? "s" : ""} still hiring{pendApps > 0 ? ` \u00b7 ${pendApps} new applicant${pendApps > 1 ? "s" : ""}` : ""}
+              </span>
+              <ChevronLeft size={15} color={C.muted} style={{ transform: "rotate(180deg)" }} />
+            </button>
+          )}
+          {pendReq > 0 && (
+            <button onClick={() => onNavigate("requests")} className="tap w-full flex items-center gap-3 rounded-xl px-3.5 py-3 text-left"
+              style={{ background: C.card, border: `1px solid ${C.line}` }}>
+              <SendIcon size={15} color={C.pine} />
+              <span className="flex-1 text-[13.5px] font-medium" style={{ color: C.ink }}>{pendReq} direct request{pendReq > 1 ? "s" : ""} awaiting reply</span>
+              <ChevronLeft size={15} color={C.muted} style={{ transform: "rotate(180deg)" }} />
+            </button>
+          )}
+          {soon.map((x) => (
+            <button key={x.id} onClick={() => onNavigate("trips")} className="tap w-full flex items-center gap-3 rounded-xl px-3.5 py-3 text-left"
+              style={{ background: C.card, border: `1px solid ${C.line}` }}>
+              <MapIcon size={15} color={C.pine} />
+              <span className="flex-1 text-[13.5px] font-medium" style={{ color: C.ink }}>
+                {x.title} starts in {daysTo(x.start)} day{daysTo(x.start) === 1 ? "" : "s"}
+              </span>
+              <ChevronLeft size={15} color={C.muted} style={{ transform: "rotate(180deg)" }} />
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* review command */}
+      <div className="mt-6"><SectionLabel>Review command</SectionLabel></div>
+      <div className="rounded-2xl px-4 py-4 mb-2.5" style={{ background: C.pine }}>
+        <div className="flex items-end justify-between">
+          <div>
+            <div className="text-[11px] font-semibold tracking-[.14em] uppercase" style={{ color: C.goldSoft }}>Company crew rating</div>
+            <div className="text-[12px] mt-0.5" style={{ color: "#ffffffb3" }}>{rv.reviews.length} guest review{rv.reviews.length === 1 ? "" : "s"} across your trips</div>
+          </div>
+          <div className="text-right">
+            <div className="text-[30px] font-semibold leading-none text-white">{compAvg ? compAvg.toFixed(1) : "New"}</div>
+            <div className="mt-1 flex justify-end"><Stars score={compAvg || 0} light /></div>
+          </div>
+        </div>
+        {quotes.length > 0 && (
+          <div className="mt-3 space-y-1.5">
+            {quotes.map((q, i) => (
+              <p key={i} className="text-[12.5px] leading-snug" style={{ color: "#ffffffd9" }}>
+                \u201c{q.body.length > 90 ? q.body.slice(0, 90) + "\u2026" : q.body}\u201d \u2014 {q.guest_name || "Guest"}
+              </p>
+            ))}
+          </div>
+        )}
+      </div>
+      {myTrips.length === 0 ? (
+        <p className="text-[12.5px] py-2" style={{ color: C.muted }}>Your trips appear here once a crew is hired — each with its review status.</p>
+      ) : (
+        <div className="space-y-2">
+          {myTrips.slice().sort((a, b) => ((a.start || "") > (b.start || "") ? -1 : 1)).slice(0, 6).map(tripReviewRow)}
+        </div>
+      )}
+
+      {/* crew book */}
+      <div className="mt-6"><SectionLabel trailing={crew.length ? `${crew.length}` : null}>Crew book</SectionLabel></div>
+      {crew.length === 0 ? (
+        <p className="text-[12.5px] py-2" style={{ color: C.muted }}>Everyone you hire joins your crew book — with their rating and live availability for quick re-hiring.</p>
+      ) : (
+        <div className="space-y-2">
+          {crew.map(({ p, last }) => {
+            const av = AV[p.availability] || AV.open;
+            return (
+              <button key={p.id} onClick={() => onOpenProfile(p.id)} className="tap w-full flex items-center gap-3 rounded-xl px-3.5 py-3 text-left"
+                style={{ background: C.card, border: `1px solid ${C.line}` }}>
+                <div className="w-10 h-10 rounded-xl flex items-center justify-center text-[14px] font-semibold shrink-0"
+                  style={{ background: C.pineDeep, color: C.goldSoft }}>{p.initials}</div>
+                <div className="flex-1 min-w-0">
+                  <div className="text-[13.5px] font-semibold truncate" style={{ color: C.ink }}>{p.name}</div>
+                  <div className="text-[11.5px] truncate" style={{ color: C.muted }}>
+                    {roleLabel(p.role)}{typeof p.rating === "number" ? ` \u00b7 \u2605 ${p.rating.toFixed(1)}` : ""} \u00b7 last: {last.title}
+                  </div>
+                </div>
+                <span className="text-[11px] font-semibold rounded-full px-2 py-1 shrink-0" style={{ background: av[2], color: av[1] }}>{av[0]}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      {inviteTrip && <ReviewInvite user={user} trip={inviteTrip} onClose={() => { setInviteTrip(null); loadRv(); }} />}
+      {editOpen && <EditProfileSheet talent={t} onClose={() => setEditOpen(false)} onSaved={actions.reloadDirectory} />}
+    </div>
+  );
+}
+
 function TripCalendar({ user, trips }) {
   const me = user.talentId;
   const isOp = user.kind === "operator";
@@ -2641,11 +2848,17 @@ function TripCalendar({ user, trips }) {
   const [nEnd, setNEnd] = useState("");
   const [busy, setBusy] = useState(false);
 
+  const [fests, setFests] = useState([]);
   const load = async () => {
     const { data } = await supabase.from("calendar_notes").select("*").eq("profile_id", me).order("date");
     setNotes(data || []);
+    const { data: F } = await supabase.from("festivals").select("*").order("start_date");
+    setFests(F || []);
   };
   useEffect(() => { load(); }, [me]);
+
+  // Each trip = one colored ribbon in a stable lane; ribbons stop dead on end day.
+  const TRIP_COLORS = ["#1F6B45", "#B8862D", "#7A1F2B", "#2B7A78", "#3D5A80", "#6D4C7D", "#C05B2E"];
 
   const iso = (y, m, d) => `${y}-${String(m + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
   const fD = (x) => new Date(x + "T00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short" });
@@ -2659,7 +2872,19 @@ function TripCalendar({ user, trips }) {
   const monthName = first.toLocaleDateString("en-GB", { month: "long", year: "numeric" });
   const todayIso = iso(today.getFullYear(), today.getMonth(), today.getDate());
   const curYm = `${ym.y}-${String(ym.m + 1).padStart(2, "0")}`;
-  const monthTrips = mine.filter((t) => t.start && t.start.slice(0, 7) <= curYm && (t.end || t.start).slice(0, 7) >= curYm);
+  const monthTrips = mine.filter((t) => t.start && t.start.slice(0, 7) <= curYm && (t.end || t.start).slice(0, 7) >= curYm)
+    .sort((a, b) => ((a.start || "") < (b.start || "") ? -1 : 1));
+  const tripMeta = {};
+  {
+    const laneEnds = [];
+    monthTrips.forEach((t, i) => {
+      let lane = laneEnds.findIndex((e) => e < t.start);
+      if (lane === -1) { lane = laneEnds.length; laneEnds.push(""); }
+      laneEnds[lane] = t.end || t.start;
+      tripMeta[t.id] = { color: TRIP_COLORS[i % TRIP_COLORS.length], lane };
+    });
+  }
+  const festsOn = (day) => fests.filter((f) => inRange(day, f.start_date, f.end_date));
 
   const addNote = async () => {
     if (!nTitle.trim() || !sel || busy) return;
@@ -2704,17 +2929,31 @@ function TripCalendar({ user, trips }) {
             const hasNote = notesOn(day).length > 0;
             const isSel = sel === day;
             const isToday = day === todayIso;
+            const dayTrips = tripsOn(day);
+            const hasFest = festsOn(day).length > 0;
             return (
               <button key={d} onClick={() => { setSel(isSel ? null : day); setAdding(false); }}
-                className="tap relative h-11 rounded-lg flex flex-col items-center justify-center"
-                style={{
-                  background: hasTrip ? C.pineSoft : "transparent",
-                  border: isSel ? `2px solid ${C.pine}` : isToday ? `1.5px dashed ${C.gold}` : "1.5px solid transparent",
-                }}>
-                <span className="text-[13px] font-medium" style={{ color: hasTrip ? C.pine : C.ink }}>{d}</span>
-                <span className="flex gap-0.5 mt-0.5" style={{ height: 4 }}>
-                  {hasTrip && <span className="rounded-full" style={{ width: 10, height: 3, background: C.pine }} />}
-                  {hasNote && <span className="rounded-full" style={{ width: 4, height: 4, background: C.gold }} />}
+                className="tap relative h-12 rounded-lg flex flex-col items-center pt-1"
+                style={{ border: isSel ? `2px solid ${C.pine}` : isToday ? `1.5px dashed ${C.gold}` : "1.5px solid transparent" }}>
+                <span className="text-[12.5px] font-medium leading-none" style={{ color: hasTrip ? C.pine : C.ink }}>{d}</span>
+                {hasNote && <span className="absolute rounded-full" style={{ top: 3, right: 4, width: 5, height: 5, background: C.gold }} />}
+                {hasFest && <span className="absolute rounded-full" style={{ top: 3, left: 4, width: 5, height: 5, border: `1.5px solid ${C.gold}` }} />}
+                <span className="absolute left-0 right-0 flex flex-col" style={{ bottom: 4, gap: 2 }}>
+                  {[0, 1, 2].map((lane) => {
+                    const tr = dayTrips.find((x) => tripMeta[x.id] && tripMeta[x.id].lane === lane);
+                    if (!tr) return <span key={lane} style={{ height: 3 }} />;
+                    const m2 = tripMeta[tr.id];
+                    const isStart = day === tr.start;
+                    const isEnd = day === (tr.end || tr.start);
+                    return (
+                      <span key={lane} style={{
+                        height: 3, background: m2.color,
+                        marginLeft: isStart ? 3 : 0, marginRight: isEnd ? 3 : 0,
+                        borderTopLeftRadius: isStart ? 3 : 0, borderBottomLeftRadius: isStart ? 3 : 0,
+                        borderTopRightRadius: isEnd ? 3 : 0, borderBottomRightRadius: isEnd ? 3 : 0,
+                      }} />
+                    );
+                  })}
                 </span>
               </button>
             );
@@ -2728,7 +2967,7 @@ function TripCalendar({ user, trips }) {
           <div className="space-y-2">
             {monthTrips.map((t) => (
               <div key={t.id} className="flex items-center gap-3 rounded-xl px-3.5 py-3" style={{ background: C.card, border: `1px solid ${C.line}` }}>
-                <span className="rounded-full shrink-0" style={{ width: 4, height: 30, background: C.pine }} />
+                <span className="rounded-full shrink-0" style={{ width: 4, height: 30, background: (tripMeta[t.id] || {}).color || C.pine }} />
                 <div className="flex-1 min-w-0">
                   <div className="text-[13.5px] font-semibold truncate" style={{ color: C.ink }}>{t.title}</div>
                   <div className="text-[12px]" style={{ color: C.muted }}>{fD(t.start)}{t.end && t.end !== t.start ? ` \u2013 ${fD(t.end)}` : ""}</div>
@@ -2747,9 +2986,19 @@ function TripCalendar({ user, trips }) {
             <div className="text-[14px] font-semibold mb-2.5" style={{ color: C.ink }}>
               {new Date(sel + "T00:00").toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" })}
             </div>
+            {festsOn(sel).map((f) => (
+              <div key={f.id} className="flex items-center gap-2.5 rounded-xl px-3 py-2.5 mb-2" style={{ background: C.goldSoft }}>
+                <Star size={14} color="#7a5a1e" />
+                <div className="flex-1 min-w-0">
+                  <div className="text-[13px] font-semibold truncate" style={{ color: "#7a5a1e" }}>{f.name}</div>
+                  <div className="text-[11.5px] truncate" style={{ color: "#7a5a1e" }}>{f.place}</div>
+                </div>
+              </div>
+            ))}
             {tripsOn(sel).map((t) => (
-              <div key={t.id} className="flex items-center gap-2.5 rounded-xl px-3 py-2.5 mb-2" style={{ background: C.pineSoft }}>
-                <MapIcon size={15} color={C.pine} />
+              <div key={t.id} className="flex items-center gap-2.5 rounded-xl px-3 py-2.5 mb-2"
+                style={{ background: `${(tripMeta[t.id] || {}).color || C.pine}14` }}>
+                <MapIcon size={15} color={(tripMeta[t.id] || {}).color || C.pine} />
                 <div className="flex-1 min-w-0">
                   <div className="text-[13px] font-semibold truncate" style={{ color: C.pine }}>{t.title}</div>
                   <div className="text-[11.5px]" style={{ color: C.pine }}>{fD(t.start)}{t.end && t.end !== t.start ? ` \u2013 ${fD(t.end)}` : ""}</div>
@@ -2803,6 +3052,58 @@ function TripCalendar({ user, trips }) {
   );
 }
 
+function FestivalsDial() {
+  const [fests, setFests] = useState(null);
+  useEffect(() => {
+    supabase.from("festivals").select("*").order("start_date").then(({ data }) => setFests(data || []));
+  }, []);
+  const fD = (x) => new Date(x + "T00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const years = [...new Set((fests || []).map((f) => f.start_date.slice(0, 4)))];
+  return (
+    <div className="px-5 py-4 pb-8">
+      <div className="rounded-xl px-3.5 py-3 mb-4 text-[12px] leading-snug" style={{ background: C.goldSoft, color: "#7a5a1e" }}>
+        Festival dates follow the Bhutanese lunar calendar as announced by the Department of Tourism —
+        always reconfirm close to travel. These days fill hotels and crews fast: plan trips around them.
+      </div>
+      {fests === null ? (
+        <p className="text-[13px] text-center py-6" style={{ color: C.muted }}>Loading…</p>
+      ) : years.map((yr) => (
+        <div key={yr} className="mb-5">
+          <SectionLabel trailing={`${fests.filter((f) => f.start_date.startsWith(yr)).length}`}>{yr} festivals</SectionLabel>
+          <div className="space-y-2">
+            {(() => { const yf = fests.filter((f) => f.start_date.startsWith(yr)); let lastM = ""; return yf.map((f) => {
+              const mm = f.start_date.slice(5, 7);
+              const head = mm !== lastM ? ((lastM = mm),
+                <div className="text-[11px] font-semibold uppercase tracking-[.08em] pt-2" style={{ color: C.muted }}>
+                  {new Date(f.start_date + "T00:00").toLocaleDateString("en-GB", { month: "long" })}
+                </div>) : null;
+              const upcoming = (f.end_date || f.start_date) >= todayIso;
+              const soon = upcoming && f.start_date <= new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10);
+              return (<React.Fragment key={f.id}>{head}
+                <div className="flex items-center gap-3 rounded-xl px-3.5 py-3"
+                  style={{ background: C.card, border: soon ? `1.5px solid ${C.gold}` : `1px solid ${C.line}`, opacity: upcoming ? 1 : 0.55 }}>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-[13.5px] font-semibold truncate" style={{ color: C.ink }}>{f.name}</div>
+                    <div className="text-[11.5px] truncate" style={{ color: C.muted }}>{f.place}</div>
+                  </div>
+                  <span className="text-right shrink-0">
+                    <span className="text-[12px] font-semibold rounded-full px-2.5 py-1 inline-block"
+                      style={{ background: soon ? C.goldSoft : C.bg, color: soon ? "#7a5a1e" : C.muted, border: soon ? "none" : `1px solid ${C.line}` }}>
+                      {fD(f.start_date)}{f.end_date && f.end_date !== f.start_date ? ` \u2013 ${fD(f.end_date)}` : ""}
+                    </span>
+                    {!f.confirmed && <span className="block text-[10px] mt-0.5" style={{ color: C.muted }}>tentative</span>}
+                  </span>
+                </div>
+              </React.Fragment>);
+            }); })()}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function WorkHub({ user, jobs, listings, posts, trips, actions, eng, onOpenProfile, onMessage, initialDial }) {
   const [dial, setDial] = useState(initialDial || "hiring");
   useEffect(() => { if (initialDial) setDial(initialDial); }, [initialDial]);
@@ -2811,6 +3112,7 @@ function WorkHub({ user, jobs, listings, posts, trips, actions, eng, onOpenProfi
     { id: "hiring", label: isOp ? "Hiring" : "Jobs" },
     { id: "trips", label: isOp ? "Confirmed trips" : "My trips" },
     { id: "cal", label: "Calendar" },
+    { id: "fest", label: "Festivals" },
   ];
   return (
     <div>
@@ -2832,6 +3134,7 @@ function WorkHub({ user, jobs, listings, posts, trips, actions, eng, onOpenProfi
         : <JobsHub user={user} jobs={jobs} listings={listings} actions={actions} />)}
       {dial === "trips" && <TripsTab user={user} trips={trips} actions={actions} onMessage={onMessage} />}
       {dial === "cal" && <TripCalendar user={user} trips={trips} />}
+      {dial === "fest" && <FestivalsDial />}
     </div>
   );
 }
