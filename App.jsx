@@ -2449,24 +2449,7 @@ function TalentProfile({ talent, posts, canRequest, viewer, self, contactOnly, e
 
               <div className="mt-6" />
 
-              {["guide", "driver"].includes(t.role) && (<>
-              {/* trip record */}
-              <div className="rounded-2xl overflow-hidden" style={{ border: `1px solid ${C.line}` }}>
-                <div className="px-4 py-3.5 flex items-center justify-between" style={{ background: C.pine }}>
-                  <div><div className="text-[11px] font-semibold tracking-[.14em] uppercase" style={{ color: C.goldSoft }}>Trip record</div>
-                    <div className="text-[12.5px] mt-0.5" style={{ color: "#ffffffcc" }}>Graded by operators</div></div>
-                  <div className="text-right"><div className="text-[26px] font-semibold leading-none text-white">{typeof t.rating === "number" ? t.rating.toFixed(1) : "New"}</div><div className="mt-1 flex justify-end"><Stars score={t.rating || 0} light /></div></div>
-                </div>
-                <div className="px-4 py-4 space-y-3.5" style={{ background: C.card }}>
-                  {Object.keys(t.grades || {}).length === 0 ? (
-                    <p className="text-[13.5px]" style={{ color: C.muted }}>No trips graded yet — the record fills in after the first completed trip.</p>
-                  ) : Object.entries(t.grades).map(([kk, v]) => (
-                    <div key={kk}><div className="flex items-baseline justify-between mb-1.5"><span className="text-[13.5px] font-medium" style={{ color: C.ink }}>{kk}</span><span className="text-[13px] font-semibold" style={{ color: C.pine }}>{typeof v === "number" ? v.toFixed(1) : "—"}</span></div>
-                      <div className="h-2 rounded-full overflow-hidden" style={{ background: C.lineSoft }}><div className="h-full rounded-full" style={{ width: `${(v / 5) * 100}%`, background: `linear-gradient(90deg, ${C.gold}, #D9A94E)` }} /></div></div>
-                  ))}
-                </div>
-              </div>
-              </>)}
+              {["guide", "driver"].includes(t.role) && <CharacterChart talentId={t.id} />}
 
               {t.role === "business" && <BusinessAvailability business={t} viewer={viewer} />}
               {["guide", "driver"].includes(t.role) && !self && ["operator", "admin"].includes(viewer?.kind) && <TalentAvailability talent={t} viewerOnly />}
@@ -2834,6 +2817,55 @@ function OperatorDesk({ user, trips, listings, jobs, actions, onOpenProfile, onN
   );
 }
 
+function CharacterChart({ talentId }) {
+  const [marks, setMarks] = useState(null);
+  useEffect(() => {
+    let on = true;
+    supabase.from("character_marks").select("kind, grade, created_at").eq("profile_id", talentId)
+      .then(({ data }) => { if (on) setMarks(data || []); });
+    return () => { on = false; };
+  }, [talentId]);
+  const grades = (marks || []).filter((m) => m.kind === "grade");
+  const viol = (marks || []).filter((m) => m.kind === "violation").length;
+  const avg = grades.length ? grades.reduce((a, m) => a + m.grade, 0) / grades.length : null;
+  return (
+    <div className="rounded-2xl overflow-hidden" style={{ border: `1px solid ${C.line}` }}>
+      <div className="px-4 py-3.5 flex items-center justify-between" style={{ background: C.pine }}>
+        <div>
+          <div className="text-[11px] font-semibold tracking-[.14em] uppercase" style={{ color: C.goldSoft }}>Character chart</div>
+          <div className="text-[12.5px] mt-0.5" style={{ color: "#ffffffcc" }}>Graded by operators after every trip</div>
+        </div>
+        <div className="text-right">
+          <div className="text-[26px] font-semibold leading-none text-white">{avg ? avg.toFixed(1) : "New"}</div>
+          <div className="mt-1 flex justify-end"><Stars score={avg || 0} light /></div>
+        </div>
+      </div>
+      {viol > 0 && (
+        <div className="px-4 py-2.5 flex items-center gap-2" style={{ background: "#FBEBEC" }}>
+          <X size={13} color={C.maroon} />
+          <span className="text-[12.5px] font-semibold" style={{ color: C.maroon }}>
+            {viol} no-show violation{viol > 1 ? "s" : ""} reported by operators
+          </span>
+        </div>
+      )}
+      <div className="px-4 py-4" style={{ background: C.card }}>
+        {marks === null ? (
+          <p className="text-[13px]" style={{ color: C.muted }}>Loading…</p>
+        ) : grades.length === 0 ? (
+          <p className="text-[13.5px]" style={{ color: C.muted }}>
+            No grades yet — the operator grades each crew member when a trip completes.
+            Signed commitments and kept promises build this chart.
+          </p>
+        ) : (
+          <p className="text-[13.5px]" style={{ color: C.ink }}>
+            <b>{grades.length}</b> trip{grades.length > 1 ? "s" : ""} graded — every grade comes from the operator who ran the trip.
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function TripCalendar({ user, trips }) {
   const me = user.talentId;
   const isOp = user.kind === "operator";
@@ -3144,24 +3176,67 @@ function TripsTab({ user, trips, actions, onMessage }) {
   const meId = user.talentId || user.id;
   const mineId = user.talentId || user.id;
   const mine = trips.filter((tr) => (tr.members || []).some((m) => m.id === mineId) || (tr.operatorId && tr.operatorId === mineId));
+
+  // signatures across my trips: mine (to gate confirmation) + per-trip tallies (operator view)
+  const [sigRows, setSigRows] = useState([]);
+  useEffect(() => {
+    const ids = mine.map((tr) => tr.id);
+    if (!ids.length) { setSigRows([]); return; }
+    supabase.from("trip_signatures").select("trip_id, profile_id").in("trip_id", ids)
+      .then(({ data }) => setSigRows(data || []));
+  }, [trips.length, mineId]);
+  const iSigned = (tr) => sigRows.some((r) => r.trip_id === tr.id && r.profile_id === mineId);
+  const sigTally = (tr) => {
+    const crewIds = (tr.members || []).filter((m) => m.roleInTrip !== "operator").map((m) => m.id);
+    return { signed: sigRows.filter((r) => r.trip_id === tr.id && crewIds.includes(r.profile_id)).length, total: crewIds.length };
+  };
+
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const amCrew = (tr) => (tr.members || []).some((m) => m.id === mineId && m.roleInTrip !== "operator");
+  const awaiting = mine.filter((tr) => amCrew(tr) && !iSigned(tr) && (!tr.end || tr.end >= todayIso));
+  const confirmed = mine.filter((tr) => !awaiting.includes(tr));
+  const live = confirmed.filter((tr) => tr.start && tr.start <= todayIso && (tr.end || tr.start) >= todayIso);
+  const upcoming = confirmed.filter((tr) => tr.start && tr.start > todayIso);
+  const completed = confirmed.filter((tr) => (tr.end || tr.start || "") < todayIso)
+    .sort((a, b) => ((a.end || a.start) < (b.end || b.start) ? 1 : -1));
+
   const open = mine.find((tr) => tr.id === openId);
   if (open) return <TripHub user={user} meId={meId} trip={open} actions={actions} onMessage={onMessage} onBack={() => setOpenId(null)} />;
+
+  const Section = ({ label, list, tone }) => list.length === 0 ? null : (
+    <div className="mb-5">
+      <SectionLabel trailing={`${list.length}`}>{label}</SectionLabel>
+      <div className="space-y-3">
+        {list.map((tr) => (
+          <TripCard key={tr.id} trip={tr} onOpen={() => setOpenId(tr.id)} tone={tone}
+            needsSign={tone === "sign"} tally={tr.operatorId === mineId ? sigTally(tr) : null} />
+        ))}
+      </div>
+    </div>
+  );
+
   return (
     <div className="px-5 py-4">
-      <SectionLabel trailing={`${mine.length}`}>Trips</SectionLabel>
       {mine.length === 0 ? (
         <Empty Icon={MapIcon} title="No trips yet" body="When a job request is accepted, the trip and its group chat appear here." />
       ) : (
-        <div className="space-y-3">{mine.map((tr) => <TripCard key={tr.id} trip={tr} onOpen={() => setOpenId(tr.id)} />)}</div>
+        <>
+          <Section label="Awaiting your signature" list={awaiting} tone="sign" />
+          <Section label="Live now" list={live} tone="live" />
+          <Section label="Upcoming" list={upcoming} />
+          <Section label="Completed" list={completed} tone="done" />
+        </>
       )}
     </div>
   );
 }
 
-function TripCard({ trip, onOpen }) {
+function TripCard({ trip, onOpen, tone, needsSign, tally }) {
   const msgs = (trip.chat?.messages || []).filter((m) => m.kind !== "system");
+  const border = tone === "sign" ? `1.5px solid ${C.gold}` : tone === "live" ? `1.5px solid ${C.pine}` : `1px solid ${C.line}`;
   return (
-    <button onClick={onOpen} className="tap w-full text-left rounded-2xl p-4" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+    <button onClick={onOpen} className="tap w-full text-left rounded-2xl p-4"
+      style={{ background: C.card, border, opacity: tone === "done" ? 0.82 : 1 }}>
       <div className="flex items-start justify-between gap-3">
         <div className="text-[15px] font-semibold leading-snug" style={{ color: C.ink }}>{trip.title}</div>
         <TripStateBadge state={tripStateNow(trip)} />
@@ -3171,6 +3246,17 @@ function TripCard({ trip, onOpen }) {
         <CrewAvatars members={trip.members} />
         <div className="flex items-center gap-1 text-[12.5px]" style={{ color: C.muted }}><MessageSquare size={13} /> {msgs.length}</div>
       </div>
+      {needsSign && (
+        <div className="flex items-center gap-1.5 rounded-lg px-2.5 py-2 mt-3" style={{ background: C.goldSoft }}>
+          <BadgeCheck size={13} color="#7a5a1e" />
+          <span className="text-[12px] font-semibold" style={{ color: "#7a5a1e" }}>Sign the tour commitment to confirm this trip</span>
+        </div>
+      )}
+      {tally && tally.total > 0 && (
+        <div className="text-[11.5px] mt-2" style={{ color: tally.signed === tally.total ? C.pine : "#9a7a2e" }}>
+          {tally.signed}/{tally.total} crew signed the commitment
+        </div>
+      )}
     </button>
   );
 }
@@ -3220,6 +3306,46 @@ function TripHub({ user, meId, trip, actions, onMessage, onBack }) {
     setMpEdit(false);
     actions.fetchTrips && actions.fetchTrips();
   };
+
+  // ---- Tour commitment + character marks ----
+  const [sigs, setSigs] = useState([]);
+  const [tripMarks, setTripMarks] = useState([]);
+  const [signName, setSignName] = useState("");
+  const [signBusy, setSignBusy] = useState(false);
+  const [nsConfirm, setNsConfirm] = useState(null);
+  const todayIso2 = new Date().toISOString().slice(0, 10);
+  const isCrewMember = (trip.members || []).some((mm) => mm.id === meId && mm.roleInTrip !== "operator");
+  const mySigned = sigs.some((sg) => sg.profile_id === meId);
+  const loadAccountability = async () => {
+    const [{ data: S }, { data: M }] = await Promise.all([
+      supabase.from("trip_signatures").select("profile_id, signed_at").eq("trip_id", trip.id),
+      supabase.from("character_marks").select("profile_id, kind, grade").eq("trip_id", trip.id),
+    ]);
+    setSigs(S || []); setTripMarks(M || []);
+  };
+  useEffect(() => { loadAccountability(); }, [trip.id]);
+  const signCommit = async () => {
+    if (!signName.trim() || signBusy) return;
+    setSignBusy(true);
+    const { error } = await supabase.from("trip_signatures").insert({
+      trip_id: trip.id, profile_id: meId, signed_name: signName.trim(),
+    });
+    setSignBusy(false);
+    if (!error) { setSignName(""); loadAccountability(); }
+  };
+  const setGrade = async (pid, g) => {
+    await supabase.from("character_marks").upsert(
+      { trip_id: trip.id, profile_id: pid, operator_id: meId, kind: "grade", grade: g },
+      { onConflict: "trip_id,profile_id,operator_id,kind" });
+    loadAccountability();
+  };
+  const reportNoShow = async (pid) => {
+    setNsConfirm(null);
+    await supabase.from("character_marks").upsert(
+      { trip_id: trip.id, profile_id: pid, operator_id: meId, kind: "violation", grade: null },
+      { onConflict: "trip_id,profile_id,operator_id,kind" });
+    loadAccountability();
+  };
   const [askingOperator, setAskingOperator] = useState(false);
   const tripDone = state === "active" || state === "completed";
   const canInvite = tripDone && (user.kind === "operator" || user.kind === "admin");
@@ -3234,6 +3360,40 @@ function TripHub({ user, meId, trip, actions, onMessage, onBack }) {
       </div>
 
       <div className="px-5 py-4">
+        {isCrewMember && !mySigned && (
+          <div className="rounded-2xl p-4 mb-4" style={{ background: C.card, border: `1.5px solid ${C.gold}` }}>
+            <div className="flex items-center gap-2 mb-2.5">
+              <BadgeCheck size={17} color={C.gold} />
+              <span className="text-[14.5px] font-semibold" style={{ color: C.ink }}>Tour Commitment — signature required</span>
+            </div>
+            <div className="rounded-xl px-3.5 py-3 text-[12.5px] leading-relaxed mb-3" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }}>
+              By signing, I confirm my place on <b>{trip.title}</b> and commit to:
+              <br />1. Being present and ready at the meeting point on the start date.
+              <br />2. Giving the operator at least 7 days' notice if I must withdraw, so a replacement can be found.
+              <br />3. Understanding that a no-show or late cancellation without genuine emergency is recorded as a
+              violation on my <b>Character Chart</b> — visible to every operator on this platform — and may affect future hiring.
+            </div>
+            <input value={signName} onChange={(e) => setSignName(e.target.value)} maxLength={60}
+              placeholder="Type your full name to sign"
+              className="w-full h-11 px-3.5 rounded-xl text-[15px] mb-2"
+              style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink, fontStyle: signName ? "italic" : "normal" }} />
+            <button onClick={signCommit} disabled={signBusy || !signName.trim()}
+              className="tap w-full h-11 rounded-xl text-[14px] font-semibold"
+              style={{ background: signName.trim() ? C.pine : "#C7CEC7", color: "#fff" }}>
+              {signBusy ? "Signing…" : "Sign the commitment"}
+            </button>
+            <p className="text-[11px] mt-2 leading-snug" style={{ color: C.muted }}>
+              The meeting point unlocks once you sign. Your typed name and the timestamp are stored as your signature.
+            </p>
+          </div>
+        )}
+        {isCrewMember && mySigned && (
+          <div className="flex items-center gap-2 rounded-xl px-3.5 py-2.5 mb-4" style={{ background: C.pineSoft }}>
+            <BadgeCheck size={15} color={C.pine} />
+            <span className="text-[12.5px] font-medium" style={{ color: C.pine }}>Tour commitment signed</span>
+          </div>
+        )}
+        {(!isCrewMember || mySigned) && (<>
         <div className="rounded-2xl p-4 mb-4" style={{ background: C.card, border: `1px solid ${trip.meetingSet ? C.line : C.gold}` }}>
           <div className="flex items-center gap-2 text-[13px] font-medium" style={{ color: C.ink }}>
             <MapPin size={15} color={C.gold} /> <span className="flex-1">Meeting point</span>
@@ -3285,6 +3445,7 @@ function TripHub({ user, meId, trip, actions, onMessage, onBack }) {
             </div>
           )}
         </div>
+        </>)}
 
         {canInvite && (
           <button onClick={() => setInviting(true)}
@@ -3323,13 +3484,25 @@ function TripHub({ user, meId, trip, actions, onMessage, onBack }) {
         {inviting && <ReviewInvite user={user} trip={trip} onClose={() => setInviting(false)} />}
         {askingOperator && <OperatorInvite user={user} trip={trip} onClose={() => setAskingOperator(false)} />}
 
+        {isTripOperator && (trip.members || []).some((mm) => mm.roleInTrip !== "operator") && (
+          <p className="text-[11.5px] mb-2" style={{ color: C.muted }}>
+            {sigs.filter((sg) => (trip.members || []).some((mm) => mm.id === sg.profile_id && mm.roleInTrip !== "operator")).length}
+            /{(trip.members || []).filter((mm) => mm.roleInTrip !== "operator").length} crew have signed the tour commitment
+          </p>
+        )}
+
         <SectionLabel>Crew</SectionLabel>
         <div className="rounded-2xl divide-y mb-5" style={{ background: C.card, border: `1px solid ${C.line}`, borderColor: C.line }}>
           {(trip.members || []).map((m) => {
             const mp = m.id === meId ? null : talentById(m.id)?.phone;
             const dial = mp ? dialNumber(mp) : null;
+            const sigSigned = sigs.some((sg) => sg.profile_id === m.id);
+            const myGrade = (tripMarks.find((k2) => k2.profile_id === m.id && k2.kind === "grade") || {}).grade || 0;
+            const hasViolation = tripMarks.some((k2) => k2.profile_id === m.id && k2.kind === "violation");
+            const showOps = isTripOperator && m.roleInTrip !== "operator";
             return (
-              <div key={m.id} className="flex items-center gap-3 px-4 py-3">
+              <div key={m.id} className="px-4 py-3">
+              <div className="flex items-center gap-3">
                 <Avatar initials={m.initials} size={36} />
                 <div className="flex-1 min-w-0">
                   <div className="text-[14px] font-semibold truncate" style={{ color: C.ink }}>{m.name}</div>
@@ -3360,6 +3533,32 @@ function TripHub({ user, meId, trip, actions, onMessage, onBack }) {
                     )}
                   </div>
                 )}
+              </div>
+              {m.roleInTrip !== "operator" && !sigSigned && (
+                <div className="text-[10.5px] font-semibold mt-1" style={{ color: "#9a7a2e", marginLeft: 48 }}>Commitment not signed yet</div>
+              )}
+              {showOps && trip.start <= todayIso2 && (
+                <div className="flex items-center gap-3 mt-2" style={{ marginLeft: 48 }}>
+                  {trip.end && trip.end < todayIso2 && (
+                    <span className="flex items-center gap-0.5">
+                      {[1, 2, 3, 4, 5].map((g) => (
+                        <button key={g} onClick={() => setGrade(m.id, g)} className="tap p-0.5" aria-label={`Grade ${g}`}>
+                          <Star size={15} color={g <= myGrade ? C.gold : C.line} fill={g <= myGrade ? C.gold : "none"} />
+                        </button>
+                      ))}
+                    </span>
+                  )}
+                  {hasViolation ? (
+                    <span className="text-[11px] font-semibold rounded-full px-2 py-0.5" style={{ background: "#FBEBEC", color: C.maroon }}>No-show reported</span>
+                  ) : nsConfirm === m.id ? (
+                    <button onClick={() => reportNoShow(m.id)} className="tap text-[11px] font-semibold rounded-full px-2.5 py-1"
+                      style={{ background: C.maroon, color: "#fff" }}>Confirm no-show report</button>
+                  ) : (
+                    <button onClick={() => setNsConfirm(m.id)} className="tap text-[11px] font-semibold rounded-full px-2.5 py-1"
+                      style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.maroon }}>No-show?</button>
+                  )}
+                </div>
+              )}
               </div>
             );
           })}
