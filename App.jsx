@@ -2117,7 +2117,7 @@ function Discover({ onOpen, initialQuery, dirTick, viewerKind }) {
         </div>
       )}
       <p className="text-[11.5px] mb-3" style={{ color: C.muted }}>
-        {bizViewer && tab === "operator" ? "These operators bring the tours. Open one and message them to pitch your rooms and offers." : isBiz ? "Hotels, farmstays, boutiques and local businesses \u2014 tap one to see its live availability calendar." : "Tap a person to see their full profile, reviews and availability."}
+        {bizViewer && tab === "operator" ? "These operators bring the tours. Open one and message them to pitch your rooms and offers." : isBiz ? "Hotels, farmstays, boutiques and local businesses — tap one to see its live availability calendar." : "Tap a person to see their full profile, reviews and availability."}
       </p>
 
       {list.length === 0 ? (
@@ -2367,6 +2367,7 @@ function TalentProfile({ talent, posts, canRequest, viewer, self, contactOnly, e
   const [shareToStory, setShareToStory] = useState(null);
   const [listMode, setListMode] = useState(null);
   const [credsOpen, setCredsOpen] = useState(false);
+  const licSectionRef = useRef(null);
   const [editOpen, setEditOpen] = useState(false);
   const [askOperator, setAskOperator] = useState(false);
   return (
@@ -2487,16 +2488,18 @@ function TalentProfile({ talent, posts, canRequest, viewer, self, contactOnly, e
 
       <div className="px-5">
         {self && t.role === "guide" && licenseJoinYear(t.licenseNo) == null && (
-          <div className="rounded-2xl p-4 mt-5" style={{ background: C.goldSoft, border: `1.5px solid ${C.gold}` }}>
+          <button onClick={() => licSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })}
+            className="tap w-full text-left rounded-2xl p-4 mt-5" style={{ background: C.goldSoft, border: `1.5px solid ${C.gold}` }}>
             <div className="flex items-center gap-2">
               <CalendarDays size={16} color={C.gold} />
-              <span className="text-[14px] font-semibold" style={{ color: "#7a5a1e" }}>Your experience shows 0 years</span>
+              <span className="flex-1 text-[14px] font-semibold" style={{ color: "#7a5a1e" }}>Your experience shows 0 years</span>
+              <ChevronLeft size={16} color="#7a5a1e" style={{ transform: "rotate(180deg)" }} />
             </div>
             <p className="text-[12.5px] mt-1.5 leading-snug" style={{ color: "#7a5a1e" }}>
-              Experience is read straight from your Department of Tourism licence number \u2014 no separate document needed.
-              Add your licence number below and it appears automatically.
+              Experience is read straight from your Department of Tourism licence number — no separate document needed.
+              <b> Tap here</b> to jump to My licence and add it now.
             </p>
-          </div>
+          </button>
         )}
         {self && !["operator", "business"].includes(t.role) && <TalentAvailability talent={t} onSet={onSetAvailability} />}
 
@@ -2530,7 +2533,7 @@ function TalentProfile({ talent, posts, canRequest, viewer, self, contactOnly, e
                   </button>
                 </div>
               )}
-              {self && t.role === "guide" && <GuideLicenseCard talent={t} onSaved={onProfileSaved} />}
+              {self && t.role === "guide" && <div ref={licSectionRef}><GuideLicenseCard talent={t} onSaved={onProfileSaved} /></div>}
 
               {t.tags && t.tags.length > 0 && (
                 <div className="mt-6"><SectionLabel>{t.role === "guide" ? "Specialities" : t.role === "business" ? "What we offer" : "Drives"}</SectionLabel>
@@ -2733,15 +2736,15 @@ function OperatorDesk({ user, trips, listings, jobs, actions, onOpenProfile, onN
       <div key={x.id} className="flex items-center gap-3 rounded-xl px-3.5 py-3" style={{ background: C.card, border: `1px solid ${C.line}` }}>
         <div className="flex-1 min-w-0">
           <div className="text-[13.5px] font-semibold truncate" style={{ color: C.ink }}>{x.title}</div>
-          <div className="text-[11.5px]" style={{ color: C.muted }}>{x.start ? fD(x.start) : ""}{x.end && x.end !== x.start ? ` \u2013 ${fD(x.end)}` : ""}</div>
+          <div className="text-[11.5px]" style={{ color: C.muted }}>{x.start ? fD(x.start) : ""}{x.end && x.end !== x.start ? ` – ${fD(x.end)}` : ""}</div>
         </div>
         {revs.length > 0 ? (
           <span className="text-[12px] font-semibold rounded-full px-2.5 py-1 shrink-0" style={{ background: C.pineSoft, color: C.pine }}>
-            \u2605 {avg} \u00b7 {revs.length}
+            ★ {avg} · {revs.length}
           </span>
         ) : openTok ? (
           <button onClick={resend} className="tap text-[12px] font-semibold rounded-full px-3 py-1.5 shrink-0" style={{ background: C.goldSoft, color: "#7a5a1e" }}>
-            Awaiting \u00b7 resend
+            Awaiting · resend
           </button>
         ) : (
           <button onClick={() => setInviteTrip(x)} className="tap text-[12px] font-semibold rounded-full px-3 py-1.5 shrink-0" style={{ background: C.pine, color: "#fff" }}>
@@ -2763,7 +2766,7 @@ function OperatorDesk({ user, trips, listings, jobs, actions, onOpenProfile, onN
         <div className="flex-1 min-w-0">
           <div className="text-[19px] font-semibold leading-tight truncate" style={{ color: C.ink }}>{t.name}</div>
           {t.handle && <div className="text-[12.5px]" style={{ color: C.muted }}>@{t.handle}</div>}
-          <div className="text-[12px] mt-0.5" style={{ color: C.muted }}>Tour operator{t.base ? ` \u00b7 ${t.base}` : ""}</div>
+          <div className="text-[12px] mt-0.5" style={{ color: C.muted }}>Tour operator{t.base ? ` · ${t.base}` : ""}</div>
         </div>
       </div>
       <div className="flex gap-2 mt-3.5">
@@ -2786,7 +2789,7 @@ function OperatorDesk({ user, trips, listings, jobs, actions, onOpenProfile, onN
               style={{ background: C.card, border: `1.5px solid ${C.gold}` }}>
               <Briefcase size={16} color={C.gold} />
               <span className="flex-1 text-[13.5px] font-medium" style={{ color: C.ink }}>
-                {openL.length} role{openL.length > 1 ? "s" : ""} still hiring{pendApps > 0 ? ` \u00b7 ${pendApps} new applicant${pendApps > 1 ? "s" : ""}` : ""}
+                {openL.length} role{openL.length > 1 ? "s" : ""} still hiring{pendApps > 0 ? ` · ${pendApps} new applicant${pendApps > 1 ? "s" : ""}` : ""}
               </span>
               <ChevronLeft size={15} color={C.muted} style={{ transform: "rotate(180deg)" }} />
             </button>
@@ -2829,7 +2832,7 @@ function OperatorDesk({ user, trips, listings, jobs, actions, onOpenProfile, onN
           <div className="mt-3 space-y-1.5">
             {quotes.map((q, i) => (
               <p key={i} className="text-[12.5px] leading-snug" style={{ color: "#ffffffd9" }}>
-                \u201c{q.body.length > 90 ? q.body.slice(0, 90) + "\u2026" : q.body}\u201d \u2014 {q.guest_name || "Guest"}
+                “{q.body.length > 90 ? q.body.slice(0, 90) + "…" : q.body}” — {q.guest_name || "Guest"}
               </p>
             ))}
           </div>
@@ -2859,7 +2862,7 @@ function OperatorDesk({ user, trips, listings, jobs, actions, onOpenProfile, onN
                 <div className="flex-1 min-w-0">
                   <div className="text-[13.5px] font-semibold truncate" style={{ color: C.ink }}>{p.name}</div>
                   <div className="text-[11.5px] truncate" style={{ color: C.muted }}>
-                    {roleLabel(p.role)}{typeof p.rating === "number" ? ` \u00b7 \u2605 ${p.rating.toFixed(1)}` : ""} \u00b7 last: {last.title}
+                    {roleLabel(p.role)}{typeof p.rating === "number" ? ` · ★ ${p.rating.toFixed(1)}` : ""} · last: {last.title}
                   </div>
                 </div>
                 <span className="text-[11px] font-semibold rounded-full px-2 py-1 shrink-0" style={{ background: av[2], color: av[1] }}>{av[0]}</span>
@@ -3060,7 +3063,7 @@ function TripCalendar({ user, trips }) {
                 <span className="rounded-full shrink-0" style={{ width: 4, height: 30, background: (tripMeta[t.id] || {}).color || C.pine }} />
                 <div className="flex-1 min-w-0">
                   <div className="text-[13.5px] font-semibold truncate" style={{ color: C.ink }}>{t.title}</div>
-                  <div className="text-[12px]" style={{ color: C.muted }}>{fD(t.start)}{t.end && t.end !== t.start ? ` \u2013 ${fD(t.end)}` : ""}</div>
+                  <div className="text-[12px]" style={{ color: C.muted }}>{fD(t.start)}{t.end && t.end !== t.start ? ` – ${fD(t.end)}` : ""}</div>
                 </div>
               </div>
             ))}
@@ -3091,7 +3094,7 @@ function TripCalendar({ user, trips }) {
                 <MapIcon size={15} color={(tripMeta[t.id] || {}).color || C.pine} />
                 <div className="flex-1 min-w-0">
                   <div className="text-[13px] font-semibold truncate" style={{ color: C.pine }}>{t.title}</div>
-                  <div className="text-[11.5px]" style={{ color: C.pine }}>{fD(t.start)}{t.end && t.end !== t.start ? ` \u2013 ${fD(t.end)}` : ""}</div>
+                  <div className="text-[11.5px]" style={{ color: C.pine }}>{fD(t.start)}{t.end && t.end !== t.start ? ` – ${fD(t.end)}` : ""}</div>
                 </div>
               </div>
             ))}
@@ -3130,7 +3133,7 @@ function TripCalendar({ user, trips }) {
                     className="tap flex-1 h-10 rounded-xl text-[13px] font-semibold" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.muted }}>Cancel</button>
                   <button onClick={addNote} disabled={busy || !nTitle.trim()}
                     className="tap flex-1 h-10 rounded-xl text-[13px] font-semibold" style={{ background: nTitle.trim() ? C.pine : "#C7CEC7", color: "#fff" }}>
-                    {busy ? "Saving\u2026" : "Save note"}
+                    {busy ? "Saving…" : "Save note"}
                   </button>
                 </div>
               </div>
@@ -3180,7 +3183,7 @@ function FestivalsDial() {
                   <span className="text-right shrink-0">
                     <span className="text-[12px] font-semibold rounded-full px-2.5 py-1 inline-block"
                       style={{ background: soon ? C.goldSoft : C.bg, color: soon ? "#7a5a1e" : C.muted, border: soon ? "none" : `1px solid ${C.line}` }}>
-                      {fD(f.start_date)}{f.end_date && f.end_date !== f.start_date ? ` \u2013 ${fD(f.end_date)}` : ""}
+                      {fD(f.start_date)}{f.end_date && f.end_date !== f.start_date ? ` – ${fD(f.end_date)}` : ""}
                     </span>
                     {!f.confirmed && <span className="block text-[10px] mt-0.5" style={{ color: C.muted }}>tentative</span>}
                   </span>
@@ -3943,9 +3946,9 @@ function ManageApplicants({ listing, actions, onViewProfile, onBack }) {
       {isBoth && (
         <div className="px-5 pt-4">
           <Segmented value={side} onChange={setSide}
-            options={[["guide", `Guides (${guideApps.length})${gHired ? " \u2713" : ""}`], ["driver", `Drivers (${driverApps.length})${dHired ? " \u2713" : ""}`]]} />
+            options={[["guide", `Guides (${guideApps.length})${gHired ? " ✓" : ""}`], ["driver", `Drivers (${driverApps.length})${dHired ? " ✓" : ""}`]]} />
           {(gHired || dHired) && !(gHired && dHired) && (
-            <p className="text-[12px] mt-2" style={{ color: C.muted }}>{gHired ? "Guide hired \u2014 now pick the driver to complete the pair." : "Driver hired \u2014 now pick the guide to complete the pair."}</p>
+            <p className="text-[12px] mt-2" style={{ color: C.muted }}>{gHired ? "Guide hired — now pick the driver to complete the pair." : "Driver hired — now pick the guide to complete the pair."}</p>
           )}
         </div>
       )}
@@ -4040,7 +4043,7 @@ function ListingForm({ operator, onBack, onPost }) {
             </button>
           ))}
         </div>
-        <p className="text-[12px] mb-4" style={{ color: C.muted }}>{role === "both" ? "One post, one trip: hire a guide\u2013driver pair together." : "Applicants will be " + (role === "guide" ? "guides" : "drivers") + " only."}</p>
+        <p className="text-[12px] mb-4" style={{ color: C.muted }}>{role === "both" ? "One post, one trip: hire a guide–driver pair together." : "Applicants will be " + (role === "guide" ? "guides" : "drivers") + " only."}</p>
 
         <div className="grid grid-cols-2 gap-3 mb-4">
           <div><Label>Start</Label><input type="date" value={start} onChange={(e) => setStart(e.target.value)} className="w-full h-12 px-3.5 rounded-xl text-[14px]" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }} /></div>
@@ -4199,7 +4202,7 @@ function isValidLatLng(lat, lng) {
 
 function placeLabel(loc) {
   if (!loc) return "";
-  if (loc.outside || !insideBhutan(loc.lat, loc.lng)) return `Outside Bhutan (${Number(loc.lat).toFixed(3)}\u00b0, ${Number(loc.lng).toFixed(3)}\u00b0)`;
+  if (loc.outside || !insideBhutan(loc.lat, loc.lng)) return `Outside Bhutan (${Number(loc.lat).toFixed(3)}°, ${Number(loc.lng).toFixed(3)}°)`;
   if (!loc.place) return "Pinned in Bhutan";
   return loc.source === "viewpoint" ? loc.place : `Near ${loc.place}`;
 }
@@ -5273,7 +5276,7 @@ const ONB_VEHICLES = ["Sedan", "SUV", "Hiace Van", "Coaster Bus", "Large Coach"]
 const ONB_LANGS = ["Dzongkha", "English", "Hindi", "Nepali", "Japanese", "Mandarin", "German", "French", "Spanish", "Korean"];
 const ONB_YEARS = [["0–2 yrs", 1], ["3–5 yrs", 4], ["6–10 yrs", 8], ["10+ yrs", 12]];
 const LICENSE_LABEL = { guide: "Guide license (Department of Tourism)", driver: "Driving licence (RSTA)", operator: "Tour Operator licence (Department of Tourism)", business: "Trade licence (MoICE)" };
-const ONB_BUSINESS = ["Hotel", "Farmstay / Homestay", "Boutique & Handicrafts", "Restaurant / Caf\u00e9", "Wellness & Spa", "Textiles & Art"];
+const ONB_BUSINESS = ["Hotel", "Farmstay / Homestay", "Boutique & Handicrafts", "Restaurant / Café", "Wellness & Spa", "Textiles & Art"];
 
 function OLabel({ children }) { return <div className="text-[13px] font-medium mb-1.5" style={{ color: C.ink }}>{children}</div>; }
 function OInput(props) { return <input {...props} className="w-full h-12 px-4 rounded-xl text-[15px] mb-4" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }} />; }
@@ -5575,7 +5578,7 @@ function Onboard({ mode: initialMode, session, onBack, onDone }) {
           </>)}
           {["operator", "business"].includes(role) && (<>
             <OLabel>{role === "business" ? "Describe your place" : "What should the crew know about you?"}</OLabel>
-            <textarea value={pitch} onChange={(e) => setPitch(e.target.value)} rows={3} maxLength={220} placeholder={role === "business" ? "Rooms, products, opening hours \u2014 what should visiting tours know?" : "Routes you run, group sizes, what you value."}
+            <textarea value={pitch} onChange={(e) => setPitch(e.target.value)} rows={3} maxLength={220} placeholder={role === "business" ? "Rooms, products, opening hours — what should visiting tours know?" : "Routes you run, group sizes, what you value."}
               className="w-full px-3.5 py-3 rounded-xl text-[15px] resize-none mb-5" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }} />
           </>)}
           <OCta disabled={!detailsOk} onClick={detailsNext}>Continue</OCta>
@@ -6444,7 +6447,7 @@ function EditProfileSheet({ talent, onClose, onSaved }) {
 
   const save = async () => {
     if (!name.trim()) { setErr("Your name can't be empty."); return; }
-    if (!handleValid) { setErr("Handles are 3\u201320 characters: letters, numbers, dots or underscores."); return; }
+    if (!handleValid) { setErr("Handles are 3–20 characters: letters, numbers, dots or underscores."); return; }
     setBusy(true); setErr(null);
     const { error } = await supabase.from("profiles").update({
       pitch: bio.trim() || null,
@@ -6454,8 +6457,8 @@ function EditProfileSheet({ talent, onClose, onSaved }) {
     setBusy(false);
     if (error) {
       setErr(error.code === "23505" || /handle/i.test(error.message || "")
-        ? "That handle is already taken \u2014 try another."
-        : (error.message || "Couldn't save \u2014 try again."));
+        ? "That handle is already taken — try another."
+        : (error.message || "Couldn't save — try again."));
       return;
     }
     onSaved && onSaved();
@@ -6489,7 +6492,7 @@ function EditProfileSheet({ talent, onClose, onSaved }) {
             style={{ background: C.card, border: `1px solid ${handleValid ? C.line : C.maroon}`, color: C.ink }} />
         </div>
         <p className="text-[11.5px] mb-4" style={{ color: handleValid ? C.muted : C.maroon }}>
-          A unique short name people can search you by \u2014 letters, numbers, dots, underscores.
+          A unique short name people can search you by — letters, numbers, dots, underscores.
         </p>
 
         <div className="text-[13px] font-semibold mb-1.5" style={{ color: C.ink }}>About you</div>
@@ -6502,7 +6505,7 @@ function EditProfileSheet({ talent, onClose, onSaved }) {
         <div className="rounded-xl px-3.5 py-3 mt-5" style={{ background: C.pineSoft }}>
           <div className="text-[12.5px] font-semibold" style={{ color: C.pine }}>Experience is automatic</div>
           <p className="text-[11.5px] mt-1 leading-snug" style={{ color: C.pine }}>
-            Your years of experience are read straight from your Department of Tourism licence number \u2014 no separate
+            Your years of experience are read straight from your Department of Tourism licence number — no separate
             entry needed here. Set it once under My licence and it stays current forever.
           </p>
         </div>
@@ -7447,14 +7450,14 @@ function Tutorial({ user, nav, setTab, onDone }) {
     : user.kind === "business"
     ? [
         { kind: "intro", title: `Welcome, ${first}`, body: "You're one of the first businesses on the hub. A quick tour of your new page." },
-        { kind: "tab", tab: "post", title: "Your Feed", body: "Post your rooms, products and offers \u2014 every guide and operator on the hub sees this feed." },
+        { kind: "tab", tab: "post", title: "Your Feed", body: "Post your rooms, products and offers — every guide and operator on the hub sees this feed." },
         { kind: "tab", tab: "bookings", title: "Bookings", body: "Your live calendar. Tap days to block them, and confirm operator requests right here." },
         { kind: "tab", tab: "discover", title: "Discover", body: "Browse verified guides, drivers and fellow businesses across Bhutan." },
         { kind: "tab", tab: "chats", title: "Messages", body: "Operators and guides can message you directly to plan stops and stays." },
-        { kind: "tab", tab: "profile", title: "Your Page", body: "Photos, what you offer, and your location \u2014 this is what passing tours see." },
+        { kind: "tab", tab: "profile", title: "Your Page", body: "Photos, what you offer, and your location — this is what passing tours see." },
         { kind: "top", title: "Search & alerts", body: "Search anyone by name, and tap the bell for messages and follows." },
         { kind: "outro", title: "One last thing", body: user.licenseStatus === "submitted"
-            ? "Your trade licence is with our review team. Everything works meanwhile \u2014 your Verified badge appears once it clears."
+            ? "Your trade licence is with our review team. Everything works meanwhile — your Verified badge appears once it clears."
             : "Add your trade licence from your profile to get the Verified badge. Tours trust verified businesses." },
       ]
     : [
@@ -8078,7 +8081,7 @@ function warpCardFromImage(imgEl, ptsNatural, outW, outH) {
 function refineCardQuad(imgEl, quadNat) {
   // Coarse-to-fine: each edge slides along its normal to the outermost point
   // where (R - B) rises from card-level and stays risen — white and teal keep
-  // R\u2248B; every surround (gold, skin, fabric) runs red-heavy. Glare bands on the
+  // R≈B; every surround (gold, skin, fabric) runs red-heavy. Glare bands on the
   // card also rise but the true edge is the LAST card-origin crossing.
   try {
     const natW = imgEl.naturalWidth, natH = imgEl.naturalHeight;
@@ -8193,7 +8196,7 @@ function refineCardQuad(imgEl, quadNat) {
 
 function detectCardCorners(imgEl) {
   // Careless-path detector: finds the licence by its colour physics (card white
-  // has R\u2248B; gold/skin/pink never do; card bodies are saturated), isolates the
+  // has R≈B; gold/skin/pink never do; card bodies are saturated), isolates the
   // central connected blob so screenshots and backgrounds can't hijack corners,
   // demands thickness at every border (glints are thin, cards are thick), and
   // locks opposite edges to coherent slopes. Returns natural coords or null.
@@ -8828,7 +8831,7 @@ function GuestReview({ token }) {
           </div>
           <Stars value={ratings[m.id] || 0} onChange={(n) => { setRatings((r) => ({ ...r, [m.id]: n })); setErr(null); }} />
           <div className="text-center text-[13px] font-semibold mt-2" style={{ color: (ratings[m.id] || 0) ? C.gold : "transparent" }}>
-            {[null, "Poor", "Fair", "Good", "Great", "Excellent"][ratings[m.id] || 0] || "\u00a0"}
+            {[null, "Poor", "Fair", "Good", "Great", "Excellent"][ratings[m.id] || 0] || " "}
           </div>
           {(ratings[m.id] || 0) > 0 && (
             <textarea value={notes[m.id] || ""} onChange={(e) => setNotes((x) => ({ ...x, [m.id]: e.target.value }))} rows={3} maxLength={600}
