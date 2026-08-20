@@ -1201,7 +1201,8 @@ function Shell({ user, posts, jobs, trips, listings, actions, engagement, dm, di
     window.addEventListener("appinstalled", onInstalled);
     // nudge once, a little after they've settled in
     const t = setTimeout(() => {
-      if (!isStandalone() && !localStorage.getItem("bth_install_dismissed")) setInstallSheet(true);
+      const dismissedAt = Number(localStorage.getItem("bth_install_dismissed") || 0);
+      if (!isStandalone() && Date.now() - dismissedAt > 7 * 86400000) setInstallSheet(true);
     }, 45000);
     return () => { window.removeEventListener("beforeinstallprompt", onPrompt); window.removeEventListener("appinstalled", onInstalled); clearTimeout(t); };
   }, []);
@@ -1345,7 +1346,7 @@ function Shell({ user, posts, jobs, trips, listings, actions, engagement, dm, di
 
       {installSheet && !installed && (
         <InstallSheet installEvent={installEvent}
-          onClose={() => { setInstallSheet(false); try { localStorage.setItem("bth_install_dismissed", "1"); } catch (e) {} }} />
+          onClose={() => { setInstallSheet(false); try { localStorage.setItem("bth_install_dismissed", String(Date.now())); } catch (e) {} }} />
       )}
 
       {alertsOpen && (
@@ -7342,12 +7343,20 @@ function AlertsSheet({ items, onClose, onOpenProfile, onOpenMessages, onOpenJobs
 function InstallSheet({ installEvent, onClose }) {
   const ios = isIOS();
   const [busy, setBusy] = useState(false);
+  const [, bump] = useState(0);
+  useEffect(() => {
+    const onAvail = () => bump((x) => x + 1);
+    window.addEventListener("bth-installable", onAvail);
+    return () => window.removeEventListener("bth-installable", onAvail);
+  }, []);
+  const ev = installEvent || deferredInstallPrompt;
 
   const install = async () => {
-    if (!installEvent) return;
+    if (!ev) return;
     setBusy(true);
-    installEvent.prompt();
-    try { await installEvent.userChoice; } catch (e) {}
+    ev.prompt();
+    try { await ev.userChoice; } catch (e) {}
+    deferredInstallPrompt = null;
     setBusy(false);
     onClose();
   };
@@ -7391,7 +7400,7 @@ function InstallSheet({ installEvent, onClose }) {
               ))}
             </ol>
           </div>
-        ) : installEvent ? (
+        ) : ev ? (
           <button onClick={install} disabled={busy} className="tap w-full h-12 rounded-xl text-[15px] font-semibold inline-flex items-center justify-center gap-2"
             style={{ background: C.pine, color: "#fff" }}>
             {busy ? <Loader2 size={18} className="animate-spin" /> : <><Plus size={17} strokeWidth={3} /> Install now</>}
@@ -7409,6 +7418,9 @@ function InstallSheet({ installEvent, onClose }) {
                 </li>
               ))}
             </ol>
+            <p className="text-[12px] mt-2.5" style={{ color: C.muted }}>
+              Already installed it before? Just open it from your home screen — no need to repeat this.
+            </p>
           </div>
         )}
 
