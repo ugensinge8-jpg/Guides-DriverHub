@@ -3012,6 +3012,12 @@ function LegacyReviewsSheet({ talent, onClose }) {
   const [adding, setAdding] = useState(false);
   const [opQuery, setOpQuery] = useState("");
   const [opId, setOpId] = useState(null);
+  const [offMode, setOffMode] = useState(false);
+  const [opName, setOpName] = useState("");
+  const [opPhone, setOpPhone] = useState("");
+  const [opEmail, setOpEmail] = useState("");
+  const [linkFor, setLinkFor] = useState(null);
+  const [linkQuery, setLinkQuery] = useState("");
   const [tripLabel, setTripLabel] = useState("");
   const [tripYear, setTripYear] = useState("");
   const [guestName, setGuestName] = useState("");
@@ -3042,6 +3048,38 @@ function LegacyReviewsSheet({ talent, onClose }) {
     setLinkNote(error ? (error.message || "Couldn't save.") : "Saved — the links now show on your Portfolio.");
   };
 
+  const inviteMsg = (r) => (
+    `Kuzuzangpo la! This is ${talent.name} — we worked together on “${r.trip_label}”${r.trip_year ? ` (${r.trip_year})` : ""}. ` +
+    `I'm building my verified profile on Bhutan Tourism Hub, the platform where Bhutanese operators hire licensed guides, ` +
+    `and I've added the review our guest gave us from that trip.\n\n` +
+    `Reviews there only appear once the operator confirms them, so I'd be grateful if you could attest it:\n` +
+    `1. Open bhutantourismhub.com and join as a Tour Operator (takes 2 minutes).\n` +
+    `2. Tell me once your account is ready — I'll link the review to you in the app.\n` +
+    `3. It will appear on your Profile desk under “Attestations awaiting you” — read it, and tap Attest only if it matches what you remember.\n\n` +
+    `Please judge it with complete honesty — decline it if anything is wrong. That honesty is exactly what keeps every review on the platform truthful, including this one we completed together. Thank you la!`
+  );
+  const waInvite = (r) => {
+    const digits = (r.operator_phone || "").replace(/[^0-9]/g, "");
+    const num = digits.length === 8 ? "975" + digits : digits;
+    window.open(num ? `https://wa.me/${num}?text=${encodeURIComponent(inviteMsg(r))}` : `https://wa.me/?text=${encodeURIComponent(inviteMsg(r))}`, "_blank", "noopener");
+  };
+  const emailInvite = (r) => {
+    const sub = "Please attest our past trip review — Bhutan Tourism Hub";
+    window.open(`mailto:${r.operator_email || ""}?subject=${encodeURIComponent(sub)}&body=${encodeURIComponent(inviteMsg(r))}`, "_blank");
+  };
+  const linkOperator = async (row, p) => {
+    const { error } = await supabase.from("legacy_reviews")
+      .update({ operator_id: p.id, status: "pending" }).eq("id", row.id);
+    if (!error) {
+      await supabase.from("system_nudges").insert({
+        profile_id: p.id, kind: "attest", ref: row.id,
+        title: `${talent.name} asks you to attest a past review`,
+        body: `“${row.trip_label}” — open your Profile desk to read and attest.`,
+      });
+    }
+    setLinkFor(null); setLinkQuery(""); load();
+  };
+
   const waNudge = (op, r) => {
     const digits = (op?.phone || "").replace(/[^0-9]/g, "");
     const num = digits.length === 8 ? "975" + digits : digits;
@@ -3058,7 +3096,10 @@ function LegacyReviewsSheet({ talent, onClose }) {
   const pendingCount = (rows || []).filter((r) => r.status === "pending").length;
   const submit = async () => {
     if (pendingCount >= 3) { setErr("You already have 3 reviews awaiting attestation — nudge those operators or withdraw one first."); return; }
-    if (!opId) { setErr("Choose the tour operator that trip was run with."); return; }
+    if (offMode) {
+      if (!opName.trim()) { setErr("Enter the tour operator's company name."); return; }
+      if (!opPhone.trim() && !opEmail.trim()) { setErr("Add the operator's WhatsApp number or email so we can invite them."); return; }
+    } else if (!opId) { setErr("Choose the tour operator that trip was run with — or tap “not on the app yet”."); return; }
     if (!tripLabel.trim() || !body.trim()) { setErr("Trip name and the review words are required."); return; }
     setBusy(true); setErr(null);
     try {
@@ -3070,19 +3111,26 @@ function LegacyReviewsSheet({ talent, onClose }) {
         const { error: upErr } = await supabase.storage.from("certs").upload(photo_path, blob, { contentType: "image/jpeg" });
         if (upErr) throw upErr;
       }
+      const payload = offMode
+        ? { profile_id: me, operator_id: null, status: "invited",
+            operator_name: opName.trim(), operator_phone: opPhone.trim() || null, operator_email: opEmail.trim() || null }
+        : { profile_id: me, operator_id: opId };
       const { data: ins, error } = await supabase.from("legacy_reviews").insert({
-        profile_id: me, operator_id: opId, trip_label: tripLabel.trim(),
+        ...payload, trip_label: tripLabel.trim(),
         trip_year: tripYear ? Number(tripYear) : null,
         guest_name: guestName.trim() || null, guest_country: guestCountry.trim() || null,
         body: body.trim(), photo_path,
       }).select("id").single();
       if (error) throw error;
-      await supabase.from("system_nudges").insert({
-        profile_id: opId, kind: "attest", ref: ins.id,
-        title: `${talent.name} asks you to attest a past review`,
-        body: `“${tripLabel.trim()}” — open your Profile desk to read and attest.`,
-      });
-      setAdding(false); setOpId(null); setOpQuery(""); setTripLabel(""); setTripYear("");
+      if (!offMode) {
+        await supabase.from("system_nudges").insert({
+          profile_id: opId, kind: "attest", ref: ins.id,
+          title: `${talent.name} asks you to attest a past review`,
+          body: `“${tripLabel.trim()}” — open your Profile desk to read and attest.`,
+        });
+      }
+      setAdding(false); setOpId(null); setOpQuery(""); setOffMode(false);
+      setOpName(""); setOpPhone(""); setOpEmail(""); setTripLabel(""); setTripYear("");
       setGuestName(""); setGuestCountry(""); setBody(""); setPhotoUri(null);
       load();
     } catch (e2) { setErr(e2.message || "Couldn't submit — try again."); }
@@ -3144,7 +3192,27 @@ function LegacyReviewsSheet({ talent, onClose }) {
                 <div className="text-[13.5px] font-semibold" style={{ color: C.ink }}>{r.trip_label}{r.trip_year ? ` · ${r.trip_year}` : ""}</div>
                 <p className="text-[12.5px] mt-1 leading-snug" style={{ color: C.muted }}>{r.body.length > 110 ? r.body.slice(0, 110) + "…" : r.body}</p>
                 <div className="flex items-center gap-2 mt-2.5">
-                  {r.status === "attested" ? (
+                  {r.status === "invited" ? (
+                    <>
+                      <span className="text-[11.5px] font-semibold rounded-full px-2.5 py-1" style={{ background: C.goldSoft, color: "#7a5a1e" }}>
+                        {r.operator_name || "Operator"} — not on app yet
+                      </span>
+                      {r.operator_phone && (
+                        <button onClick={() => waInvite(r)} className="tap text-[11.5px] font-semibold rounded-full px-2.5 py-1 inline-flex items-center gap-1"
+                          style={{ background: "rgba(37,211,102,.13)", border: "1px solid rgba(37,211,102,.45)", color: "#1FA855" }}>
+                          <MessageCircle size={11} /> Invite
+                        </button>
+                      )}
+                      {r.operator_email && (
+                        <button onClick={() => emailInvite(r)} className="tap text-[11.5px] font-semibold rounded-full px-2.5 py-1"
+                          style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }}>Email</button>
+                      )}
+                      <button onClick={() => { setLinkFor(linkFor === r.id ? null : r.id); setLinkQuery(""); }}
+                        className="tap text-[11.5px] font-semibold rounded-full px-2.5 py-1"
+                        style={{ background: C.pineSoft, color: C.pine }}>They joined</button>
+                      <button onClick={() => withdraw(r.id)} className="tap text-[11.5px] ml-auto" style={{ color: C.maroon }}>Withdraw</button>
+                    </>
+                  ) : r.status === "attested" ? (
                     <span className="text-[11.5px] font-semibold rounded-full px-2.5 py-1" style={{ background: C.pineSoft, color: C.pine }}>Attested by {op ? op.name : "operator"} ✓</span>
                   ) : r.status === "declined" ? (
                     <span className="text-[11.5px] font-semibold rounded-full px-2.5 py-1" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.muted }}>Declined</span>
@@ -3159,6 +3227,18 @@ function LegacyReviewsSheet({ talent, onClose }) {
                     </>
                   )}
                 </div>
+                {linkFor === r.id && (
+                  <div className="mt-2.5">
+                    <input value={linkQuery} onChange={(e) => setLinkQuery(e.target.value)} autoFocus
+                      placeholder="Search their new operator account"
+                      className="w-full h-10 px-3.5 rounded-xl text-[13px]" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
+                    {linkQuery.trim() && allProfiles().filter((p) => p.role === "operator" && p.name.toLowerCase().includes(linkQuery.trim().toLowerCase())).slice(0, 4).map((p) => (
+                      <button key={p.id} onClick={() => linkOperator(r, p)}
+                        className="tap w-full text-left px-3.5 py-2.5 mt-1.5 rounded-xl text-[13px] font-medium"
+                        style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }}>{p.name}</button>
+                    ))}
+                  </div>
+                )}
               </div>
             );
           })}
@@ -3198,6 +3278,30 @@ function LegacyReviewsSheet({ talent, onClose }) {
                 <BadgeCheck size={14} color={C.pine} />
                 <span className="flex-1 text-[13.5px] font-semibold" style={{ color: C.pine }}>{chosenOp.name}</span>
                 <button onClick={() => setOpId(null)} className="tap text-[12px]" style={{ color: C.pine }}>change</button>
+              </div>
+            )}
+            {!chosenOp && !offMode && (
+              <button onClick={() => { setOffMode(true); setErr(null); }} className="tap text-[12.5px] font-semibold mt-2" style={{ color: "#7a5a1e" }}>
+                Operator not on the app yet? Invite them →
+              </button>
+            )}
+            {offMode && (
+              <div className="rounded-xl p-3 mt-2" style={{ background: C.bg, border: `1px dashed ${C.gold}` }}>
+                <input value={opName} onChange={(e) => { setOpName(e.target.value); setErr(null); }} maxLength={60}
+                  placeholder="Tour operator's company name"
+                  className="w-full h-11 px-3.5 rounded-xl text-[13.5px] mb-2" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }} />
+                <div className="flex gap-2">
+                  <input value={opPhone} onChange={(e) => { setOpPhone(e.target.value); setErr(null); }} maxLength={16}
+                    placeholder="WhatsApp number" inputMode="tel"
+                    className="flex-1 h-11 px-3.5 rounded-xl text-[13.5px]" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }} />
+                  <input value={opEmail} onChange={(e) => { setOpEmail(e.target.value); setErr(null); }} maxLength={60}
+                    placeholder="or email" inputMode="email" autoCapitalize="none"
+                    className="flex-1 h-11 px-3.5 rounded-xl text-[13.5px]" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }} />
+                </div>
+                <p className="text-[11.5px] mt-2 leading-snug" style={{ color: "#7a5a1e" }}>
+                  We'll prepare an invitation explaining how to join and how to attest your review with complete honesty.
+                </p>
+                <button onClick={() => setOffMode(false)} className="tap text-[12px] mt-1" style={{ color: C.muted }}>Back to search</button>
               </div>
             )}
 
