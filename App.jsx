@@ -2368,6 +2368,7 @@ function TalentProfile({ talent, posts, canRequest, viewer, self, contactOnly, e
   const [listMode, setListMode] = useState(null);
   const [credsOpen, setCredsOpen] = useState(false);
   const licSectionRef = useRef(null);
+  const [portfolioJump, setPortfolioJump] = useState(0);
   const [editOpen, setEditOpen] = useState(false);
   const [askOperator, setAskOperator] = useState(false);
   return (
@@ -2488,7 +2489,10 @@ function TalentProfile({ talent, posts, canRequest, viewer, self, contactOnly, e
 
       <div className="px-5">
         {self && t.role === "guide" && licenseJoinYear(t.licenseNo) == null && (
-          <button onClick={() => licSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })}
+          <button onClick={() => {
+              setPortfolioJump((k) => k + 1);
+              setTimeout(() => licSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 160);
+            }}
             className="tap w-full text-left rounded-2xl p-4 mt-5" style={{ background: C.goldSoft, border: `1.5px solid ${C.gold}` }}>
             <div className="flex items-center gap-2">
               <CalendarDays size={16} color={C.gold} />
@@ -2503,7 +2507,7 @@ function TalentProfile({ talent, posts, canRequest, viewer, self, contactOnly, e
         )}
         {self && !["operator", "business"].includes(t.role) && <TalentAvailability talent={t} onSet={onSetAvailability} />}
 
-        <ProfileTabs
+        <ProfileTabs jumpToCv={portfolioJump}
           cv={
             <>
               {["guide", "driver"].includes(t.role) && <GuestReviews talentId={t.id} isAdmin={eng?.isAdmin} isSelf={self} onAskOperator={() => setAskOperator(true)} />}
@@ -4714,8 +4718,9 @@ function WallPost({ post: p, author, eng, onShareStory, onClose }) {
 }
 
 /* ===================== Profile tabs (swipeable CV / Gallery) ===================== */
-function ProfileTabs({ cv, gallery, galleryCount }) {
-  const [tab, setTab] = useState(0);           // 0 = Posts · 1 = Reviews
+function ProfileTabs({ cv, gallery, galleryCount, jumpToCv }) {
+  const [tab, setTab] = useState(0);           // 0 = Posts · 1 = Portfolio
+  useEffect(() => { if (jumpToCv) setTab(1); }, [jumpToCv]);
   const startX = useRef(null);
   const startY = useRef(null);
   const locked = useRef(false);
