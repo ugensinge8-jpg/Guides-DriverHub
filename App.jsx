@@ -7372,18 +7372,10 @@ function InstallSheet({ installEvent, onClose }) {
           </div>
           <div>
             <div className="text-[17px] font-semibold" style={{ color: C.ink }}>Install Bhutan Tourism Hub</div>
-            <p className="text-[13px] mt-0.5" style={{ color: C.muted }}>Takes a second, and makes a real difference.</p>
+            <p className="text-[13px] mt-0.5 leading-snug" style={{ color: C.muted }}>
+              Job alerts · works on weak signal · opens full-screen{ios ? " — on iPhone, alerts only work once installed" : ""}.
+            </p>
           </div>
-        </div>
-
-        <div className="space-y-2.5 mb-4">
-          <InstallReason Icon={Bell} title="Job alerts reach you"
-            body={ios ? "On iPhone, notifications only work once the app is installed — a browser tab gets none."
-                      : "Get notified about new jobs and messages without opening the app."} />
-          <InstallReason Icon={NavIcon} title="Works with poor signal"
-            body="Opens instantly and keeps working on the road, where data is weak." />
-          <InstallReason Icon={Smartphone} title="Opens like a normal app"
-            body="Its own icon on your home screen — no browser bar, full screen." />
         </div>
 
         {ios ? (
@@ -7431,19 +7423,6 @@ function InstallSheet({ installEvent, onClose }) {
   ), document.body);
 }
 
-function InstallReason({ Icon, title, body }) {
-  return (
-    <div className="flex gap-3">
-      <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 mt-0.5" style={{ background: C.goldSoft }}>
-        <Icon size={15} color={C.gold} />
-      </div>
-      <div>
-        <div className="text-[13.5px] font-semibold" style={{ color: C.ink }}>{title}</div>
-        <div className="text-[12.5px] leading-snug" style={{ color: C.muted }}>{body}</div>
-      </div>
-    </div>
-  );
-}
 
 /* ============================ First-run tutorial ========================== */
 function Tutorial({ user, nav, setTab, onDone }) {
