@@ -28,9 +28,11 @@ const ACCOUNTS = [];
 const HOUR = 3600e3;
 const uid = () => (crypto?.randomUUID ? crypto.randomUUID() : String(Date.now() + Math.random()));
 let PROFILE_DIR = {};
+const allProfiles = () => Object.values(PROFILE_DIR);
 const profileToTalent = (p) => ({
   id: p.id, role: p.role, name: (p.role === "business" && p.company_name) || p.full_name || "Member", base: p.base || "",
   handle: p.handle || null,
+  taUrl: p.tripadvisor_url || null, gUrl: p.google_reviews_url || null,
   initials: initialsOf((p.role === "business" && p.company_name) || p.full_name || "?"),
   years: licenseExperienceYears(p.license_no) ?? 0,
   trips: 0, rating: p.guest_rating ?? null, ratingCount: p.guest_review_count || 0,
@@ -2511,6 +2513,8 @@ function TalentProfile({ talent, posts, canRequest, viewer, self, contactOnly, e
           cv={
             <>
               {["guide", "driver"].includes(t.role) && <GuestReviews talentId={t.id} isAdmin={eng?.isAdmin} isSelf={self} onAskOperator={() => setAskOperator(true)} />}
+              {["guide", "driver"].includes(t.role) && <ReviewLinks t={t} />}
+              {["guide", "driver"].includes(t.role) && <LegacyAttested talentId={t.id} />}
 
               <div className="mt-6" />
 
@@ -2705,6 +2709,29 @@ function OperatorDesk({ user, trips, listings, jobs, actions, onOpenProfile, onN
   };
   useEffect(() => { loadRv(); }, [myTrips.length]);
 
+  // ---- past-review attestations awaiting this operator ----
+  const [attests, setAttests] = useState([]);
+  const loadAttests = async () => {
+    const { data } = await supabase.from("legacy_reviews").select("*")
+      .eq("operator_id", me).eq("status", "pending").order("created_at");
+    setAttests(data || []);
+  };
+  useEffect(() => { loadAttests(); }, [me]);
+  const decideAttest = async (r, status) => {
+    await supabase.from("legacy_reviews").update({ status, decided_at: new Date().toISOString() }).eq("id", r.id);
+    await supabase.from("system_nudges").insert({
+      profile_id: r.profile_id, kind: "attest-done", ref: r.id,
+      title: status === "attested" ? "Your past review was attested ✓" : "A past review was declined",
+      body: `“${r.trip_label}” — ${status === "attested" ? `${t.name} attested it. It now shows on your Portfolio.` : `${t.name} could not confirm this one.`}`,
+    });
+    loadAttests();
+  };
+  const viewAttestNote = async (r) => {
+    if (!r.photo_path) return;
+    const { data } = await supabase.storage.from("certs").createSignedUrl(r.photo_path, 600);
+    if (data?.signedUrl) window.open(data.signedUrl, "_blank", "noopener");
+  };
+
   const compAvg = rv.reviews.length ? rv.reviews.reduce((a, r) => a + r.rating, 0) / rv.reviews.length : null;
   const quotes = rv.reviews.filter((r) => r.body && r.body.length > 12)
     .sort((a, b) => (a.created_at < b.created_at ? 1 : -1)).slice(0, 2);
@@ -2850,6 +2877,42 @@ function OperatorDesk({ user, trips, listings, jobs, actions, onOpenProfile, onN
         </div>
       )}
 
+      {/* attestations */}
+      {attests.length > 0 && (
+        <>
+          <div className="mt-6"><SectionLabel trailing={`${attests.length}`}>Attestations awaiting you</SectionLabel></div>
+          <p className="text-[11.5px] mb-2 leading-snug" style={{ color: C.muted }}>
+            Attest only what you can personally confirm — your name goes on it, visible to every operator and guest.
+          </p>
+          <div className="space-y-2.5">
+            {attests.map((r) => {
+              const g = talentById(r.profile_id);
+              return (
+                <div key={r.id} className="rounded-2xl p-4" style={{ background: C.card, border: `1.5px solid ${C.gold}` }}>
+                  <div className="text-[13.5px] font-semibold" style={{ color: C.ink }}>
+                    {g ? g.name : "Guide"} · {r.trip_label}{r.trip_year ? ` (${r.trip_year})` : ""}
+                  </div>
+                  <p className="text-[13px] mt-1.5 leading-snug" style={{ color: C.ink }}>“{r.body}”</p>
+                  <div className="text-[11.5px] mt-1" style={{ color: C.muted }}>
+                    {r.guest_name || "Guest"}{r.guest_country ? ` · ${r.guest_country}` : ""}
+                  </div>
+                  <div className="flex items-center gap-2 mt-3">
+                    {r.photo_path && (
+                      <button onClick={() => viewAttestNote(r)} className="tap text-[12px] font-semibold rounded-full px-3 py-1.5"
+                        style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }}>View original note</button>
+                    )}
+                    <button onClick={() => decideAttest(r, "declined")} className="tap text-[12px] font-semibold rounded-full px-3 py-1.5 ml-auto"
+                      style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.maroon }}>Decline</button>
+                    <button onClick={() => decideAttest(r, "attested")} className="tap text-[12px] font-semibold rounded-full px-3.5 py-1.5"
+                      style={{ background: C.pine, color: "#fff" }}>Attest ✓</button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </>
+      )}
+
       {/* crew book */}
       <div className="mt-6"><SectionLabel trailing={crew.length ? `${crew.length}` : null}>Crew book</SectionLabel></div>
       {crew.length === 0 ? (
@@ -2880,6 +2943,312 @@ function OperatorDesk({ user, trips, listings, jobs, actions, onOpenProfile, onN
       {editOpen && <EditProfileSheet talent={t} onClose={() => setEditOpen(false)} onSaved={actions.reloadDirectory} />}
     </div>
   );
+}
+
+function ReviewLinks({ t }) {
+  if (!t.taUrl && !t.gUrl) return null;
+  const openU = (u) => window.open(u.startsWith("http") ? u : "https://" + u, "_blank", "noopener");
+  return (
+    <div className="flex gap-2 mt-3">
+      {t.taUrl && (
+        <button onClick={() => openU(t.taUrl)} className="tap flex-1 h-10 rounded-xl text-[12.5px] font-semibold inline-flex items-center justify-center gap-1.5"
+          style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }}>
+          TripAdvisor <ExternalLink size={12} />
+        </button>
+      )}
+      {t.gUrl && (
+        <button onClick={() => openU(t.gUrl)} className="tap flex-1 h-10 rounded-xl text-[12.5px] font-semibold inline-flex items-center justify-center gap-1.5"
+          style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }}>
+          Google Reviews <ExternalLink size={12} />
+        </button>
+      )}
+    </div>
+  );
+}
+
+function LegacyAttested({ talentId }) {
+  const [rows, setRows] = useState([]);
+  useEffect(() => {
+    supabase.from("legacy_reviews").select("*").eq("profile_id", talentId).eq("status", "attested")
+      .order("trip_year", { ascending: false })
+      .then(({ data }) => setRows(data || []));
+  }, [talentId]);
+  if (!rows.length) return null;
+  return (
+    <div className="mt-6">
+      <SectionLabel trailing={`${rows.length}`}>Past trip reviews · attested</SectionLabel>
+      <div className="space-y-3">
+        {rows.map((r) => {
+          const op = talentById(r.operator_id);
+          return (
+            <div key={r.id} className="rounded-2xl p-4" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+              <p className="text-[13.5px] leading-relaxed" style={{ color: C.ink }}>“{r.body}”</p>
+              <div className="text-[12px] mt-2" style={{ color: C.muted }}>
+                {r.guest_name || "Guest"}{r.guest_country ? ` · ${r.guest_country}` : ""}{r.trip_year ? ` · ${r.trip_year}` : ""}
+              </div>
+              <div className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 mt-2.5" style={{ background: C.pineSoft }}>
+                <BadgeCheck size={12} color={C.pine} />
+                <span className="text-[11.5px] font-semibold" style={{ color: C.pine }}>
+                  Trip with {op ? op.name : "operator"} · past trip, attested
+                </span>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <p className="text-[11.5px] mt-2 leading-snug" style={{ color: C.muted }}>
+        Past reviews are attested by the operator who ran the trip. They appear as words only and never change the star rating.
+      </p>
+    </div>
+  );
+}
+
+function LegacyReviewsSheet({ talent, onClose }) {
+  const me = talent.id;
+  const [rows, setRows] = useState(null);
+  const [taUrl, setTaUrl] = useState(talent.taUrl || "");
+  const [gUrl, setGUrl] = useState(talent.gUrl || "");
+  const [linkNote, setLinkNote] = useState(null);
+  const [adding, setAdding] = useState(false);
+  const [opQuery, setOpQuery] = useState("");
+  const [opId, setOpId] = useState(null);
+  const [tripLabel, setTripLabel] = useState("");
+  const [tripYear, setTripYear] = useState("");
+  const [guestName, setGuestName] = useState("");
+  const [guestCountry, setGuestCountry] = useState("");
+  const [body, setBody] = useState("");
+  const [photoUri, setPhotoUri] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const photoRef = useRef();
+
+  const load = async () => {
+    const { data } = await supabase.from("legacy_reviews").select("*").eq("profile_id", me)
+      .order("created_at", { ascending: false });
+    setRows(data || []);
+  };
+  useEffect(() => { load(); }, [me]);
+
+  const operators = allProfiles().filter((p) => p.role === "operator");
+  const opMatches = opQuery.trim()
+    ? operators.filter((p) => p.name.toLowerCase().includes(opQuery.trim().toLowerCase())).slice(0, 5)
+    : [];
+  const chosenOp = opId ? talentById(opId) : null;
+
+  const norm = (u) => { const v = u.trim(); return v ? (v.startsWith("http") ? v : "https://" + v) : null; };
+  const saveLinks = async () => {
+    const { error } = await supabase.from("profiles")
+      .update({ tripadvisor_url: norm(taUrl), google_reviews_url: norm(gUrl) }).eq("id", me);
+    setLinkNote(error ? (error.message || "Couldn't save.") : "Saved — the links now show on your Portfolio.");
+  };
+
+  const waNudge = (op, r) => {
+    const digits = (op?.phone || "").replace(/[^0-9]/g, "");
+    const num = digits.length === 8 ? "975" + digits : digits;
+    const msg = `Kuzuzangpo la! I've added our past trip “${r.trip_label}”${r.trip_year ? ` (${r.trip_year})` : ""} as a review on Bhutan Tourism Hub — please open your Profile desk and tap Attest so it shows on my page. — ${talent.name}`;
+    window.open(num ? `https://wa.me/${num}?text=${encodeURIComponent(msg)}` : `https://wa.me/?text=${encodeURIComponent(msg)}`, "_blank", "noopener");
+  };
+
+  const pickPhoto = (e) => {
+    const f = e.target.files?.[0]; e.target.value = "";
+    if (!f || !f.type.startsWith("image/")) return;
+    const r = new FileReader(); r.onload = () => setPhotoUri(r.result); r.readAsDataURL(f);
+  };
+
+  const pendingCount = (rows || []).filter((r) => r.status === "pending").length;
+  const submit = async () => {
+    if (pendingCount >= 3) { setErr("You already have 3 reviews awaiting attestation — nudge those operators or withdraw one first."); return; }
+    if (!opId) { setErr("Choose the tour operator that trip was run with."); return; }
+    if (!tripLabel.trim() || !body.trim()) { setErr("Trip name and the review words are required."); return; }
+    setBusy(true); setErr(null);
+    try {
+      let photo_path = null;
+      if (photoUri) {
+        const small = await shrinkImage(photoUri, 1400, 0.85);
+        const blob = dataUriToBlob(small);
+        photo_path = `${me}/legacy-${Date.now()}.jpg`;
+        const { error: upErr } = await supabase.storage.from("certs").upload(photo_path, blob, { contentType: "image/jpeg" });
+        if (upErr) throw upErr;
+      }
+      const { data: ins, error } = await supabase.from("legacy_reviews").insert({
+        profile_id: me, operator_id: opId, trip_label: tripLabel.trim(),
+        trip_year: tripYear ? Number(tripYear) : null,
+        guest_name: guestName.trim() || null, guest_country: guestCountry.trim() || null,
+        body: body.trim(), photo_path,
+      }).select("id").single();
+      if (error) throw error;
+      await supabase.from("system_nudges").insert({
+        profile_id: opId, kind: "attest", ref: ins.id,
+        title: `${talent.name} asks you to attest a past review`,
+        body: `“${tripLabel.trim()}” — open your Profile desk to read and attest.`,
+      });
+      setAdding(false); setOpId(null); setOpQuery(""); setTripLabel(""); setTripYear("");
+      setGuestName(""); setGuestCountry(""); setBody(""); setPhotoUri(null);
+      load();
+    } catch (e2) { setErr(e2.message || "Couldn't submit — try again."); }
+    setBusy(false);
+  };
+
+  const withdraw = async (id) => { await supabase.from("legacy_reviews").delete().eq("id", id); load(); };
+  const yearNow = new Date().getFullYear();
+
+  return createPortal((
+    <div className="fixed inset-0 flex flex-col" style={{ background: C.bg, zIndex: 246, height: "100dvh" }}>
+      <div className="shrink-0 h-14 px-3 flex items-center gap-2" style={{ borderBottom: `1px solid ${C.line}`, background: C.card, paddingTop: "var(--sa-top)" }}>
+        <button onClick={onClose} className="tap w-9 h-9 rounded-full flex items-center justify-center" style={{ background: C.bg }}>
+          <ChevronLeft size={18} color={C.ink} />
+        </button>
+        <span className="text-[15.5px] font-semibold" style={{ color: C.ink }}>Past trip reviews</span>
+      </div>
+
+      <div className="flex-1 overflow-y-auto hidescroll px-5 py-5" style={{ scrollbarWidth: "none" }}>
+        <div className="rounded-2xl p-4 mb-5" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+          <div className="text-[13.5px] font-semibold mb-3" style={{ color: C.ink }}>How verified past reviews work</div>
+          {[
+            ["1", "You transcribe it", "Type the review word for word. Attach a photo of the original note or chat — only the operator sees it."],
+            ["2", "The operator confirms", "The operator you worked with reads it and taps Attest. Their name goes on the review."],
+            ["3", "It appears verified", "It shows on your Portfolio as “Trip with that operator · attested”. Words only — stars come only from guest links."],
+          ].map(([k, h, b]) => (
+            <div key={k} className="flex items-start gap-3 mb-2.5">
+              <span className="w-6 h-6 rounded-full flex items-center justify-center text-[12px] font-bold shrink-0"
+                style={{ background: C.pine, color: "#fff" }}>{k}</span>
+              <div className="flex-1">
+                <div className="text-[13px] font-semibold" style={{ color: C.ink }}>{h}</div>
+                <div className="text-[12px] leading-snug" style={{ color: C.muted }}>{b}</div>
+              </div>
+            </div>
+          ))}
+          <p className="text-[11.5px] mt-1 leading-snug" style={{ color: C.muted }}>
+            If the operator can't remember or confirm a review, they'll decline it — that keeps every attested
+            review worth something. You can have up to 3 awaiting attestation at a time.
+          </p>
+        </div>
+
+        <SectionLabel>Your review pages elsewhere</SectionLabel>
+        <input value={taUrl} onChange={(e) => setTaUrl(e.target.value)} placeholder="TripAdvisor profile link — optional"
+          className="w-full h-11 px-3.5 rounded-xl text-[13.5px] mb-2" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }} />
+        <input value={gUrl} onChange={(e) => setGUrl(e.target.value)} placeholder="Google reviews link — optional"
+          className="w-full h-11 px-3.5 rounded-xl text-[13.5px] mb-2" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }} />
+        <button onClick={saveLinks} className="tap h-10 px-4 rounded-xl text-[13px] font-semibold" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.pine }}>Save links</button>
+        {linkNote && <p className="text-[12px] mt-1.5" style={{ color: C.pine }}>{linkNote}</p>}
+
+        <div className="mt-6"><SectionLabel trailing={rows ? `${rows.length}` : null}>Submitted for attestation</SectionLabel></div>
+        {rows && rows.length === 0 && !adding && (
+          <p className="text-[12.5px] mb-2" style={{ color: C.muted }}>Nothing yet — add a past review below.</p>
+        )}
+        <div className="space-y-2.5">
+          {(rows || []).map((r) => {
+            const op = talentById(r.operator_id);
+            return (
+              <div key={r.id} className="rounded-xl p-3.5" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+                <div className="text-[13.5px] font-semibold" style={{ color: C.ink }}>{r.trip_label}{r.trip_year ? ` · ${r.trip_year}` : ""}</div>
+                <p className="text-[12.5px] mt-1 leading-snug" style={{ color: C.muted }}>{r.body.length > 110 ? r.body.slice(0, 110) + "…" : r.body}</p>
+                <div className="flex items-center gap-2 mt-2.5">
+                  {r.status === "attested" ? (
+                    <span className="text-[11.5px] font-semibold rounded-full px-2.5 py-1" style={{ background: C.pineSoft, color: C.pine }}>Attested by {op ? op.name : "operator"} ✓</span>
+                  ) : r.status === "declined" ? (
+                    <span className="text-[11.5px] font-semibold rounded-full px-2.5 py-1" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.muted }}>Declined</span>
+                  ) : (
+                    <>
+                      <span className="text-[11.5px] font-semibold rounded-full px-2.5 py-1" style={{ background: C.goldSoft, color: "#7a5a1e" }}>Awaiting {op ? op.name : "operator"}</span>
+                      <button onClick={() => waNudge(op, r)} className="tap text-[11.5px] font-semibold rounded-full px-2.5 py-1 inline-flex items-center gap-1"
+                        style={{ background: "rgba(37,211,102,.13)", border: "1px solid rgba(37,211,102,.45)", color: "#1FA855" }}>
+                        <MessageCircle size={11} /> Nudge
+                      </button>
+                      <button onClick={() => withdraw(r.id)} className="tap text-[11.5px] ml-auto" style={{ color: C.maroon }}>Withdraw</button>
+                    </>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {!adding ? (
+          pendingCount >= 3 ? (
+            <p className="text-[12.5px] mt-4 text-center" style={{ color: C.muted }}>
+              3 reviews are awaiting attestation — nudge those operators, or withdraw one to add another.
+            </p>
+          ) : (
+          <button onClick={() => setAdding(true)} className="tap w-full h-11 rounded-xl text-[14px] font-semibold mt-4" style={{ background: C.pine, color: "#fff" }}>
+            + Add a past review
+          </button>
+          )
+        ) : (
+          <div className="rounded-2xl p-4 mt-4" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+            <div className="rounded-xl px-3 py-2.5 text-[12px] leading-snug mb-3" style={{ background: C.goldSoft, color: "#7a5a1e" }}>
+              Handwritten notes and WhatsApp messages: type the words exactly as written into the box below
+              (transcribe them), and attach a photo of the original. The photo is shown only to the operator
+              you choose — never publicly — so they can verify before attesting.
+            </div>
+
+            {!chosenOp ? (
+              <>
+                <input value={opQuery} onChange={(e) => { setOpQuery(e.target.value); setErr(null); }}
+                  placeholder="Which tour operator was this trip with?"
+                  className="w-full h-11 px-3.5 rounded-xl text-[13.5px]" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
+                {opMatches.map((p) => (
+                  <button key={p.id} onClick={() => { setOpId(p.id); setErr(null); }}
+                    className="tap w-full text-left px-3.5 py-2.5 mt-1.5 rounded-xl text-[13.5px] font-medium"
+                    style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }}>{p.name}</button>
+                ))}
+              </>
+            ) : (
+              <div className="flex items-center gap-2 rounded-xl px-3.5 py-2.5" style={{ background: C.pineSoft }}>
+                <BadgeCheck size={14} color={C.pine} />
+                <span className="flex-1 text-[13.5px] font-semibold" style={{ color: C.pine }}>{chosenOp.name}</span>
+                <button onClick={() => setOpId(null)} className="tap text-[12px]" style={{ color: C.pine }}>change</button>
+              </div>
+            )}
+
+            <div className="flex gap-2 mt-2.5">
+              <input value={tripLabel} onChange={(e) => setTripLabel(e.target.value)} maxLength={60} placeholder="Trip name"
+                className="flex-1 h-11 px-3.5 rounded-xl text-[13.5px]" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
+              <select value={tripYear} onChange={(e) => setTripYear(e.target.value)}
+                className="h-11 px-2 rounded-xl text-[13.5px]" style={{ background: C.bg, border: `1px solid ${C.line}`, color: tripYear ? C.ink : C.muted }}>
+                <option value="">Year</option>
+                {Array.from({ length: 15 }).map((_, i) => <option key={i} value={yearNow - i}>{yearNow - i}</option>)}
+              </select>
+            </div>
+            <div className="flex gap-2 mt-2">
+              <input value={guestName} onChange={(e) => setGuestName(e.target.value)} maxLength={40} placeholder="Guest name"
+                className="flex-1 h-11 px-3.5 rounded-xl text-[13.5px]" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
+              <input value={guestCountry} onChange={(e) => setGuestCountry(e.target.value)} maxLength={30} placeholder="Country"
+                className="w-28 h-11 px-3 rounded-xl text-[13.5px]" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
+            </div>
+            <textarea value={body} onChange={(e) => setBody(e.target.value)} rows={4} maxLength={600}
+              placeholder="The review, word for word"
+              className="w-full px-3.5 py-3 rounded-xl text-[13.5px] leading-relaxed resize-none mt-2"
+              style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
+
+            <div className="flex items-center gap-2.5 mt-2">
+              {photoUri ? (
+                <>
+                  <img src={photoUri} alt="" className="w-14 h-14 rounded-lg object-cover" style={{ border: `1px solid ${C.line}` }} />
+                  <span className="flex-1 text-[12px]" style={{ color: C.pine }}>Original attached — operator-only.</span>
+                  <button onClick={() => setPhotoUri(null)} className="tap text-[12px]" style={{ color: C.maroon }}>Remove</button>
+                </>
+              ) : (
+                <button onClick={() => photoRef.current?.click()} className="tap h-10 px-3.5 rounded-xl text-[12.5px] font-semibold"
+                  style={{ background: C.bg, border: `1px dashed ${C.gold}`, color: "#7a5a1e" }}>
+                  + Attach photo of the original (optional)
+                </button>
+              )}
+              <input ref={photoRef} type="file" accept="image/*" onChange={pickPhoto} className="hidden" />
+            </div>
+
+            {err && <p className="text-[12.5px] mt-2" style={{ color: C.maroon }}>{err}</p>}
+            <div className="flex gap-2 mt-3">
+              <button onClick={() => { setAdding(false); setErr(null); }} className="tap flex-1 h-11 rounded-xl text-[13.5px] font-semibold"
+                style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.muted }}>Cancel</button>
+              <button onClick={submit} disabled={busy} className="tap flex-1 h-11 rounded-xl text-[13.5px] font-semibold"
+                style={{ background: C.pine, color: "#fff" }}>{busy ? "Submitting…" : "Send for attestation"}</button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  ), document.body);
 }
 
 function CharacterChart({ talentId }) {
@@ -7550,6 +7919,7 @@ function Tutorial({ user, nav, setTab, onDone }) {
 
 /* ==================== Privacy, data rights & policy ===================== */
 function PrivacyPanel({ talent }) {
+  const [legacyOpen, setLegacyOpen] = useState(false);
   const [open, setOpen] = useState(null);   // 'privacy' | 'terms' | 'data' | null
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState(null);
@@ -7620,7 +7990,9 @@ function PrivacyPanel({ talent }) {
 
       {note && <div className="mx-4 mb-2 rounded-lg px-3 py-2 text-[12.5px]" style={{ background: C.pineSoft, color: C.pine }}>{note}</div>}
 
+      {legacyOpen && <LegacyReviewsSheet talent={talent} onClose={() => setLegacyOpen(false)} />}
       {[
+        ...(["guide", "driver"].includes(talent.role) ? [["Past trip reviews", () => setLegacyOpen(true)]] : []),
         ["Privacy policy", () => setOpen("privacy")],
         ["Terms of use", () => setOpen("terms")],
         ["What we store about you", () => setOpen("data")],
@@ -9115,6 +9487,7 @@ The link works once and expires in 14 days.`;
 function GuestReviews({ talentId, isAdmin, isSelf, onAskOperator, onCount }) {
   const [rows, setRows] = useState(null);
   const [busyId, setBusyId] = useState(null);
+  const [issuers, setIssuers] = useState({});
 
   const load = async () => {
     if (!CLOUD) { setRows([]); return; }
@@ -9125,6 +9498,13 @@ function GuestReviews({ talentId, isAdmin, isSelf, onAskOperator, onCount }) {
     if (error) { console.error("guest_reviews load failed:", error.message); setRows([]); return; }
     setRows(data || []);
     onCount && onCount((data || []).length);
+    const toks = [...new Set((data || []).map((r) => r.token).filter(Boolean))];
+    if (toks.length) {
+      const { data: T } = await supabase.from("review_tokens").select("token, issued_by").in("token", toks);
+      const map = {};
+      (T || []).forEach((k) => { map[k.token] = k.issued_by; });
+      setIssuers(map);
+    }
   };
   useEffect(() => { load(); }, [talentId]);
 
@@ -9243,7 +9623,11 @@ function GuestReviews({ talentId, isAdmin, isSelf, onAskOperator, onCount }) {
                 style={{ background: r.issuer_role === "admin" ? C.goldSoft : C.pineSoft,
                          color: r.issuer_role === "admin" ? "#7a5a1e" : C.pine }}>
                 <ShieldCheck size={10} />
-                {r.issuer_role === "admin" ? "Verified by Bhutan Tourism Hub" : "Invited by the tour operator"}
+                {r.issuer_role === "admin"
+                  ? "Verified by Bhutan Tourism Hub"
+                  : (talentById(issuers[r.token])
+                      ? `Invited by ${talentById(issuers[r.token]).name}`
+                      : "Invited by the tour operator")}
               </span>
               <span className="text-[11px]" style={{ color: C.muted }}>{relTime(new Date(r.created_at).getTime())}</span>
             </div>
