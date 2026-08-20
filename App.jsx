@@ -100,6 +100,18 @@ function urlBase64ToUint8Array(base64String) {
   return out;
 }
 
+let deferredInstallPrompt = null;
+if (typeof window !== "undefined") {
+  window.addEventListener("beforeinstallprompt", (e) => {
+    e.preventDefault();
+    deferredInstallPrompt = e;
+    try { window.dispatchEvent(new Event("bth-installable")); } catch (err) {}
+  });
+}
+const isStandaloneApp = () =>
+  typeof window !== "undefined" &&
+  ((window.matchMedia && window.matchMedia("(display-mode: standalone)").matches) || window.navigator.standalone === true);
+
 async function ensurePushSubscription(profileId) {
   try {
     if (!CLOUD || !profileId) return false;
@@ -1546,7 +1558,8 @@ function PushNudgeCard({ profileId }) {
   // Browsers only grant notification permission from a deliberate user tap —
   // the silent auto-ask at sign-in dies every time. This card supplies the tap,
   // states the reason, and disappears forever once this device is subscribed.
-  const [state, setState] = useState("checking"); // checking | show | blocked | busy | done
+  const [state, setState] = useState("checking"); // checking | show | blocked | busy | install | done
+  const [installBusy, setInstallBusy] = useState(false);
   useEffect(() => {
     let on = true;
     (async () => {
@@ -1568,12 +1581,46 @@ function PushNudgeCard({ profileId }) {
       await ensurePushSubscription(profileId);
       const reg = await navigator.serviceWorker.ready;
       const sub = await reg.pushManager.getSubscription();
-      setState(sub ? "done" : (Notification.permission === "denied" ? "blocked" : "show"));
+      if (sub && deferredInstallPrompt && !isStandaloneApp()) setState("install");
+      else setState(sub ? "done" : (Notification.permission === "denied" ? "blocked" : "show"));
     } catch (e) {
       setState(Notification.permission === "denied" ? "blocked" : "show");
     }
   };
+  const installNow = async () => {
+    const p = deferredInstallPrompt;
+    if (!p) { setState("done"); return; }
+    deferredInstallPrompt = null;
+    setInstallBusy(true);
+    try { p.prompt(); await p.userChoice; } catch (e) {}
+    setInstallBusy(false);
+    setState("done");
+  };
   if (state === "checking" || state === "done") return null;
+  if (state === "install") return (
+    <div className="rounded-2xl p-4 mb-5" style={{ background: C.pineSoft, border: `1.5px solid ${C.pine}` }}>
+      <div className="flex items-start gap-2.5">
+        <div className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0" style={{ background: C.pine }}>
+          <Plus size={18} color="#fff" strokeWidth={2.6} />
+        </div>
+        <div className="flex-1">
+          <div className="text-[14px] font-semibold" style={{ color: C.pine }}>Notifications on — one more step</div>
+          <p className="text-[12.5px] leading-snug mt-0.5" style={{ color: C.pine }}>
+            Add Bhutan Tourism Hub to your home screen: it opens full-screen like a real app,
+            and alerts behave at their best.
+          </p>
+        </div>
+      </div>
+      <button onClick={installNow} disabled={installBusy}
+        className="tap w-full h-11 rounded-xl text-[14px] font-semibold mt-3"
+        style={{ background: C.pine, color: "#fff" }}>
+        {installBusy ? "Opening installer…" : "Add the app to my home screen"}
+      </button>
+      <button onClick={() => setState("done")} className="tap w-full text-center text-[12px] mt-2" style={{ color: C.muted }}>
+        Maybe later
+      </button>
+    </div>
+  );
   return (
     <div className="rounded-2xl p-4 mb-5" style={{ background: C.pineSoft, border: `1.5px solid ${C.pine}` }}>
       <div className="flex items-start gap-2.5">
