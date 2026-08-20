@@ -1578,13 +1578,15 @@ function PushNudgeCard({ profileId }) {
   const enable = async () => {
     setState("busy");
     try {
+      const perm = await askNotificationPermission();
+      if (perm !== "granted") { setState(perm === "denied" ? "blocked" : "error"); return; }
       await ensurePushSubscription(profileId);
       const reg = await navigator.serviceWorker.ready;
       const sub = await reg.pushManager.getSubscription();
       if (sub && deferredInstallPrompt && !isStandaloneApp()) setState("install");
-      else setState(sub ? "done" : (Notification.permission === "denied" ? "blocked" : "show"));
+      else setState(sub ? "done" : "error");
     } catch (e) {
-      setState(Notification.permission === "denied" ? "blocked" : "show");
+      setState(Notification.permission === "denied" ? "blocked" : "error");
     }
   };
   const installNow = async () => {
@@ -1640,11 +1642,19 @@ function PushNudgeCard({ profileId }) {
           Notifications are blocked for this site — allow them in your browser's site settings, then reopen the app.
         </p>
       ) : (
-        <button onClick={enable} disabled={state === "busy"}
-          className="tap w-full h-11 rounded-xl text-[14px] font-semibold mt-3"
-          style={{ background: C.pine, color: "#fff" }}>
-          {state === "busy" ? "Turning on…" : "Enable notifications"}
-        </button>
+        <>
+          <button onClick={enable} disabled={state === "busy"}
+            className="tap w-full h-11 rounded-xl text-[14px] font-semibold mt-3"
+            style={{ background: C.pine, color: "#fff" }}>
+            {state === "busy" ? "Turning on…" : "Enable notifications"}
+          </button>
+          {state === "error" && (
+            <p className="text-[12px] mt-2" style={{ color: C.maroon }}>
+              Couldn't finish enabling — check your connection and tap once more. If a permission
+              box appeared, choose Allow.
+            </p>
+          )}
+        </>
       )}
     </div>
   );
