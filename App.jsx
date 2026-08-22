@@ -1174,7 +1174,7 @@ const NAV = {
   driver: [{ id: "post", label: "Feed", Icon: Newspaper }, { id: "trips", label: "Trips", Icon: Briefcase }, { id: "chats", label: "Messages", Icon: MessageSquare }, { id: "profile", label: "Profile", Icon: User }],
   operator: [{ id: "discover", label: "Discover", Icon: Search }, { id: "trips", label: "Trips", Icon: Briefcase }, { id: "chats", label: "Messages", Icon: MessageSquare }, { id: "post", label: "Feed", Icon: Newspaper }, { id: "profile", label: "Profile", Icon: User }],
   business: [{ id: "post", label: "Feed", Icon: Newspaper }, { id: "bookings", label: "Bookings", Icon: CalendarDays }, { id: "discover", label: "Discover", Icon: Search }, { id: "chats", label: "Messages", Icon: MessageSquare }, { id: "profile", label: "Profile", Icon: User }],
-  admin: [{ id: "review", label: "Review", Icon: ShieldCheck }, { id: "users", label: "Users", Icon: Users }, { id: "feed", label: "Feed", Icon: Newspaper }, { id: "discover", label: "Discover", Icon: Search }, { id: "chats", label: "Messages", Icon: MessageSquare }],
+  admin: [{ id: "review", label: "Review", Icon: ShieldCheck }, { id: "users", label: "Users", Icon: Users }, { id: "feed", label: "Feed", Icon: Newspaper }],
 };
 const DEFAULT_TAB = { guide: "post", driver: "post", operator: "discover", business: "post", admin: "review" };
 
@@ -2514,7 +2514,7 @@ function TalentProfile({ talent, posts, canRequest, viewer, self, contactOnly, e
             <>
               {["guide", "driver"].includes(t.role) && <GuestReviews talentId={t.id} isAdmin={eng?.isAdmin} isSelf={self} onAskOperator={() => setAskOperator(true)} />}
               {["guide", "driver"].includes(t.role) && <ReviewLinks t={t} />}
-              {["guide", "driver"].includes(t.role) && <LegacyAttested talentId={t.id} />}
+              {["guide", "driver"].includes(t.role) && <LegacyAttested talentId={t.id} isAdmin={eng?.isAdmin} />}
 
               <div className="mt-6" />
 
@@ -2966,13 +2966,26 @@ function ReviewLinks({ t }) {
   );
 }
 
-function LegacyAttested({ talentId }) {
+function LegacyAttested({ talentId, isAdmin }) {
   const [rows, setRows] = useState([]);
-  useEffect(() => {
+  const [busyId, setBusyId] = useState(null);
+  const load = () =>
     supabase.from("legacy_reviews").select("*").eq("profile_id", talentId).eq("status", "attested")
       .order("trip_year", { ascending: false })
       .then(({ data }) => setRows(data || []));
-  }, [talentId]);
+  useEffect(() => { load(); }, [talentId]);
+  // Admin may revoke or remove — never attest. An operator's name on a review
+  // must always mean that operator actually said so.
+  const revoke = async (id) => {
+    setBusyId(id);
+    await supabase.from("legacy_reviews").update({ status: "pending", decided_at: null }).eq("id", id);
+    setBusyId(null); load();
+  };
+  const removeRow = async (id) => {
+    setBusyId(id);
+    await supabase.from("legacy_reviews").delete().eq("id", id);
+    setBusyId(null); load();
+  };
   if (!rows.length) return null;
   return (
     <div className="mt-6">
@@ -2992,6 +3005,16 @@ function LegacyAttested({ talentId }) {
                   Trip with {op ? op.name : "operator"} · past trip, attested
                 </span>
               </div>
+              {isAdmin && (
+                <div className="flex items-center gap-2 mt-2.5">
+                  <button onClick={() => revoke(r.id)} disabled={busyId === r.id}
+                    className="tap text-[11.5px] font-semibold rounded-full px-2.5 py-1"
+                    style={{ background: C.goldSoft, color: "#7a5a1e" }}>Send back to operator</button>
+                  <button onClick={() => removeRow(r.id)} disabled={busyId === r.id}
+                    className="tap text-[11.5px] font-semibold rounded-full px-2.5 py-1"
+                    style={{ background: C.maroonSoft, color: C.maroon }}>Remove</button>
+                </div>
+              )}
             </div>
           );
         })}
@@ -9593,15 +9616,22 @@ function GuestReviews({ talentId, isAdmin, isSelf, onAskOperator, onCount }) {
   const [busyId, setBusyId] = useState(null);
   const [issuers, setIssuers] = useState({});
 
+  const restore = async (id) => {
+    setBusyId(id);
+    const { error } = await supabase.from("guest_reviews").update({ status: "published" }).eq("id", id);
+    setBusyId(null);
+    if (error) { console.error("restore review failed:", error.message); return; }
+    load();
+  };
   const load = async () => {
     if (!CLOUD) { setRows([]); return; }
     const { data, error } = await supabase
       .from("guest_reviews").select("*")
-      .eq("talent_id", talentId).eq("status", "published")
+      .eq("talent_id", talentId).in("status", isAdmin ? ["published", "hidden"] : ["published"])
       .order("created_at", { ascending: false });
     if (error) { console.error("guest_reviews load failed:", error.message); setRows([]); return; }
     setRows(data || []);
-    onCount && onCount((data || []).length);
+    onCount && onCount((data || []).filter((r) => r.status === "published").length);
     const toks = [...new Set((data || []).map((r) => r.token).filter(Boolean))];
     if (toks.length) {
       const { data: T } = await supabase.from("review_tokens").select("token, issued_by").in("token", toks);
@@ -9702,16 +9732,28 @@ function GuestReviews({ talentId, isAdmin, isSelf, onAskOperator, onCount }) {
                 <div className="flex items-center gap-2 flex-wrap">
                   <span className="text-[14px] font-semibold" style={{ color: C.ink }}>{r.guest_name || "Guest"}</span>
                   {r.guest_country && <span className="text-[12px]" style={{ color: C.muted }}>· {r.guest_country}</span>}
+                  {isAdmin && r.status === "hidden" && (
+                    <span className="text-[10.5px] font-semibold rounded-full px-2 py-0.5" style={{ background: C.maroonSoft, color: C.maroon }}>
+                      Hidden from profile
+                    </span>
+                  )}
                 </div>
                 <div className="mt-1"><Stars score={Number(r.rating) || 0} /></div>
               </div>
-              {isAdmin && (
+              {isAdmin && (r.status === "hidden" ? (
+                <button onClick={() => restore(r.id)} disabled={busyId === r.id}
+                  className="tap h-8 px-2.5 rounded-lg flex items-center justify-center gap-1 shrink-0"
+                  style={{ background: C.pineSoft }} aria-label="Restore review">
+                  {busyId === r.id ? <Loader2 size={13} className="animate-spin" color={C.pine} /> : <BadgeCheck size={13} color={C.pine} />}
+                  <span className="text-[11.5px] font-semibold" style={{ color: C.pine }}>Restore</span>
+                </button>
+              ) : (
                 <button onClick={() => hide(r.id)} disabled={busyId === r.id}
                   className="tap w-8 h-8 rounded-lg flex items-center justify-center shrink-0"
                   style={{ background: C.maroonSoft }} aria-label="Hide review">
                   {busyId === r.id ? <Loader2 size={13} className="animate-spin" color={C.maroon} /> : <Trash2 size={13} color={C.maroon} />}
                 </button>
-              )}
+              ))}
             </div>
 
             {r.body && <p className="text-[14px] leading-relaxed mt-2.5" style={{ color: C.ink }}>{r.body}</p>}
