@@ -962,6 +962,19 @@ export default function App() {
       languages: job.languages || [], notes: job.notes || null,
     });
     if (jrErr) console.error("job_requests.insert failed:", jrErr.message);
+    else if (job.toTalentId) {
+      // "End to end": the guide should not have to go looking for it.
+      const fmt = (d) => { try { return new Date(d + "T00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }); } catch (e) { return d; } };
+      const when = job.start === job.end ? fmt(job.start) : `${fmt(job.start)} to ${fmt(job.end)}`;
+      const lines = [
+        `Job request: ${job.title}`,
+        `Dates: ${when}`,
+        job.languages && job.languages.length ? `Languages: ${job.languages.join(", ")}` : null,
+        job.notes ? `Notes: ${job.notes}` : null,
+        `Open your Trips tab to accept or decline.`,
+      ].filter(Boolean);
+      await sendDm(job.toTalentId, lines.join("\n"));
+    }
     fetchJobs();
   };
 
@@ -1642,10 +1655,11 @@ function Shell({ user, posts, jobs, trips, listings, actions, engagement, dm, di
               onMessage={(id) => { setOverlay(null); setTab("chats"); setDmWith(id); }}
               onProfileSaved={actions.reloadDirectory}
               canRequest={user.kind === "operator" && ["guide", "driver"].includes(talentById(overlay.talentId)?.role)} viewer={user} self={user.talentId === overlay.talentId} contactOnly={["operator", "admin"].includes(user.kind)}
-              onRequest={() => setOverlay({ type: "request", talentId: overlay.talentId })}
+              onRequest={(start, end) => setOverlay({ type: "request", talentId: overlay.talentId, start, end })}
               onBack={() => setOverlay(null)} />
           ) : (
             <RequestForm talent={talentById(overlay.talentId)} operator={user.name}
+              presetStart={overlay.start} presetEnd={overlay.end}
               onBack={() => setOverlay({ type: "profile", talentId: overlay.talentId })}
               onSend={(job) => { actions.sendJob(job); setOverlay(null); setTab("requests"); }} />
           )
@@ -2932,7 +2946,7 @@ function TalentProfile({ talent, posts, canRequest, viewer, self, contactOnly, e
             { label: "Free days", Icon: CalendarDays, node: (
               <>
                 <OpenDaysStrip profileId={t.id} self={self} />
-                {!self && ["operator", "admin"].includes(viewer?.kind) && <TalentAvailability talent={t} viewerOnly />}
+                {!self && ["operator", "admin"].includes(viewer?.kind) && <TalentAvailability talent={t} viewerOnly onRequestDates={canRequest && onRequest ? (a, b) => onRequest(a, b) : undefined} />}
               </>
             ) },
             { label: "Record", Icon: ShieldCheck, holdsLicence: true, node: (
@@ -3031,10 +3045,10 @@ function TalentProfile({ talent, posts, canRequest, viewer, self, contactOnly, e
 }
 
 /* ============================ Job request form =========================== */
-function RequestForm({ talent, operator, onBack, onSend }) {
+function RequestForm({ talent, operator, presetStart, presetEnd, onBack, onSend }) {
   const [title, setTitle] = useState("");
-  const [start, setStart] = useState("");
-  const [end, setEnd] = useState("");
+  const [start, setStart] = useState(presetStart || "");
+  const [end, setEnd] = useState(presetEnd || "");
   const [langs, setLangs] = useState([]);
   const [notes, setNotes] = useState("");
   const canSend = title.trim() && start && end;
@@ -6051,7 +6065,7 @@ function MonthCal({ ym, marks, onPrev, onNext, onDay }) {
           const iso = `${y}-${String(m + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
           const mark = marks[iso];
           const past = iso < todayIso;
-          const bg = mark === "booked" ? C.pine : mark === "blocked" ? "#AEB9AE" : mark === "pending" ? C.gold : C.bg;
+          const bg = mark === "booked" ? C.pine : mark === "blocked" ? "#AEB9AE" : mark === "pending" ? C.gold : mark === "picked" ? C.gold : C.bg;
           return (
             <button key={iso} onClick={() => onDay && !past && onDay(iso, mark)} className="tap rounded-lg flex items-center justify-center text-[12.5px] font-medium"
               style={{ height: 38, background: bg, border: `1px solid ${mark ? "transparent" : C.line}`, color: mark ? "#fff" : past ? "#C3CBC3" : C.ink, outline: iso === todayIso ? `2px solid ${C.gold}` : "none", outlineOffset: -2 }}>
@@ -7907,8 +7921,9 @@ function AvailabilityChip({ talent }) {
   );
 }
 
-function TalentAvailability({ talent, onSet, viewerOnly = false }) {
+function TalentAvailability({ talent, onSet, viewerOnly = false, onRequestDates }) {
   const now = new Date();
+  const [pick, setPick] = useState({ start: null, end: null });
   const [open, setOpen] = useState(viewerOnly);
   const [ym, setYm] = useState([now.getFullYear(), now.getMonth()]);
   const [blocks, setBlocks] = useState(null);
@@ -7932,8 +7947,25 @@ function TalentAvailability({ talent, onSet, viewerOnly = false }) {
   const marks = useMemo(() => {
     const m = {};
     (blocks || []).forEach((b) => eachBookedDay(b.start_date, b.end_date).forEach((d) => { m[d] = "booked"; }));
+    if (pick.start) eachBookedDay(pick.start, pick.end || pick.start).forEach((d) => { if (!m[d]) m[d] = "picked"; });
     return m;
-  }, [blocks]);
+  }, [blocks, pick]);
+
+  // The operator taps the same grid the guide uses, but here it builds a request.
+  const pickDay = (iso, mark) => {
+    if (mark === "booked" || mark === "blocked") return;          // never offer a day they said is taken
+    setPick((p) => {
+      if (!p.start || (p.start && p.end)) return { start: iso, end: null };
+      if (iso < p.start) return { start: iso, end: p.start };
+      return { start: p.start, end: iso };
+    });
+  };
+  const pickedDays = pick.start ? eachBookedDay(pick.start, pick.end || pick.start).length : 0;
+  const prettyRange = () => {
+    if (!pick.start) return "";
+    const f = (d) => new Date(d + "T00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+    return pick.end && pick.end !== pick.start ? `${f(pick.start)} to ${f(pick.end)}` : f(pick.start);
+  };
 
   const [yy, mmn] = ym;
   const dim = new Date(yy, mmn + 1, 0).getDate();
@@ -8024,13 +8056,40 @@ function TalentAvailability({ talent, onSet, viewerOnly = false }) {
             </div>
           ) : (
             <>
-              <MonthCal ym={ym} marks={marks}
+              <MonthCal ym={ym} marks={marks} onDay={viewerOnly && onRequestDates ? pickDay : undefined}
                 onPrev={() => setYm(([y, m]) => { const d = new Date(y, m - 1, 1); return [d.getFullYear(), d.getMonth()]; })}
                 onNext={() => setYm(([y, m]) => { const d = new Date(y, m + 1, 1); return [d.getFullYear(), d.getMonth()]; })}
                 onDay={null} />
               <div className="text-[12px] font-semibold mt-2" style={{ color: C.pine }}>
-                {monthName}: {openDays} open day{openDays === 1 ? "" : "s"} — {viewerOnly ? "available to request" : "your opportunities"}
+                {monthName}: {openDays} open day{openDays === 1 ? "" : "s"} — {viewerOnly ? "tap the days you need" : "your opportunities"}
               </div>
+
+              {viewerOnly && onRequestDates && (
+                pick.start ? (
+                  <div className="rounded-2xl p-3.5 mt-3" style={{ background: C.card, border: `1.5px solid ${C.gold}` }}>
+                    <div className="flex items-center gap-2">
+                      <CalendarDays size={15} color={C.gold} className="shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <div className="text-[13.5px] font-semibold" style={{ color: C.ink }}>{prettyRange()}</div>
+                        <div className="text-[11.5px]" style={{ color: C.muted }}>
+                          {pickedDays} day{pickedDays === 1 ? "" : "s"}{pick.end ? "" : " · tap another day for a range"}
+                        </div>
+                      </div>
+                      <button onClick={() => setPick({ start: null, end: null })}
+                        className="tap text-[12px] font-semibold shrink-0" style={{ color: C.muted }}>Clear</button>
+                    </div>
+                    <button onClick={() => onRequestDates(pick.start, pick.end || pick.start)}
+                      className="tap w-full h-11 rounded-xl flex items-center justify-center gap-2 text-[14px] font-semibold mt-3"
+                      style={{ background: C.pine, color: "#fff" }}>
+                      <Send size={15} /> Send job request for these days
+                    </button>
+                  </div>
+                ) : (
+                  <p className="text-[12px] mt-2.5 leading-snug" style={{ color: C.muted }}>
+                    Tap a day to start, then tap another for a range. Days they marked busy cannot be chosen.
+                  </p>
+                )
+              )}
 
               {!viewerOnly && (
                 <>
