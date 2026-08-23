@@ -1025,83 +1025,93 @@ export default function App() {
 /* --------------------------- Role welcome pitches ------------------------- */
 const ROLE_PITCH = {
   guide: {
-    label: "Guide", sub: "I lead trips and share Bhutan", Icon: Compass,
+    label: "Guide", sub: "I take guests around Bhutan", Icon: Compass,
     eyebrow: "For guides",
-    title: "Work that finds you.",
-    lede: "Right now the work goes to whoever an operator happens to remember. Here it goes to whoever fits the trip — and your licence is what speaks first.",
-    cta: "Create my guide account",
+    title: "Get more trips.",
+    lede: "Today you wait for someone to call you. Here, operators search and find you. Your licence shows them you are a real guide.",
+    cta: "Sign up as a guide",
     points: [
-      { Icon: BadgeCheck, title: "Verified once, trusted after",
-        body: "Your licence is checked before you appear. Operators see a verified guide, not a name and a phone number." },
-      { Icon: Award, title: "A profile built on skill",
-        body: "Culture and dzong, alpine trekking, birding, spiritual routes — with your languages and the years read straight from your licence." },
-      { Icon: Briefcase, title: "Jobs you can apply for",
-        body: "Operators post work here, including short-notice cover when someone drops out. You don’t have to wait to be remembered." },
-      { Icon: Star, title: "A trip record you own",
-        body: "Reliability, punctuality and awareness, graded by the operator after every trip. It follows you through your career." },
-      { Icon: MapPin, title: "Proof of where you’ve worked",
-        body: "Photos pinned to the exact place in Bhutan. A portfolio, not a line on a list." },
-      { Icon: Users, title: "Your past trips still count",
-        body: "Reviews from before the app can be written up here and confirmed by the operator who was on that trip." },
+      { Icon: BadgeCheck, title: "We check your licence one time",
+        body: "After that, every operator can see you are real. You do not send your licence again and again." },
+      { Icon: Award, title: "Show what you are good at",
+        body: "Culture, trekking, birds, temples. Your languages too. Your years are read from your licence number." },
+      { Icon: Briefcase, title: "See jobs and apply",
+        body: "Operators put trips here. You tap and apply. Even last minute work when someone drops out." },
+      { Icon: CalendarDays, title: "Mark the days you are busy",
+        body: "Tap a day to close it. Operators see only your free days, so they stop calling you on the wrong dates." },
+      { Icon: PhoneCall, title: "Call or message anyone here",
+        body: "One tap to call. One tap for WhatsApp. Or chat inside the app. No hunting for a number." },
+      { Icon: Star, title: "Your good work is saved",
+        body: "After each trip the operator scores you. That score stays with you for your whole career." },
+      { Icon: MapPin, title: "Show where you have worked",
+        body: "Put photos on the map at the exact place. Much better than a list of names." },
+      { Icon: Lock, title: "Your papers stay private",
+        body: "Your licence photo is locked away. Only you, our team and tour operators can open it. Other guides cannot." },
     ],
   },
   driver: {
-    label: "Driver", sub: "I drive guests on tour", Icon: Car,
+    label: "Driver", sub: "I drive guests", Icon: Car,
     eyebrow: "For drivers",
-    title: "Your vehicle. Your routes. Your own work.",
-    lede: "You don’t need an agency behind you to be found. Operators search for the vehicle and the road knowledge a trip needs, and book the driver directly.",
-    cta: "Create my driver account",
+    title: "Drive more. Earn more.",
+    lede: "You do not need an agency behind you. Operators look for the car a trip needs, and they book the driver straight away.",
+    cta: "Sign up as a driver",
     points: [
-      { Icon: BadgeCheck, title: "Verified, not just listed",
-        body: "Your licence is checked before you appear, so an operator hiring you already knows you are real." },
-      { Icon: Car, title: "What you drive, up front",
-        body: "Sedan, SUV, Hiace, Coaster, Large Coach — operators see the vehicle before they call, so nobody wastes the phone call." },
-      { Icon: Briefcase, title: "Airport runs to long hauls",
-        body: "Apply for posted work, including last-minute cover when another driver drops out." },
-      { Icon: Star, title: "A driving record you own",
-        body: "Punctuality and care on the road, graded by the operator after every trip." },
-      { Icon: MapPin, title: "The routes you have run",
-        body: "Photos pinned to the roads you have actually driven — Dochula, Thrumshingla, the east." },
+      { Icon: BadgeCheck, title: "We check your licence one time",
+        body: "After that, an operator hiring you already knows you are real." },
+      { Icon: Car, title: "Show your vehicle",
+        body: "Sedan, SUV, Hiace, Coaster or large coach. They see it before they call, so nobody wastes a call." },
+      { Icon: Briefcase, title: "See jobs and apply",
+        body: "Airport pickups. Long trips to the east. Last minute work when another driver drops out." },
+      { Icon: CalendarDays, title: "Mark the days you are busy",
+        body: "Tap a day to close it. Operators see only your free days and book you on those." },
+      { Icon: PhoneCall, title: "Call or message anyone here",
+        body: "One tap to call. One tap for WhatsApp. Or chat inside the app." },
+      { Icon: Star, title: "Your good work is saved",
+        body: "After each trip the operator scores you on time keeping and care on the road." },
+      { Icon: Lock, title: "Your papers stay private",
+        body: "Your licence photo is locked away. Only you, our team and tour operators can open it." },
     ],
   },
   operator: {
     label: "Tour Operator", sub: "I book guides and drivers", Icon: Building2,
     eyebrow: "For tour operators",
-    title: "Stop hiring from memory.",
-    lede: "Every trip starts the same way: who is free, who speaks the language, who can you trust. Here that is one search instead of a dozen phone calls.",
-    cta: "Create my operator account",
+    title: "Hire in minutes, not days.",
+    lede: "No more calling ten people to find one free guide. Search, see who is free, and book them.",
+    cta: "Sign up as an operator",
     points: [
-      { Icon: Search, title: "Search what the trip actually needs",
-        body: "Language, speciality, guide class, home base, who is free right now — instead of whoever is saved in your phone." },
-      { Icon: BadgeCheck, title: "Every licence already checked",
-        body: "Class, number and expiry verified before anyone appears. Expired licences drop out on their own." },
-      { Icon: Briefcase, title: "Post once, hire in minutes",
-        body: "One job post brings applicants with full profiles. Hire a guide and a driver together as a pair." },
-      { Icon: CalendarDays, title: "Every trip on one calendar",
-        body: "Coloured ribbons across the month, with your crew and the meeting point held on each trip." },
-      { Icon: ShieldCheck, title: "Commitments that are signed",
-        body: "Crew sign the tour commitment before a trip is confirmed. A no-show goes on the record instead of just costing you a morning." },
-      { Icon: Users, title: "A crew book that remembers for you",
-        body: "Everyone you have worked with, how they were graded and who is free — open one and hire them again." },
-      { Icon: Star, title: "Guest reviews, sent by you",
-        body: "Invite the guest to review the crew after the trip. Your agency name appears on the review." },
+      { Icon: Search, title: "Search for the right person",
+        body: "By language, skill, guide class, home town, and who is free. Not just who is saved in your phone." },
+      { Icon: CalendarDays, title: "See free days before you ask",
+        body: "Every guide and driver marks their busy days. You see the free ones on their page." },
+      { Icon: BadgeCheck, title: "Licences are already checked",
+        body: "We check the class, the number and the date. Expired ones drop off on their own." },
+      { Icon: Briefcase, title: "Put up one job. Get applicants.",
+        body: "Or hire a guide and a driver together for the same trip, in one post." },
+      { Icon: MapPin, title: "All your trips on one calendar",
+        body: "Colour lines across the month. Your crew and the meeting point sit on each trip." },
+      { Icon: ShieldCheck, title: "Everyone signs before the trip",
+        body: "The crew sign the tour commitment. If someone does not turn up, it goes on their record." },
+      { Icon: Users, title: "Your crew book",
+        body: "Everyone you hired before, with their score and who is free. Open one and book again." },
+      { Icon: Star, title: "Guests can review your crew",
+        body: "Send the guest a link after the trip. Your company name goes on the review." },
     ],
   },
   business: {
-    label: "Hotel or business", sub: "I run a hotel, boutique or shop", Icon: Store,
+    label: "Hotel or business", sub: "I have a hotel or shop", Icon: Store,
     eyebrow: "For hotels, shops and studios",
-    title: "Be found by every tour passing through.",
-    lede: "Guides and operators decide the stops. This is how they find you, and how you tell them what is available before the bus arrives.",
-    cta: "Create my business account",
+    title: "Let every tour find you.",
+    lede: "Guides and operators choose the stops. Show them your rooms and what you sell before the bus arrives.",
+    cta: "Sign up as a business",
     points: [
-      { Icon: Store, title: "A verified page for your place",
-        body: "Rooms, products, opening hours — on a page operators and guides actually search." },
+      { Icon: Store, title: "Your own page",
+        body: "Rooms, things you sell, opening hours. On a page operators and guides actually look at." },
       { Icon: CalendarDays, title: "Show what is free",
-        body: "Keep your availability current so a tour knows before it turns up at the door." },
-      { Icon: Newspaper, title: "Post to the feed",
-        body: "Offers, new rooms, seasonal products — seen by the people routing the tours." },
-      { Icon: MessageSquare, title: "Direct messages",
-        body: "Operators and guides reach you here, without hunting for a number." },
+        body: "Keep your empty rooms up to date, so a tour knows before it comes to your door." },
+      { Icon: Newspaper, title: "Put news on the feed",
+        body: "Offers, new rooms, things in season. Seen by the people who plan the trips." },
+      { Icon: MessageSquare, title: "They can message you",
+        body: "Operators and guides reach you here. No hunting for a phone number." },
     ],
   },
 };
@@ -1133,7 +1143,7 @@ function RolePitch({ role, onCreate, onSignin, onBack }) {
       </div>
 
       <div className="px-6 mt-7">
-        <div className="text-[11.5px] font-semibold tracking-[.14em] uppercase mb-3.5" style={{ color: C.gold }}>What changes for you</div>
+        <div className="text-[11.5px] font-semibold tracking-[.14em] uppercase mb-3.5" style={{ color: C.gold }}>How this helps you</div>
         <div className="space-y-4">
           {p.points.map((b) => <WelcomeBullet key={b.title} Icon={b.Icon} title={b.title} body={b.body} />)}
         </div>
@@ -1146,10 +1156,10 @@ function RolePitch({ role, onCreate, onSignin, onBack }) {
               <Clock size={17} color={C.gold} />
             </div>
             <div>
-              <div className="text-[14px] font-semibold" style={{ color: C.ink }}>We are onboarding in small batches</div>
+              <div className="text-[14px] font-semibold" style={{ color: C.ink }}>We are letting people in slowly</div>
               <p className="text-[13px] leading-snug mt-1" style={{ color: C.muted }}>
-                Only <b style={{ color: C.ink }}>30 verification codes</b> are sent each hour while we grow
-                carefully. If your code does not arrive, wait an hour and try again — your place is not lost.
+                We send only <b style={{ color: C.ink }}>30 codes every hour</b>. If your code does not come,
+                wait one hour and try again. Your place is safe.
               </p>
             </div>
           </div>
@@ -1179,9 +1189,9 @@ function RolePitch({ role, onCreate, onSignin, onBack }) {
         <div className="rounded-2xl p-4" style={{ background: C.pineSoft }}>
           <div className="text-[13.5px] font-semibold mb-1.5" style={{ color: C.pine }}>Built in Bhutan, for Bhutan</div>
           <p className="text-[12.5px] leading-snug" style={{ color: C.pine, opacity: .9 }}>
-            This is an early version, and it will grow with the people who use it. We are working towards
-            recognition with the Department of Tourism and the Guides Association so that a profile here
-            becomes a trusted mark of a licensed professional. Tell us what you need — we will build it.
+            This app is new and it will grow with the people who use it. We are working with the Department
+            of Tourism and the Guides Association so that a page here becomes proof of a licensed
+            professional. Tell us what you need and we will build it.
           </p>
         </div>
         <p className="text-center text-[10px] mt-4" style={{ color: C.line }}>{BUILD}</p>
@@ -1239,11 +1249,11 @@ function Login({ onPick, session, myProfile, onAuthed, onBusy }) {
       {/* hero */}
       <div className="px-6 mt-4">
         <h1 className="text-[30px] leading-[1.12] font-semibold tracking-[-0.02em]" style={{ color: C.ink }}>
-          Bhutan’s tour crew,<br />in one place.
+Guides, drivers and<br />operators. One app.
         </h1>
         <p className="mt-3 text-[14.5px] leading-relaxed" style={{ color: C.muted }}>
-          Verified guides and drivers, and the operators who hire them — working from one
-          record instead of a phone book. Tell us how you work and we’ll show you what changes.
+          Find work. Hire good people. Stop asking around for a phone number.
+          Tap what you do and we will show you how it helps.
         </p>
       </div>
 
@@ -1259,7 +1269,7 @@ function Login({ onPick, session, myProfile, onAuthed, onBusy }) {
       {/* role branch — the first real decision */}
       <div className="px-6">
         <div className="text-[11.5px] font-semibold tracking-[.14em] uppercase mb-3" style={{ color: C.gold }}>
-          Get started — who are you?
+          Tap what you do
         </div>
         {ROLE_ORDER.map((id) => {
           const r = ROLE_PITCH[id];
@@ -2495,6 +2505,58 @@ function ModCard({ post, onApprove, onReject, eng }) {
 }
 
 /* ============================= Talent profile ============================ */
+/* ---- Open days: what an operator sees before asking someone for dates ---- */
+function OpenDaysStrip({ profileId, self }) {
+  const [blocked, setBlocked] = useState(null);
+  const DAYS = 21;
+  useEffect(() => {
+    let dead = false;
+    (async () => {
+      const from = new Date(); from.setHours(0, 0, 0, 0);
+      const to = new Date(from); to.setDate(to.getDate() + DAYS);
+      const isoOf = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+      const { data } = await supabase.from("blocked_days").select("day")
+        .eq("profile_id", profileId).gte("day", isoOf(from)).lte("day", isoOf(to));
+      if (!dead) setBlocked(new Set((data || []).map((r) => r.day)));
+    })();
+    return () => { dead = true; };
+  }, [profileId]);
+
+  if (!blocked) return null;
+  const out = [];
+  const cur = new Date(); cur.setHours(0, 0, 0, 0);
+  for (let i = 0; i < DAYS; i++) {
+    const d = new Date(cur); d.setDate(d.getDate() + i);
+    const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    out.push({ iso, d, off: blocked.has(iso) });
+  }
+  const freeCount = out.filter((x) => !x.off).length;
+
+  return (
+    <div className="mt-6">
+      <SectionLabel trailing={`${freeCount} of ${DAYS} free`}>Free days</SectionLabel>
+      <div className="flex gap-1.5 overflow-x-auto hidescroll pb-1" style={{ scrollbarWidth: "none" }}>
+        {out.map(({ iso, d, off }) => (
+          <div key={iso} className="rounded-xl flex flex-col items-center justify-center shrink-0"
+            style={{ width: 42, height: 52, background: off ? C.maroonSoft : C.pineSoft,
+                     border: `1px solid ${off ? "rgba(122,46,46,.25)" : "rgba(33,64,47,.18)"}` }}>
+            <span className="text-[9.5px] font-semibold uppercase tracking-[.04em]" style={{ color: off ? C.maroon : C.pine, opacity: .75 }}>
+              {d.toLocaleDateString("en-GB", { weekday: "short" }).slice(0, 2)}
+            </span>
+            <span className="text-[14px] font-semibold leading-tight" style={{ color: off ? C.maroon : C.pine,
+              textDecoration: off ? "line-through" : "none" }}>{d.getDate()}</span>
+          </div>
+        ))}
+      </div>
+      <p className="text-[11.5px] mt-2 leading-snug" style={{ color: C.muted }}>
+        {self
+          ? "Crossed days are the days you said you are busy. Operators see this before they call you. Keep it correct and the right jobs will come."
+          : "They marked these days themselves. Crossed days are busy."}
+      </p>
+    </div>
+  );
+}
+
 function TalentProfile({ talent, posts, canRequest, viewer, self, contactOnly, eng, onRequest, onMessage, onSetAvailability, onOpenProfile, onProfileSaved, onBack }) {
   const t = talent;
   const live = posts.filter((p) => p.talentId === t.id && p.status === "approved").length;
@@ -2695,6 +2757,8 @@ function TalentProfile({ talent, posts, canRequest, viewer, self, contactOnly, e
                 </div>
               )}
               {self && t.role === "guide" && <div ref={licSectionRef}><GuideLicenseCard talent={t} onSaved={onProfileSaved} /></div>}
+
+              {["guide", "driver"].includes(t.role) && <OpenDaysStrip profileId={t.id} self={self} />}
 
               {t.tags && t.tags.length > 0 && (
                 <div className="mt-6"><SectionLabel>{t.role === "guide" ? "Specialities" : t.role === "business" ? "What we offer" : "Drives"}</SectionLabel>
@@ -3595,11 +3659,15 @@ function TripCalendar({ user, trips }) {
   const [busy, setBusy] = useState(false);
 
   const [fests, setFests] = useState([]);
+  const [blocked, setBlocked] = useState(new Set());
+  const canBlock = ["guide", "driver"].includes(user.kind);
   const load = async () => {
     const { data } = await supabase.from("calendar_notes").select("*").eq("profile_id", me).order("date");
     setNotes(data || []);
     const { data: F } = await supabase.from("festivals").select("*").order("start_date");
     setFests(F || []);
+    const { data: B } = await supabase.from("blocked_days").select("day").eq("profile_id", me);
+    setBlocked(new Set((B || []).map((r) => r.day)));
   };
   useEffect(() => { load(); }, [me]);
 
@@ -3643,6 +3711,30 @@ function TripCalendar({ user, trips }) {
   };
   const delNote = async (id) => { await supabase.from("calendar_notes").delete().eq("id", id); load(); };
 
+  const [blockBusy, setBlockBusy] = useState(false);
+  const daysBetween = (a, b) => {
+    const out = []; const cur = new Date(a + "T00:00"); const end = new Date((b || a) + "T00:00");
+    while (cur <= end && out.length < 120) {
+      out.push(`${cur.getFullYear()}-${String(cur.getMonth() + 1).padStart(2, "0")}-${String(cur.getDate()).padStart(2, "0")}`);
+      cur.setDate(cur.getDate() + 1);
+    }
+    return out;
+  };
+  const blockRange = async (from, to) => {
+    if (blockBusy) return;
+    setBlockBusy(true);
+    const rows = daysBetween(from, to).map((d) => ({ profile_id: me, day: d }));
+    await supabase.from("blocked_days").upsert(rows, { onConflict: "profile_id,day" });
+    setBlockBusy(false); setBlockUntil(""); load();
+  };
+  const unblockDay = async (d) => {
+    if (blockBusy) return;
+    setBlockBusy(true);
+    await supabase.from("blocked_days").delete().eq("profile_id", me).eq("day", d);
+    setBlockBusy(false); load();
+  };
+  const [blockUntil, setBlockUntil] = useState("");
+
   const shift = (d) => {
     const nm = new Date(ym.y, ym.m + d, 1);
     setYm({ y: nm.getFullYear(), m: nm.getMonth() });
@@ -3677,11 +3769,14 @@ function TripCalendar({ user, trips }) {
             const isToday = day === todayIso;
             const dayTrips = tripsOn(day);
             const hasFest = festsOn(day).length > 0;
+            const isOff = blocked.has(day);
             return (
               <button key={d} onClick={() => { setSel(isSel ? null : day); setAdding(false); }}
                 className="tap relative h-12 rounded-lg flex flex-col items-center pt-1"
-                style={{ border: isSel ? `2px solid ${C.pine}` : isToday ? `1.5px dashed ${C.gold}` : "1.5px solid transparent" }}>
-                <span className="text-[12.5px] font-medium leading-none" style={{ color: hasTrip ? C.pine : C.ink }}>{d}</span>
+                style={{ background: isOff ? C.maroonSoft : "transparent",
+                         border: isSel ? `2px solid ${C.pine}` : isToday ? `1.5px dashed ${C.gold}` : "1.5px solid transparent" }}>
+                <span className="text-[12.5px] font-medium leading-none"
+                  style={{ color: isOff ? C.maroon : hasTrip ? C.pine : C.ink, textDecoration: isOff ? "line-through" : "none" }}>{d}</span>
                 {hasNote && <span className="absolute rounded-full" style={{ top: 3, right: 4, width: 5, height: 5, background: C.gold }} />}
                 {hasFest && <span className="absolute rounded-full" style={{ top: 3, left: 4, width: 5, height: 5, border: `1.5px solid ${C.gold}` }} />}
                 <span className="absolute left-0 right-0 flex flex-col" style={{ bottom: 4, gap: 2 }}>
@@ -3726,7 +3821,7 @@ function TripCalendar({ user, trips }) {
 
       <div className="mt-4">
         {!sel ? (
-          <p className="text-[12.5px] text-center py-3" style={{ color: C.muted }}>Tap a day to see its trips and notes — or to add a note.</p>
+          <p className="text-[12.5px] text-center py-3" style={{ color: C.muted }}>Tap a day to see what is on it, add a note, or say you are busy.</p>
         ) : (
           <div className="rounded-2xl p-4" style={{ background: C.card, border: `1px solid ${C.line}` }}>
             <div className="text-[14px] font-semibold mb-2.5" style={{ color: C.ink }}>
@@ -3763,8 +3858,41 @@ function TripCalendar({ user, trips }) {
                 </button>
               </div>
             ))}
-            {tripsOn(sel).length === 0 && notesOn(sel).length === 0 && !adding && (
+            {tripsOn(sel).length === 0 && notesOn(sel).length === 0 && !adding && !blocked.has(sel) && (
               <p className="text-[12.5px] mb-2" style={{ color: C.muted }}>Nothing on this day yet.</p>
+            )}
+
+            {canBlock && (
+              blocked.has(sel) ? (
+                <div className="rounded-xl px-3 py-2.5 mb-2 flex items-center gap-2.5" style={{ background: C.maroonSoft }}>
+                  <Lock size={14} color={C.maroon} className="shrink-0" />
+                  <div className="flex-1 min-w-0">
+                    <div className="text-[13px] font-semibold" style={{ color: C.maroon }}>You are busy this day</div>
+                    <div className="text-[11.5px]" style={{ color: C.maroon, opacity: .85 }}>Operators will not book you on this day.</div>
+                  </div>
+                  <button onClick={() => unblockDay(sel)} disabled={blockBusy}
+                    className="tap text-[12px] font-semibold rounded-lg px-2.5 py-1.5 shrink-0"
+                    style={{ background: "rgba(122,46,46,.12)", color: C.maroon }}>I am free</button>
+                </div>
+              ) : (
+                <div className="mb-2">
+                  {tripsOn(sel).length > 0 && (
+                    <p className="text-[11.5px] mb-1.5 leading-snug" style={{ color: C.muted }}>
+                      You have a trip this day. Close it so no operator asks you for the same dates.
+                    </p>
+                  )}
+                  <div className="flex items-center gap-2 mb-2">
+                    <span className="text-[12px] shrink-0" style={{ color: C.muted }}>Busy until</span>
+                    <input type="date" value={blockUntil} min={sel} onChange={(e) => setBlockUntil(e.target.value)}
+                      className="flex-1 h-9 px-3 rounded-xl text-[13px]" style={{ background: C.bg, border: `1px solid ${C.line}`, color: blockUntil ? C.ink : C.muted }} />
+                  </div>
+                  <button onClick={() => blockRange(sel, blockUntil)} disabled={blockBusy}
+                    className="tap w-full h-10 rounded-xl text-[13px] font-semibold"
+                    style={{ background: C.maroonSoft, color: C.maroon }}>
+                    {blockBusy ? "Saving…" : blockUntil && blockUntil !== sel ? "I am busy these days" : "I am busy this day"}
+                  </button>
+                </div>
+              )
             )}
             {!adding ? (
               <button onClick={() => setAdding(true)} className="tap w-full h-10 rounded-xl text-[13px] font-semibold" style={{ background: C.goldSoft, color: "#7a5a1e" }}>
