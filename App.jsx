@@ -1022,17 +1022,192 @@ export default function App() {
 }
 
 /* ================================ Welcome ================================= */
+/* --------------------------- Role welcome pitches ------------------------- */
+const ROLE_PITCH = {
+  guide: {
+    label: "Guide", sub: "I lead trips and share Bhutan", Icon: Compass,
+    eyebrow: "For guides",
+    title: "Work that finds you.",
+    lede: "Right now the work goes to whoever an operator happens to remember. Here it goes to whoever fits the trip — and your licence is what speaks first.",
+    cta: "Create my guide account",
+    points: [
+      { Icon: BadgeCheck, title: "Verified once, trusted after",
+        body: "Your licence is checked before you appear. Operators see a verified guide, not a name and a phone number." },
+      { Icon: Award, title: "A profile built on skill",
+        body: "Culture and dzong, alpine trekking, birding, spiritual routes — with your languages and the years read straight from your licence." },
+      { Icon: Briefcase, title: "Jobs you can apply for",
+        body: "Operators post work here, including short-notice cover when someone drops out. You don’t have to wait to be remembered." },
+      { Icon: Star, title: "A trip record you own",
+        body: "Reliability, punctuality and awareness, graded by the operator after every trip. It follows you through your career." },
+      { Icon: MapPin, title: "Proof of where you’ve worked",
+        body: "Photos pinned to the exact place in Bhutan. A portfolio, not a line on a list." },
+      { Icon: Users, title: "Your past trips still count",
+        body: "Reviews from before the app can be written up here and confirmed by the operator who was on that trip." },
+    ],
+  },
+  driver: {
+    label: "Driver", sub: "I drive guests on tour", Icon: Car,
+    eyebrow: "For drivers",
+    title: "Your vehicle. Your routes. Your own work.",
+    lede: "You don’t need an agency behind you to be found. Operators search for the vehicle and the road knowledge a trip needs, and book the driver directly.",
+    cta: "Create my driver account",
+    points: [
+      { Icon: BadgeCheck, title: "Verified, not just listed",
+        body: "Your licence is checked before you appear, so an operator hiring you already knows you are real." },
+      { Icon: Car, title: "What you drive, up front",
+        body: "Sedan, SUV, Hiace, Coaster, Large Coach — operators see the vehicle before they call, so nobody wastes the phone call." },
+      { Icon: Briefcase, title: "Airport runs to long hauls",
+        body: "Apply for posted work, including last-minute cover when another driver drops out." },
+      { Icon: Star, title: "A driving record you own",
+        body: "Punctuality and care on the road, graded by the operator after every trip." },
+      { Icon: MapPin, title: "The routes you have run",
+        body: "Photos pinned to the roads you have actually driven — Dochula, Thrumshingla, the east." },
+    ],
+  },
+  operator: {
+    label: "Tour Operator", sub: "I book guides and drivers", Icon: Building2,
+    eyebrow: "For tour operators",
+    title: "Stop hiring from memory.",
+    lede: "Every trip starts the same way: who is free, who speaks the language, who can you trust. Here that is one search instead of a dozen phone calls.",
+    cta: "Create my operator account",
+    points: [
+      { Icon: Search, title: "Search what the trip actually needs",
+        body: "Language, speciality, guide class, home base, who is free right now — instead of whoever is saved in your phone." },
+      { Icon: BadgeCheck, title: "Every licence already checked",
+        body: "Class, number and expiry verified before anyone appears. Expired licences drop out on their own." },
+      { Icon: Briefcase, title: "Post once, hire in minutes",
+        body: "One job post brings applicants with full profiles. Hire a guide and a driver together as a pair." },
+      { Icon: CalendarDays, title: "Every trip on one calendar",
+        body: "Coloured ribbons across the month, with your crew and the meeting point held on each trip." },
+      { Icon: ShieldCheck, title: "Commitments that are signed",
+        body: "Crew sign the tour commitment before a trip is confirmed. A no-show goes on the record instead of just costing you a morning." },
+      { Icon: Users, title: "A crew book that remembers for you",
+        body: "Everyone you have worked with, how they were graded and who is free — open one and hire them again." },
+      { Icon: Star, title: "Guest reviews, sent by you",
+        body: "Invite the guest to review the crew after the trip. Your agency name appears on the review." },
+    ],
+  },
+  business: {
+    label: "Hotel or business", sub: "I run a hotel, boutique or shop", Icon: Store,
+    eyebrow: "For hotels, shops and studios",
+    title: "Be found by every tour passing through.",
+    lede: "Guides and operators decide the stops. This is how they find you, and how you tell them what is available before the bus arrives.",
+    cta: "Create my business account",
+    points: [
+      { Icon: Store, title: "A verified page for your place",
+        body: "Rooms, products, opening hours — on a page operators and guides actually search." },
+      { Icon: CalendarDays, title: "Show what is free",
+        body: "Keep your availability current so a tour knows before it turns up at the door." },
+      { Icon: Newspaper, title: "Post to the feed",
+        body: "Offers, new rooms, seasonal products — seen by the people routing the tours." },
+      { Icon: MessageSquare, title: "Direct messages",
+        body: "Operators and guides reach you here, without hunting for a number." },
+    ],
+  },
+};
+const ROLE_ORDER = ["guide", "driver", "operator", "business"];
+
+function RolePitch({ role, onCreate, onSignin, onBack }) {
+  const p = ROLE_PITCH[role];
+  if (!p) return null;
+  return (
+    <div className="flex-1 overflow-y-auto hidescroll fade" style={{ scrollbarWidth: "none" }}>
+      <div className="px-6 pt-5 flex items-center gap-3">
+        <button onClick={onBack} className="tap w-9 h-9 rounded-full flex items-center justify-center shrink-0"
+          style={{ border: `1px solid ${C.line}`, background: C.card }} aria-label="Back">
+          <ChevronLeft size={19} color={C.ink} />
+        </button>
+        <div className="text-[13px] font-semibold" style={{ color: C.muted }}>Bhutan Tourism Hub</div>
+      </div>
+
+      <div className="px-6 mt-5">
+        <div className="inline-flex items-center gap-2 rounded-full pl-2 pr-3 py-1.5" style={{ background: C.pineSoft }}>
+          <div className="w-6 h-6 rounded-lg flex items-center justify-center" style={{ background: C.pine }}>
+            <p.Icon size={13} color={C.goldSoft} strokeWidth={2.1} />
+          </div>
+          <span className="text-[11px] font-bold tracking-[.1em] uppercase" style={{ color: C.pine }}>{p.eyebrow}</span>
+        </div>
+
+        <h1 className="text-[29px] leading-[1.14] font-semibold tracking-[-0.02em] mt-4" style={{ color: C.ink }}>{p.title}</h1>
+        <p className="mt-3 text-[14.5px] leading-relaxed" style={{ color: C.muted }}>{p.lede}</p>
+      </div>
+
+      <div className="px-6 mt-7">
+        <div className="text-[11.5px] font-semibold tracking-[.14em] uppercase mb-3.5" style={{ color: C.gold }}>What changes for you</div>
+        <div className="space-y-4">
+          {p.points.map((b) => <WelcomeBullet key={b.title} Icon={b.Icon} title={b.title} body={b.body} />)}
+        </div>
+      </div>
+
+      <div className="px-6 mt-7">
+        <div className="rounded-2xl p-4" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+          <div className="flex items-start gap-3">
+            <div className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0" style={{ background: C.goldSoft }}>
+              <Clock size={17} color={C.gold} />
+            </div>
+            <div>
+              <div className="text-[14px] font-semibold" style={{ color: C.ink }}>We are onboarding in small batches</div>
+              <p className="text-[13px] leading-snug mt-1" style={{ color: C.muted }}>
+                Only <b style={{ color: C.ink }}>30 verification codes</b> are sent each hour while we grow
+                carefully. If your code does not arrive, wait an hour and try again — your place is not lost.
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="px-6 mt-6">
+        <button onClick={onCreate}
+          className="tap w-full rounded-2xl flex items-center justify-center gap-2 text-[16.5px] font-semibold"
+          style={{ height: 56, background: C.pine, color: "#fff", boxShadow: `0 10px 24px ${C.pine}40` }}>
+          {p.cta} <ArrowRight size={19} strokeWidth={2.4} />
+        </button>
+        <button onClick={onSignin}
+          className="tap w-full rounded-2xl text-[15px] font-semibold mt-3"
+          style={{ height: 52, background: C.card, border: `1.5px solid ${C.pine}`, color: C.pine }}>
+          I already have an account
+        </button>
+        <button onClick={onBack} className="tap w-full text-center text-[13px] font-semibold mt-4" style={{ color: C.muted }}>
+          See the other roles
+        </button>
+        <p className="text-center text-[12.5px] mt-4" style={{ color: C.muted }}>
+          Free for licensed guides, drivers and tour operators.
+        </p>
+      </div>
+
+      <div className="px-6 mt-7 pb-16">
+        <div className="rounded-2xl p-4" style={{ background: C.pineSoft }}>
+          <div className="text-[13.5px] font-semibold mb-1.5" style={{ color: C.pine }}>Built in Bhutan, for Bhutan</div>
+          <p className="text-[12.5px] leading-snug" style={{ color: C.pine, opacity: .9 }}>
+            This is an early version, and it will grow with the people who use it. We are working towards
+            recognition with the Department of Tourism and the Guides Association so that a profile here
+            becomes a trusted mark of a licensed professional. Tell us what you need — we will build it.
+          </p>
+        </div>
+        <p className="text-center text-[10px] mt-4" style={{ color: C.line }}>{BUILD}</p>
+      </div>
+    </div>
+  );
+}
+
 function Login({ onPick, session, myProfile, onAuthed, onBusy }) {
   const [authView, setAuthView] = useState(null);
+  const [pitchRole, setPitchRole] = useState(null);
   useEffect(() => { onBusy && onBusy(!!authView); return () => onBusy && onBusy(false); }, [authView]);
   if (authView) {
     return (
       <div className="flex-1 overflow-y-auto hidescroll fade" style={{ scrollbarWidth: "none" }}>
-        <Onboard mode={authView} session={session}
+        <Onboard mode={authView} session={session} presetRole={authView === "signup" ? pitchRole : null}
           onBack={() => { setAuthView(null); onBusy && onBusy(false); }}
           onDone={() => { onBusy && onBusy(false); setAuthView(null); onAuthed(); }} />
       </div>
     );
+  }
+  if (pitchRole) {
+    return <RolePitch role={pitchRole}
+      onCreate={() => setAuthView("signup")}
+      onSignin={() => setAuthView("signin")}
+      onBack={() => setPitchRole(null)} />;
   }
 
   return (
@@ -1064,17 +1239,16 @@ function Login({ onPick, session, myProfile, onAuthed, onBusy }) {
       {/* hero */}
       <div className="px-6 mt-4">
         <h1 className="text-[30px] leading-[1.12] font-semibold tracking-[-0.02em]" style={{ color: C.ink }}>
-          Be one of the first<br />guides on the hub.
+          Bhutan’s tour crew,<br />in one place.
         </h1>
         <p className="mt-3 text-[14.5px] leading-relaxed" style={{ color: C.muted }}>
-          We're building Bhutan's verified marketplace for licensed guides and drivers — where
-          tour operators find you by your <b style={{ color: C.ink }}>skills</b>, not by who they
-          already know.
+          Verified guides and drivers, and the operators who hire them — working from one
+          record instead of a phone book. Tell us how you work and we’ll show you what changes.
         </p>
       </div>
 
       {/* map — its own block, whole image visible, fixed gap below */}
-      <div className="px-6" style={{ marginTop: 28, marginBottom: 32 }}>
+      <div className="px-6" style={{ marginTop: 28, marginBottom: 30 }}>
         <div className="relative w-full rounded-2xl overflow-hidden flex items-center justify-center"
           style={{ aspectRatio: "16 / 9", background: C.card, border: `1px solid ${C.lineSoft}` }}>
           <img src={mapImg} alt="Relief map of Bhutan"
@@ -1082,13 +1256,28 @@ function Login({ onPick, session, myProfile, onAuthed, onBusy }) {
         </div>
       </div>
 
-      {/* actions — separate block, never overlapped */}
+      {/* role branch — the first real decision */}
       <div className="px-6">
-        <button onClick={() => setAuthView("signup")}
-          className="tap w-full rounded-2xl flex items-center justify-center gap-2 text-[16.5px] font-semibold"
-          style={{ height: 56, background: C.pine, color: "#fff", boxShadow: `0 10px 24px ${C.pine}40` }}>
-          Join the hub <ArrowRight size={19} strokeWidth={2.4} />
-        </button>
+        <div className="text-[11.5px] font-semibold tracking-[.14em] uppercase mb-3" style={{ color: C.gold }}>
+          Get started — who are you?
+        </div>
+        {ROLE_ORDER.map((id) => {
+          const r = ROLE_PITCH[id];
+          return (
+            <button key={id} onClick={() => setPitchRole(id)}
+              className="tap w-full text-left rounded-2xl p-3.5 mb-2.5 flex items-center gap-3.5"
+              style={{ background: C.card, border: `1px solid ${C.line}` }}>
+              <div className="w-11 h-11 rounded-xl flex items-center justify-center shrink-0" style={{ background: C.pine }}>
+                <r.Icon size={21} color={C.goldSoft} strokeWidth={1.9} />
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="text-[15.5px] font-semibold" style={{ color: C.ink }}>{r.label}</div>
+                <div className="text-[12.5px] leading-snug" style={{ color: C.muted }}>{r.sub}</div>
+              </div>
+              <ArrowRight size={17} color={C.muted} className="shrink-0" />
+            </button>
+          );
+        })}
 
         <button onClick={() => setAuthView("signin")}
           className="tap w-full rounded-2xl text-[15px] font-semibold mt-3"
@@ -1099,42 +1288,6 @@ function Login({ onPick, session, myProfile, onAuthed, onBusy }) {
         <p className="text-center text-[12.5px] mt-4" style={{ color: C.muted }}>
           Free for licensed guides, drivers and tour operators.
         </p>
-      </div>
-
-      {/* onboarding in batches — honest framing */}
-      <div className="px-6 mt-6">
-        <div className="rounded-2xl p-4" style={{ background: C.card, border: `1px solid ${C.line}` }}>
-          <div className="flex items-start gap-3">
-            <div className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0" style={{ background: C.goldSoft }}>
-              <Clock size={17} color={C.gold} />
-            </div>
-            <div>
-              <div className="text-[14px] font-semibold" style={{ color: C.ink }}>We're onboarding in small batches</div>
-              <p className="text-[13px] leading-snug mt-1" style={{ color: C.muted }}>
-                Only <b style={{ color: C.ink }}>30 verification codes</b> are sent each hour while we
-                grow carefully. If your code doesn't arrive, wait an hour and try again — your place
-                isn't lost. The earlier you build your profile, the more jobs you'll be matched to.
-              </p>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* what you get */}
-      <div className="px-6 mt-7">
-        <div className="text-[11.5px] font-semibold tracking-[.14em] uppercase mb-3.5" style={{ color: C.gold }}>What you get</div>
-        <div className="space-y-4">
-          <WelcomeBullet Icon={BadgeCheck} title="Verified, not just listed"
-            body="Every licence is checked before anyone can be booked. Operators know exactly who they're hiring." />
-          <WelcomeBullet Icon={Award} title="A profile that proves your skill"
-            body="Culture and dzong, alpine trekking, birding, spiritual routes — plus languages and years of experience." />
-          <WelcomeBullet Icon={Star} title="A trip record you own"
-            body="Reliability, punctuality and awareness, graded by operators after every trip. It follows you through your career." />
-          <WelcomeBullet Icon={MapPin} title="Proof of where you've worked"
-            body="Photos pinned to the exact spot in Bhutan. Your portfolio, not a line on a list." />
-          <WelcomeBullet Icon={Briefcase} title="Work that finds you"
-            body="Operators post jobs and you apply — including short-notice work when someone drops out." />
-        </div>
       </div>
 
       {/* honest about the stage */}
@@ -5790,14 +5943,14 @@ function OCta({ children, onClick, disabled, busy }) {
   );
 }
 
-function Onboard({ mode: initialMode, session, onBack, onDone }) {
+function Onboard({ mode: initialMode, session, presetRole, onBack, onDone }) {
   const [mode, setMode] = useState(initialMode);
   const signin = mode === "signin";
-  const [step, setStep] = useState(signin ? "auth" : "role");
+  const [step, setStep] = useState(signin ? "auth" : presetRole ? "about" : "role");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
   const [uid, setUid] = useState(session?.user?.id || null);
-  const [role, setRole] = useState(null);
+  const [role, setRole] = useState(presetRole || null);
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [base, setBase] = useState("");
@@ -5953,6 +6106,7 @@ function Onboard({ mode: initialMode, session, onBack, onDone }) {
 
   const ORDER = signin ? ["auth", "code", "password"] : ["role", "about", "details", "email", "code", "password", "license"];
   const backStep = () => {
+    if (presetRole && step === "about") { onBack(); return; }
     const i = ORDER.indexOf(step);
     if (i <= 0 || step === "code") { if (step === "code") setStep("email"); else onBack(); return; }
     setStep(ORDER[i - 1]);
