@@ -1139,7 +1139,7 @@ export default function App() {
   if (reviewToken) {
     return (
       <ErrorBoundary>
-        <div className="min-h-screen w-full flex justify-center" style={{ background: C.bg }}>
+        <div className="w-full flex justify-center" style={{ background: C.bg, minHeight: "100dvh" }}>
           <div className="w-full max-w-[430px] flex flex-col" style={{ minHeight: "100dvh", background: C.bg }}>
             <GuestReview token={reviewToken} />
           </div>
@@ -1150,7 +1150,7 @@ export default function App() {
 
   return (
     <ErrorBoundary>
-      <div className="min-h-screen w-full flex justify-center" style={{ background: C.bg }}>
+      <div className="w-full flex justify-center" style={{ background: C.bg, minHeight: "100dvh" }}>
       <style>{`
         *{ font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Helvetica Neue", ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
         html, body { overscroll-behavior-y: none; }
@@ -1755,7 +1755,7 @@ function TopBar({ user, onLogout, onSearch, alerts, onOpenAlerts }) {
 
 function BottomNav({ nav, tab, setTab, badges }) {
   return (
-    <div className="shrink-0 flex safe-bottom" style={{ background: C.card, borderTop: `1px solid ${C.line}`, position: "relative", zIndex: 240 }}>
+    <div className="shrink-0 flex safe-bottom" style={{ background: C.card, borderTop: `1px solid ${C.line}`, position: "sticky", bottom: 0, zIndex: 240 }}>
       {nav.map((n) => {
         const on = tab === n.id;
         const badge = badges[n.id] || 0;
@@ -2898,43 +2898,74 @@ function TalentProfile({ talent, posts, canRequest, viewer, self, contactOnly, e
         {self && !["operator", "business"].includes(t.role) && <TalentAvailability talent={t} onSet={onSetAvailability} />}
 
         <ProfileTabs jumpToCv={portfolioJump}
+          sections={["guide", "driver"].includes(t.role) ? [
+            { label: "Reviews", Icon: Star, node: (
+              <>
+                <GuestReviews talentId={t.id} isAdmin={eng?.isAdmin} isSelf={self} onAskOperator={() => setAskOperator(true)} />
+                <ReviewLinks t={t} />
+                <LegacyVerified talentId={t.id} isAdmin={eng?.isAdmin} />
+              </>
+            ) },
+            { label: t.role === "guide" ? "Skills" : "Drives", Icon: Award, node: (
+              <>
+                {t.pitch && <div className="pl-4" style={{ borderLeft: `3px solid ${C.gold}` }}><p className="text-[15px] leading-relaxed" style={{ color: C.ink }}>{t.pitch}</p></div>}
+                {t.tags && t.tags.length > 0 && (
+                  <div className="mt-6"><SectionLabel>{t.role === "guide" ? "Specialities" : "Drives"}</SectionLabel>
+                    <div className="flex flex-wrap gap-2">{(t.tags || []).map((x) => <span key={x} className="rounded-full px-3 py-1.5 text-[13.5px] font-medium" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }}>{x}</span>)}</div>
+                    {t.vehicle && <div className="mt-2.5 text-[13.5px]" style={{ color: C.muted }}><Car size={14} color={C.gold} className="inline mr-1" /> {t.vehicle}</div>}
+                  </div>
+                )}
+                {t.languages && t.languages.length > 0 && (
+                  <div className="mt-6"><SectionLabel>Languages</SectionLabel>
+                    <div className="flex flex-wrap gap-2">{(t.languages || []).map((l) => (
+                      <span key={l.n} className="inline-flex items-center gap-2 rounded-full pl-3.5 pr-2 py-1.5 text-[13.5px] font-medium" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }}>{l.n}<span className="text-[11px] px-1.5 py-0.5 rounded-full" style={{ background: C.goldSoft, color: "#7a5a1e" }}>{l.l}</span></span>
+                    ))}</div>
+                  </div>
+                )}
+                {located.length > 0 && (
+                  <div className="mt-6"><SectionLabel trailing={`${located.length} pins`}>Where they have worked</SectionLabel>
+                    <BhutanMap readOnly pins={located.map((p) => p.location)} />
+                  </div>
+                )}
+              </>
+            ) },
+            { label: "Free days", Icon: CalendarDays, node: (
+              <>
+                <OpenDaysStrip profileId={t.id} self={self} />
+                {!self && ["operator", "admin"].includes(viewer?.kind) && <TalentAvailability talent={t} viewerOnly />}
+              </>
+            ) },
+            { label: "Record", Icon: ShieldCheck, holdsLicence: true, node: (
+              <>
+                <CharacterChart talentId={t.id} />
+                {(self || ["operator", "admin"].includes(viewer?.kind)) && (
+                  <div className="mt-5">
+                    <button onClick={() => setCredsOpen(true)} className="tap w-full rounded-2xl p-4 flex items-center gap-3 text-left"
+                      style={{ background: C.card, border: `1px solid ${C.line}`, borderLeft: `4px solid ${t.guideClass && GUIDE_CLASSES[t.guideClass] ? GUIDE_CLASSES[t.guideClass].color : C.gold}` }}>
+                      <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0"
+                        style={{ background: t.guideClass && GUIDE_CLASSES[t.guideClass] ? `${GUIDE_CLASSES[t.guideClass].color}18` : C.goldSoft }}>
+                        <FileCheck2 size={18} color={t.guideClass && GUIDE_CLASSES[t.guideClass] ? GUIDE_CLASSES[t.guideClass].color : C.gold} />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="text-[14.5px] font-semibold" style={{ color: C.ink }}>Credentials & Licence</div>
+                        <div className="text-[12px]" style={{ color: C.muted }}>{t.guideClass && GUIDE_CLASSES[t.guideClass] ? GUIDE_CLASSES[t.guideClass].label + " · " : ""}DOT licence & certificates</div>
+                      </div>
+                      <ChevronLeft size={17} color={C.muted} style={{ transform: "rotate(180deg)" }} />
+                    </button>
+                  </div>
+                )}
+                {self && t.role === "guide" && <div ref={licSectionRef}><GuideLicenseCard talent={t} onSaved={onProfileSaved} /></div>}
+              </>
+            ) },
+          ] : null}
           cv={
             <>
-              {["guide", "driver"].includes(t.role) && <GuestReviews talentId={t.id} isAdmin={eng?.isAdmin} isSelf={self} onAskOperator={() => setAskOperator(true)} />}
-              {["guide", "driver"].includes(t.role) && <ReviewLinks t={t} />}
-              {["guide", "driver"].includes(t.role) && <LegacyVerified talentId={t.id} isAdmin={eng?.isAdmin} />}
-
-              <div className="mt-6" />
-
-              {["guide", "driver"].includes(t.role) && <CharacterChart talentId={t.id} />}
-
               {t.role === "business" && <BusinessAvailability business={t} viewer={viewer} />}
-              {["guide", "driver"].includes(t.role) && !self && ["operator", "admin"].includes(viewer?.kind) && <TalentAvailability talent={t} viewerOnly />}
 
               {t.pitch && <div className="mt-5 pl-4" style={{ borderLeft: `3px solid ${C.gold}` }}><p className="text-[15px] leading-relaxed" style={{ color: C.ink }}>{t.pitch}</p></div>}
 
-              {["guide", "driver"].includes(t.role) && (self || ["operator", "admin"].includes(viewer?.kind)) && (
-                <div className="mt-5">
-                  <button onClick={() => setCredsOpen(true)} className="tap w-full rounded-2xl p-4 flex items-center gap-3 text-left"
-                    style={{ background: C.card, border: `1px solid ${C.line}`, borderLeft: `4px solid ${t.guideClass && GUIDE_CLASSES[t.guideClass] ? GUIDE_CLASSES[t.guideClass].color : C.gold}` }}>
-                    <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0"
-                      style={{ background: t.guideClass && GUIDE_CLASSES[t.guideClass] ? `${GUIDE_CLASSES[t.guideClass].color}18` : C.goldSoft }}>
-                      <FileCheck2 size={18} color={t.guideClass && GUIDE_CLASSES[t.guideClass] ? GUIDE_CLASSES[t.guideClass].color : C.gold} />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="text-[14.5px] font-semibold" style={{ color: C.ink }}>Credentials & Licence</div>
-                      <div className="text-[12px]" style={{ color: C.muted }}>{t.guideClass && GUIDE_CLASSES[t.guideClass] ? GUIDE_CLASSES[t.guideClass].label + " · " : ""}DOT licence & certificates</div>
-                    </div>
-                    <ChevronLeft size={17} color={C.muted} style={{ transform: "rotate(180deg)" }} />
-                  </button>
-                </div>
-              )}
-              {self && t.role === "guide" && <div ref={licSectionRef}><GuideLicenseCard talent={t} onSaved={onProfileSaved} /></div>}
-
-              {["guide", "driver"].includes(t.role) && <OpenDaysStrip profileId={t.id} self={self} />}
-
               {t.tags && t.tags.length > 0 && (
-                <div className="mt-6"><SectionLabel>{t.role === "guide" ? "Specialities" : t.role === "business" ? "What we offer" : "Drives"}</SectionLabel>
+                <div className="mt-6"><SectionLabel>{t.role === "business" ? "What we offer" : "Drives"}</SectionLabel>
                   <div className="flex flex-wrap gap-2">{(t.tags || []).map((x) => <span key={x} className="rounded-full px-3 py-1.5 text-[13.5px] font-medium" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }}>{x}</span>)}</div>
                   {t.vehicle && <div className="mt-2.5 text-[13.5px]" style={{ color: C.muted }}><Car size={14} color={C.gold} className="inline mr-1" /> {t.vehicle}</div>}
                 </div>
@@ -5687,9 +5718,14 @@ function WallPost({ post: p, author, eng, onShareStory, onClose }) {
 }
 
 /* ===================== Profile tabs (swipeable CV / Gallery) ===================== */
-function ProfileTabs({ cv, gallery, galleryCount, jumpToCv }) {
-  const [tab, setTab] = useState(0);           // 0 = Posts · 1 = Portfolio
-  useEffect(() => { if (jumpToCv) setTab(1); }, [jumpToCv]);
+function ProfileTabs({ cv, sections, gallery, galleryCount, jumpToCv }) {
+  // sections = guide/driver split view. cv = the single Portfolio pane operators still use.
+  const panes = sections && sections.length
+    ? [{ label: "Posts", Icon: ImagePlus, count: galleryCount, node: gallery }, ...sections]
+    : [{ label: "Posts", Icon: ImagePlus, count: galleryCount, node: gallery }, { label: "Portfolio", Icon: Award, node: cv }];
+  const [tab, setTab] = useState(0);
+  const licTab = Math.max(1, panes.findIndex((p) => p.holdsLicence));
+  useEffect(() => { if (jumpToCv) setTab(licTab); }, [jumpToCv]);
   const startX = useRef(null);
   const startY = useRef(null);
   const locked = useRef(false);
@@ -5709,33 +5745,38 @@ function ProfileTabs({ cv, gallery, galleryCount, jumpToCv }) {
     const t = e.changedTouches ? e.changedTouches[0] : e;
     const dx = t.clientX - startX.current;
     // only switch on a deliberate horizontal drag; a tap (tiny dx) always reaches the tile
-    if (locked.current && Math.abs(dx) > 60) setTab(dx < 0 ? 1 : 0);   // left = Reviews, right = Posts
+    if (locked.current && Math.abs(dx) > 60) setTab((t) => Math.min(panes.length - 1, Math.max(0, t + (dx < 0 ? 1 : -1))));
     startX.current = null; locked.current = false;
   };
 
-  const TABS = [{ label: "Posts", Icon: ImagePlus, count: galleryCount }, { label: "Portfolio", Icon: Award }];
+  const many = panes.length > 2;
 
   return (
     <div className="mt-5">
-      {/* tab bar */}
-      <div className="relative flex" style={{ borderBottom: `1px solid ${C.line}`, background: C.bg }}>
-        {TABS.map((x, i) => {
+      {/* tab bar — scrolls sideways once there are more than two */}
+      <div className={`relative flex ${many ? "overflow-x-auto hidescroll" : ""}`}
+        style={{ borderBottom: `1px solid ${C.line}`, background: C.bg, scrollbarWidth: "none" }}>
+        {panes.map((x, i) => {
           const on = tab === i;
           return (
-            <button key={x.label} onClick={() => setTab(i)} className="tap flex-1 pb-2.5 flex items-center justify-center gap-1.5">
+            <button key={x.label} onClick={() => setTab(i)}
+              className={`tap pb-2.5 flex items-center justify-center gap-1.5 ${many ? "px-3.5 shrink-0" : "flex-1"}`}
+              style={many ? { borderBottom: `2.5px solid ${on ? C.pine : "transparent"}` } : undefined}>
               <x.Icon size={16} color={on ? C.pine : C.muted} strokeWidth={on ? 2.4 : 2} />
-              <span className="text-[14px] font-semibold" style={{ color: on ? C.pine : C.muted }}>{x.label}</span>
+              <span className="text-[14px] font-semibold whitespace-nowrap" style={{ color: on ? C.pine : C.muted }}>{x.label}</span>
               {x.count > 0 && <span className="text-[11px] font-bold rounded-full px-1.5 py-0.5" style={{ background: on ? C.pine : C.lineSoft, color: on ? "#fff" : C.muted }}>{x.count}</span>}
             </button>
           );
         })}
-        <div className="absolute bottom-0 h-[2.5px] rounded-full"
-          style={{ background: C.pine, width: "50%", left: tab === 0 ? "0%" : "50%", transition: "left .28s cubic-bezier(.22,.61,.36,1)" }} />
+        {!many && (
+          <div className="absolute bottom-0 h-[2.5px] rounded-full"
+            style={{ background: C.pine, width: "50%", left: tab === 0 ? "0%" : "50%", transition: "left .28s cubic-bezier(.22,.61,.36,1)" }} />
+        )}
       </div>
 
       {/* panes — only the active one is rendered, so taps always hit the right thing */}
       <div className="overflow-hidden" onTouchStart={onStart} onTouchMove={onMove} onTouchEnd={onEnd}>
-        <div key={tab} className="pt-4 fade">{tab === 0 ? gallery : cv}</div>
+        <div key={tab} className="pt-4 fade">{panes[tab] ? panes[tab].node : null}</div>
       </div>
     </div>
   );
