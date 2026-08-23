@@ -6,7 +6,7 @@ import {
   BadgeCheck, MapPin, Inbox, ChevronLeft, Star, Phone, Mail, Briefcase,
   Search, LogOut, Newspaper, User, CalendarCheck, MessageCircle,
   Map as MapIcon, MessageSquare, Users, Download, Mic, Video as VideoIcon, Heart, Share2, Trash2, Maximize2, Upload, Loader2, ArrowRight,
-  Award, UserX, RefreshCw, FileCheck2, ExternalLink, UserPlus, Send as SendIcon, Lock, Eye, EyeOff, CalendarDays, UserCheck, Plus, CheckCheck, Camera, Navigation as NavIcon, Bell, Smartphone, Share, PhoneCall,
+  Award, UserX, RefreshCw, FileCheck2, ExternalLink, UserPlus, Send as SendIcon, Lock, Eye, EyeOff, CalendarDays, UserCheck, Plus, CheckCheck, Camera, Navigation as NavIcon, Bell, Smartphone, Share, PhoneCall, Wallet,
   ShieldAlert, Store, Sparkles,
 } from "lucide-react";
 import mapImg from "./map.jpg";
@@ -400,11 +400,175 @@ function useAutoUpdate() {
   }, []);
 }
 
+/* ---- A tour operator with the link. No account, no sign-in, one decision. ---- */
+function VerifyReview({ token }) {
+  const [row, setRow] = useState(undefined);   // undefined=loading  null=bad link
+  const [who, setWho] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState(null);      // "verified" | "declined"
+  const [err, setErr] = useState(null);
+
+  useEffect(() => {
+    (async () => {
+      const { data, error } = await supabase.rpc("legacy_review_peek", { t: token });
+      if (error) { setRow(null); return; }
+      const r = Array.isArray(data) ? data[0] : data;
+      setRow(r || null);
+      if (r && ["verified", "declined"].includes(r.status)) setDone(r.status);
+    })();
+  }, [token]);
+
+  const decide = async (d) => {
+    if (busy) return;
+    setBusy(true); setErr(null);
+    const { data, error } = await supabase.rpc("legacy_review_decide", { t: token, d, who: who.trim() || null });
+    setBusy(false);
+    if (error) { setErr("Could not save that. Check your connection and try once more."); return; }
+    if (data === "done") { setDone("verified"); return; }
+    if (data !== "ok") { setErr("This link is no longer active."); return; }
+    setDone(d);
+  };
+
+  const Shell = ({ children }) => (
+    <div className="min-h-screen flex flex-col" style={{ background: C.bg }}>
+      <div className="px-6 pt-6 pb-4 flex items-center gap-2.5">
+        <div className="w-8 h-8 rounded-xl flex items-center justify-center" style={{ background: C.pine }}>
+          <Compass size={16} color={C.goldSoft} strokeWidth={2.1} />
+        </div>
+        <div className="text-[13.5px] font-semibold" style={{ color: C.pine }}>Bhutan Tourism Hub</div>
+      </div>
+      <div className="flex-1 px-6 pb-10">{children}</div>
+    </div>
+  );
+
+  if (row === undefined) return <Shell><p className="text-[14px] mt-8" style={{ color: C.muted }}>Opening the review…</p></Shell>;
+
+  if (row === null) return (
+    <Shell>
+      <div className="rounded-2xl p-5 mt-6" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+        <div className="text-[16px] font-semibold" style={{ color: C.ink }}>This link is not working</div>
+        <p className="text-[14px] mt-2 leading-relaxed" style={{ color: C.muted }}>
+          It may have been withdrawn, or the link was cut short when it was sent. Ask the guide to send it again.
+        </p>
+      </div>
+    </Shell>
+  );
+
+  if (done) return (
+    <Shell>
+      <div className="rounded-2xl p-5 mt-6 text-center" style={{ background: C.card, border: `1.5px solid ${done === "verified" ? C.pine : C.line}` }}>
+        <div className="w-14 h-14 rounded-2xl mx-auto flex items-center justify-center"
+          style={{ background: done === "verified" ? C.pineSoft : C.bg }}>
+          {done === "verified" ? <BadgeCheck size={26} color={C.pine} /> : <X size={26} color={C.muted} />}
+        </div>
+        <div className="text-[18px] font-semibold mt-3" style={{ color: C.ink }}>
+          {done === "verified" ? "Thank you. It is verified." : "Thank you for your honesty."}
+        </div>
+        <p className="text-[14px] mt-2 leading-relaxed" style={{ color: C.muted }}>
+          {done === "verified"
+            ? `This review is now live on ${row.guide_name}'s page, with your company name on it as the operator who confirmed it.`
+            : "Nothing will be published. A review nobody can stand behind is worth less than no review at all."}
+        </p>
+      </div>
+
+      {done === "verified" && (
+        <div className="rounded-2xl p-5 mt-4" style={{ background: C.pineSoft }}>
+          <div className="text-[15px] font-semibold" style={{ color: C.pine }}>You just did something only you could do</div>
+          <p className="text-[13.5px] mt-2 leading-relaxed" style={{ color: C.pine, opacity: .92 }}>
+            No app can confirm a trip you ran. That is why your word counts here. Tour operators on the hub search
+            verified guides and drivers by language, skill and free days, keep every trip on one calendar, and
+            hire without ringing round.
+          </p>
+          <a href="/" className="tap w-full rounded-2xl flex items-center justify-center gap-2 text-[15.5px] font-semibold mt-4"
+            style={{ height: 52, background: C.pine, color: "#fff", textDecoration: "none" }}>
+            See the hub <ArrowRight size={18} strokeWidth={2.4} />
+          </a>
+          <p className="text-center text-[12px] mt-2.5" style={{ color: C.pine, opacity: .75 }}>Free for licensed tour operators.</p>
+        </div>
+      )}
+    </Shell>
+  );
+
+  return (
+    <Shell>
+      <div className="inline-flex items-center gap-2 rounded-full px-3 py-1.5 mb-3" style={{ background: C.goldSoft }}>
+        <Clock size={13} color={C.gold} />
+        <span className="text-[11.5px] font-bold tracking-[.08em] uppercase" style={{ color: C.gold }}>Waiting for you</span>
+      </div>
+
+      <h1 className="text-[24px] leading-tight font-semibold tracking-[-0.01em]" style={{ color: C.ink }}>
+        Did this trip happen?
+      </h1>
+      <p className="text-[14px] mt-2 leading-relaxed" style={{ color: C.muted }}>
+        {row.guide_name} says {row.operator_name || "your company"} ran this trip, and wants to put this old guest
+        review on their page. Only you can say if it is true.
+      </p>
+
+      <div className="rounded-2xl p-4 mt-5" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+        <div className="flex items-center gap-3">
+          <div className="w-11 h-11 rounded-xl flex items-center justify-center text-[15px] font-semibold shrink-0"
+            style={{ background: C.pineDeep, color: C.goldSoft }}>{row.guide_initials}</div>
+          <div className="min-w-0">
+            <div className="text-[15px] font-semibold truncate" style={{ color: C.ink }}>{row.guide_name}</div>
+            <div className="text-[12.5px]" style={{ color: C.muted }}>
+              {row.guide_role === "driver" ? "Driver" : "Guide"}{row.trip_label ? ` · ${row.trip_label}` : ""}{row.trip_year ? ` · ${row.trip_year}` : ""}
+            </div>
+          </div>
+        </div>
+
+        <div className="rounded-xl p-3.5 mt-3.5" style={{ background: C.bg }}>
+          <p className="text-[14.5px] leading-relaxed" style={{ color: C.ink }}>{row.body}</p>
+          <div className="text-[12.5px] mt-2.5" style={{ color: C.muted }}>
+            {row.guest_name || "Guest"}{row.guest_country ? ` · ${row.guest_country}` : ""}{row.trip_year ? ` · ${row.trip_year}` : ""}
+          </div>
+        </div>
+
+        {row.photo_url && (
+          <a href={row.photo_url} target="_blank" rel="noopener noreferrer"
+            className="tap w-full h-11 rounded-xl flex items-center justify-center gap-2 text-[13.5px] font-semibold mt-3"
+            style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink, textDecoration: "none" }}>
+            <Camera size={15} /> See the original note
+          </a>
+        )}
+      </div>
+
+      <div className="mt-5">
+        <BLabel>Your name (optional)</BLabel>
+        <input value={who} onChange={(e) => setWho(e.target.value)} maxLength={60} placeholder="Who is confirming this?"
+          className="w-full h-12 px-3.5 rounded-xl text-[15px]" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }} />
+      </div>
+
+      {err && <p className="text-[13px] mt-3" style={{ color: C.maroon }}>{err}</p>}
+
+      <button onClick={() => decide("verified")} disabled={busy}
+        className="tap w-full rounded-2xl flex items-center justify-center gap-2 text-[16px] font-semibold mt-4"
+        style={{ height: 54, background: C.pine, color: "#fff", boxShadow: `0 10px 24px ${C.pine}40` }}>
+        <Check size={19} strokeWidth={2.6} /> {busy ? "Saving…" : "Yes, this is true"}
+      </button>
+      <button onClick={() => decide("declined")} disabled={busy}
+        className="tap w-full rounded-2xl text-[15px] font-semibold mt-2.5"
+        style={{ height: 50, background: C.card, border: `1px solid ${C.line}`, color: C.maroon }}>
+        No, this is not right
+      </button>
+
+      <p className="text-[12.5px] mt-4 leading-snug text-center" style={{ color: C.muted }}>
+        You do not need an account. Please say no if anything is wrong — that honesty is what keeps
+        every review on the hub worth reading.
+      </p>
+    </Shell>
+  );
+}
+
 export default function App() {
   useAutoUpdate();
   // A guest arriving on a review link never signs in — they see only the review form.
   const reviewToken = useMemo(() => {
     try { return new URLSearchParams(window.location.search).get("review"); }
+    catch (e) { return null; }
+  }, []);
+  // A tour operator arriving on a verify link never signs in either.
+  const verifyToken = useMemo(() => {
+    try { return new URLSearchParams(window.location.search).get("verify"); }
     catch (e) { return null; }
   }, []);
   const realUserRef = useRef(null);   // current signed-in id — set below, used by every action
@@ -971,6 +1135,7 @@ export default function App() {
     createTripFromJob({ id: `${listing.id}_${applicant.talentId}`, toTalentId: applicant.talentId, operator: listing.operator, title: listing.title, start: listing.start, end: listing.end });
   };
 
+  if (verifyToken) return <VerifyReview token={verifyToken} />;
   if (reviewToken) {
     return (
       <ErrorBoundary>
@@ -1100,18 +1265,26 @@ const ROLE_PITCH = {
   business: {
     label: "Hotel or business", sub: "I have a hotel or shop", Icon: Store,
     eyebrow: "For hotels, shops and studios",
-    title: "Let every tour find you.",
-    lede: "Guides and operators choose the stops. Show them your rooms and what you sell before the bus arrives.",
+    title: "All your bookings in one place.",
+    lede: "Right now your bookings sit in WhatsApp, on the phone and in a book. Here every operator books you in one place, and you say yes or no with one tap.",
     cta: "Sign up as a business",
     points: [
+      { Icon: CalendarCheck, title: "Requests come to you",
+        body: "You see who is asking, the dates, how many guests and what they need. Tap Confirm or Decline." },
+      { Icon: CalendarDays, title: "One calendar, everyone sees it",
+        body: "Free days, held days and full days. Operators look at the same calendar before they ask, so nobody asks for a day you are full." },
+      { Icon: Lock, title: "Close the days you are full",
+        body: "Tap a day to shut it. Tap it again to open it. Operators see the change straight away." },
+      { Icon: Wallet, title: "Get paid without chasing",
+        body: "Save your bank or MBoB number one time. The operator gets it the moment you say yes." },
+      { Icon: Bell, title: "You never miss a request",
+        body: "A number sits on your Bookings tab showing how many are waiting for an answer." },
       { Icon: Store, title: "Your own page",
-        body: "Rooms, things you sell, opening hours. On a page operators and guides actually look at." },
-      { Icon: CalendarDays, title: "Show what is free",
-        body: "Keep your empty rooms up to date, so a tour knows before it comes to your door." },
+        body: "Your photos, your rooms, what you sell. Tour operators look here when they plan where a group will stay." },
       { Icon: Newspaper, title: "Put news on the feed",
         body: "Offers, new rooms, things in season. Seen by the people who plan the trips." },
       { Icon: MessageSquare, title: "They can message you",
-        body: "Operators and guides reach you here. No hunting for a phone number." },
+        body: "Tour operators message you here. The guide bringing the group can reach you too, if they are running late." },
     ],
   },
 };
@@ -2729,7 +2902,7 @@ function TalentProfile({ talent, posts, canRequest, viewer, self, contactOnly, e
             <>
               {["guide", "driver"].includes(t.role) && <GuestReviews talentId={t.id} isAdmin={eng?.isAdmin} isSelf={self} onAskOperator={() => setAskOperator(true)} />}
               {["guide", "driver"].includes(t.role) && <ReviewLinks t={t} />}
-              {["guide", "driver"].includes(t.role) && <LegacyAttested talentId={t.id} isAdmin={eng?.isAdmin} />}
+              {["guide", "driver"].includes(t.role) && <LegacyVerified talentId={t.id} isAdmin={eng?.isAdmin} />}
 
               <div className="mt-6" />
 
@@ -2926,24 +3099,24 @@ function OperatorDesk({ user, trips, listings, jobs, actions, onOpenProfile, onN
   };
   useEffect(() => { loadRv(); }, [myTrips.length]);
 
-  // ---- past-review attestations awaiting this operator ----
-  const [attests, setAttests] = useState([]);
-  const loadAttests = async () => {
+  // ---- past-review verifications awaiting this operator ----
+  const [verifys, setVerifys] = useState([]);
+  const loadVerifys = async () => {
     const { data } = await supabase.from("legacy_reviews").select("*")
       .eq("operator_id", me).eq("status", "pending").order("created_at");
-    setAttests(data || []);
+    setVerifys(data || []);
   };
-  useEffect(() => { loadAttests(); }, [me]);
-  const decideAttest = async (r, status) => {
+  useEffect(() => { loadVerifys(); }, [me]);
+  const decideVerify = async (r, status) => {
     await supabase.from("legacy_reviews").update({ status, decided_at: new Date().toISOString() }).eq("id", r.id);
     await supabase.from("system_nudges").insert({
-      profile_id: r.profile_id, kind: "attest-done", ref: r.id,
-      title: status === "attested" ? "Your past review was attested ✓" : "A past review was declined",
-      body: `“${r.trip_label}” — ${status === "attested" ? `${t.name} attested it. It now shows on your Portfolio.` : `${t.name} could not confirm this one.`}`,
+      profile_id: r.profile_id, kind: "verify-done", ref: r.id,
+      title: status === "verified" ? "Your past review was verified ✓" : "A past review was declined",
+      body: `“${r.trip_label}” — ${status === "verified" ? `${t.name} verified it. It now shows on your Portfolio.` : `${t.name} could not confirm this one.`}`,
     });
-    loadAttests();
+    loadVerifys();
   };
-  const viewAttestNote = async (r) => {
+  const viewVerifyNote = async (r) => {
     if (!r.photo_path) return;
     const { data } = await supabase.storage.from("certs").createSignedUrl(r.photo_path, 600);
     if (data?.signedUrl) window.open(data.signedUrl, "_blank", "noopener");
@@ -3094,15 +3267,15 @@ function OperatorDesk({ user, trips, listings, jobs, actions, onOpenProfile, onN
         </div>
       )}
 
-      {/* attestations */}
-      {attests.length > 0 && (
+      {/* verifications */}
+      {verifys.length > 0 && (
         <>
-          <div className="mt-6"><SectionLabel trailing={`${attests.length}`}>Attestations awaiting you</SectionLabel></div>
+          <div className="mt-6"><SectionLabel trailing={`${verifys.length}`}>Reviews waiting for you to verify</SectionLabel></div>
           <p className="text-[11.5px] mb-2 leading-snug" style={{ color: C.muted }}>
-            Attest only what you can personally confirm — your name goes on it, visible to every operator and guest.
+            Say yes only to what you remember yourself — your name goes on it, visible to every operator and guest.
           </p>
           <div className="space-y-2.5">
-            {attests.map((r) => {
+            {verifys.map((r) => {
               const g = talentById(r.profile_id);
               return (
                 <div key={r.id} className="rounded-2xl p-4" style={{ background: C.card, border: `1.5px solid ${C.gold}` }}>
@@ -3115,13 +3288,13 @@ function OperatorDesk({ user, trips, listings, jobs, actions, onOpenProfile, onN
                   </div>
                   <div className="flex items-center gap-2 mt-3">
                     {r.photo_path && (
-                      <button onClick={() => viewAttestNote(r)} className="tap text-[12px] font-semibold rounded-full px-3 py-1.5"
+                      <button onClick={() => viewVerifyNote(r)} className="tap text-[12px] font-semibold rounded-full px-3 py-1.5"
                         style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }}>View original note</button>
                     )}
-                    <button onClick={() => decideAttest(r, "declined")} className="tap text-[12px] font-semibold rounded-full px-3 py-1.5 ml-auto"
+                    <button onClick={() => decideVerify(r, "declined")} className="tap text-[12px] font-semibold rounded-full px-3 py-1.5 ml-auto"
                       style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.maroon }}>Decline</button>
-                    <button onClick={() => decideAttest(r, "attested")} className="tap text-[12px] font-semibold rounded-full px-3.5 py-1.5"
-                      style={{ background: C.pine, color: "#fff" }}>Attest ✓</button>
+                    <button onClick={() => decideVerify(r, "verified")} className="tap text-[12px] font-semibold rounded-full px-3.5 py-1.5"
+                      style={{ background: C.pine, color: "#fff" }}>Verify ✓</button>
                   </div>
                 </div>
               );
@@ -3183,15 +3356,15 @@ function ReviewLinks({ t }) {
   );
 }
 
-function LegacyAttested({ talentId, isAdmin }) {
+function LegacyVerified({ talentId, isAdmin }) {
   const [rows, setRows] = useState([]);
   const [busyId, setBusyId] = useState(null);
   const load = () =>
-    supabase.from("legacy_reviews").select("*").eq("profile_id", talentId).eq("status", "attested")
+    supabase.from("legacy_reviews").select("*").eq("profile_id", talentId).eq("status", "verified")
       .order("trip_year", { ascending: false })
       .then(({ data }) => setRows(data || []));
   useEffect(() => { load(); }, [talentId]);
-  // Admin may revoke or remove — never attest. An operator's name on a review
+  // Admin may revoke or remove — never verify. An operator's name on a review
   // must always mean that operator actually said so.
   const revoke = async (id) => {
     setBusyId(id);
@@ -3206,7 +3379,7 @@ function LegacyAttested({ talentId, isAdmin }) {
   if (!rows.length) return null;
   return (
     <div className="mt-6">
-      <SectionLabel trailing={`${rows.length}`}>Past trip reviews · attested</SectionLabel>
+      <SectionLabel trailing={`${rows.length}`}>Past trip reviews · verified</SectionLabel>
       <div className="space-y-3">
         {rows.map((r) => {
           const op = talentById(r.operator_id);
@@ -3219,7 +3392,7 @@ function LegacyAttested({ talentId, isAdmin }) {
               <div className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 mt-2.5" style={{ background: C.pineSoft }}>
                 <BadgeCheck size={12} color={C.pine} />
                 <span className="text-[11.5px] font-semibold" style={{ color: C.pine }}>
-                  Trip with {op ? op.name : "operator"} · past trip, attested
+                  Trip with {op ? op.name : "operator"} · past trip, verified
                 </span>
               </div>
               {isAdmin && (
@@ -3237,7 +3410,7 @@ function LegacyAttested({ talentId, isAdmin }) {
         })}
       </div>
       <p className="text-[11.5px] mt-2 leading-snug" style={{ color: C.muted }}>
-        Past reviews are attested by the operator who ran the trip. They appear as words only and never change the star rating.
+        Past reviews are verified by the operator who ran the trip. They appear as words only and never change the star rating.
       </p>
     </div>
   );
@@ -3288,15 +3461,13 @@ function LegacyReviewsSheet({ talent, onClose }) {
     setLinkNote(error ? (error.message || "Couldn't save.") : "Saved — the links now show on your Portfolio.");
   };
 
+  const verifyLink = (r) => `${window.location.origin}/?verify=${r.verify_token}`;
   const inviteMsg = (r) => (
-    `Kuzuzangpo la! This is ${talent.name} — we worked together on “${r.trip_label}”${r.trip_year ? ` (${r.trip_year})` : ""}. ` +
-    `I'm building my verified profile on Bhutan Tourism Hub, the platform where Bhutanese operators hire licensed guides, ` +
-    `and I've added the review our guest gave us from that trip.\n\n` +
-    `Reviews there only appear once the operator confirms them, so I'd be grateful if you could attest it:\n` +
-    `1. Open bhutantourismhub.com and join as a Tour Operator (takes 2 minutes).\n` +
-    `2. Tell me once your account is ready — I'll link the review to you in the app.\n` +
-    `3. It will appear on your Profile desk under “Attestations awaiting you” — read it, and tap Attest only if it matches what you remember.\n\n` +
-    `Please judge it with complete honesty — decline it if anything is wrong. That honesty is exactly what keeps every review on the platform truthful, including this one we completed together. Thank you la!`
+    `Kuzuzangpo la! This is ${talent.name}. We worked together on “${r.trip_label}”${r.trip_year ? ` (${r.trip_year})` : ""}.\n\n` +
+    `I am putting my old guest reviews on Bhutan Tourism Hub, and one of them is from that trip. ` +
+    `A review only goes up if the operator who was there says it is true.\n\n` +
+    `Please open this and tell us. It is one tap and you do NOT need an account:\n${verifyLink(r)}\n\n` +
+    `Please say no if anything is wrong. That is what keeps every review on the hub worth reading. Thank you la!`
   );
   const waInvite = (r) => {
     const digits = (r.operator_phone || "").replace(/[^0-9]/g, "");
@@ -3304,7 +3475,7 @@ function LegacyReviewsSheet({ talent, onClose }) {
     window.open(num ? `https://wa.me/${num}?text=${encodeURIComponent(inviteMsg(r))}` : `https://wa.me/?text=${encodeURIComponent(inviteMsg(r))}`, "_blank", "noopener");
   };
   const emailInvite = (r) => {
-    const sub = "Please attest our past trip review — Bhutan Tourism Hub";
+    const sub = "Please verify our past trip review — Bhutan Tourism Hub";
     window.open(`mailto:${r.operator_email || ""}?subject=${encodeURIComponent(sub)}&body=${encodeURIComponent(inviteMsg(r))}`, "_blank");
   };
   const linkOperator = async (row, p) => {
@@ -3312,9 +3483,9 @@ function LegacyReviewsSheet({ talent, onClose }) {
       .update({ operator_id: p.id, status: "pending" }).eq("id", row.id);
     if (!error) {
       await supabase.from("system_nudges").insert({
-        profile_id: p.id, kind: "attest", ref: row.id,
-        title: `${talent.name} asks you to attest a past review`,
-        body: `“${row.trip_label}” — open your Profile desk to read and attest.`,
+        profile_id: p.id, kind: "verify", ref: row.id,
+        title: `${talent.name} asks you to verify a past review`,
+        body: `“${row.trip_label}” — open your Profile desk to read and verify.`,
       });
     }
     setLinkFor(null); setLinkQuery(""); load();
@@ -3323,7 +3494,7 @@ function LegacyReviewsSheet({ talent, onClose }) {
   const waNudge = (op, r) => {
     const digits = (op?.phone || "").replace(/[^0-9]/g, "");
     const num = digits.length === 8 ? "975" + digits : digits;
-    const msg = `Kuzuzangpo la! I've added our past trip “${r.trip_label}”${r.trip_year ? ` (${r.trip_year})` : ""} as a review on Bhutan Tourism Hub — please open your Profile desk and tap Attest so it shows on my page. — ${talent.name}`;
+    const msg = `Kuzuzangpo la! I've added our past trip “${r.trip_label}”${r.trip_year ? ` (${r.trip_year})` : ""} as a review on Bhutan Tourism Hub — please open your Profile desk and tap Verify so it shows on my page. — ${talent.name}`;
     window.open(num ? `https://wa.me/${num}?text=${encodeURIComponent(msg)}` : `https://wa.me/?text=${encodeURIComponent(msg)}`, "_blank", "noopener");
   };
 
@@ -3334,8 +3505,23 @@ function LegacyReviewsSheet({ talent, onClose }) {
   };
 
   const pendingCount = (rows || []).filter((r) => r.status === "pending").length;
+const shareVerify = (r) => {
+    const link = `${window.location.origin}/?verify=${r.verify_token}`;
+    const msg =
+      `Kuzuzangpo ${r.operator_name || ""}.\n\n` +
+      `This is ${talent.name}. I am putting my old guest reviews on Bhutan Tourism Hub, ` +
+      `and one of them is from a trip I did with you.\n\n` +
+      `Could you open this and say if it is true? It takes one tap and you do NOT need an account:\n${link}\n\n` +
+      `Please say no if anything is wrong. Thank you.`;
+    const digits = (r.operator_phone || "").replace(/[^0-9]/g, "");
+    const wa = digits ? (digits.length === 8 ? "975" + digits : digits) : null;
+    if (wa) window.open(`https://wa.me/${wa}?text=${encodeURIComponent(msg)}`, "_blank", "noopener");
+    else if (r.operator_email) window.location.href = `mailto:${r.operator_email}?subject=${encodeURIComponent("Please confirm a past trip review")}&body=${encodeURIComponent(msg)}`;
+    else navigator.clipboard?.writeText(link);
+  };
+
   const submit = async () => {
-    if (pendingCount >= 3) { setErr("You already have 3 reviews awaiting attestation — nudge those operators or withdraw one first."); return; }
+    if (pendingCount >= 3) { setErr("You already have 3 reviews awaiting verification — nudge those operators or withdraw one first."); return; }
     if (offMode) {
       if (!opName.trim()) { setErr("Enter the tour operator's company name."); return; }
       if (!opPhone.trim() && !opEmail.trim()) { setErr("Add the operator's WhatsApp number or email so we can invite them."); return; }
@@ -3343,20 +3529,22 @@ function LegacyReviewsSheet({ talent, onClose }) {
     if (!tripLabel.trim() || !body.trim()) { setErr("Trip name and the review words are required."); return; }
     setBusy(true); setErr(null);
     try {
-      let photo_path = null;
+      let photo_path = null; let photo_url = null;
       if (photoUri) {
         const small = await shrinkImage(photoUri, 1400, 0.85);
         const blob = dataUriToBlob(small);
         photo_path = `${me}/legacy-${Date.now()}.jpg`;
         const { error: upErr } = await supabase.storage.from("certs").upload(photo_path, blob, { contentType: "image/jpeg" });
         if (upErr) throw upErr;
+        const { data: signed } = await supabase.storage.from("certs").createSignedUrl(photo_path, 60 * 60 * 24 * 180);
+        photo_url = signed?.signedUrl || null;
       }
       const payload = offMode
         ? { profile_id: me, operator_id: null, status: "invited",
             operator_name: opName.trim(), operator_phone: opPhone.trim() || null, operator_email: opEmail.trim() || null }
         : { profile_id: me, operator_id: opId };
       const { data: ins, error } = await supabase.from("legacy_reviews").insert({
-        ...payload, trip_label: tripLabel.trim(),
+        ...payload, photo_url, trip_label: tripLabel.trim(),
         trip_year: tripYear ? Number(tripYear) : null,
         guest_name: guestName.trim() || null, guest_country: guestCountry.trim() || null,
         body: body.trim(), photo_path,
@@ -3364,9 +3552,9 @@ function LegacyReviewsSheet({ talent, onClose }) {
       if (error) throw error;
       if (!offMode) {
         await supabase.from("system_nudges").insert({
-          profile_id: opId, kind: "attest", ref: ins.id,
-          title: `${talent.name} asks you to attest a past review`,
-          body: `“${tripLabel.trim()}” — open your Profile desk to read and attest.`,
+          profile_id: opId, kind: "verify", ref: ins.id,
+          title: `${talent.name} asks you to verify a past review`,
+          body: `“${tripLabel.trim()}” — open your Profile desk to read and verify.`,
         });
       }
       setAdding(false); setOpId(null); setOpQuery(""); setOffMode(false);
@@ -3394,8 +3582,8 @@ function LegacyReviewsSheet({ talent, onClose }) {
           <div className="text-[13.5px] font-semibold mb-3" style={{ color: C.ink }}>How verified past reviews work</div>
           {[
             ["1", "You transcribe it", "Type the review word for word. Attach a photo of the original note or chat — only the operator sees it."],
-            ["2", "The operator confirms", "The operator you worked with reads it and taps Attest. Their name goes on the review."],
-            ["3", "It appears verified", "It shows on your Portfolio as “Trip with that operator · attested”. Words only — stars come only from guest links."],
+            ["2", "The operator confirms", "The operator you worked with reads it and taps Verify. Their name goes on the review."],
+            ["3", "It appears verified", "It shows on your Portfolio as “Trip with that operator · verified”. Words only — stars come only from guest links."],
           ].map(([k, h, b]) => (
             <div key={k} className="flex items-start gap-3 mb-2.5">
               <span className="w-6 h-6 rounded-full flex items-center justify-center text-[12px] font-bold shrink-0"
@@ -3407,8 +3595,8 @@ function LegacyReviewsSheet({ talent, onClose }) {
             </div>
           ))}
           <p className="text-[11.5px] mt-1 leading-snug" style={{ color: C.muted }}>
-            If the operator can't remember or confirm a review, they'll decline it — that keeps every attested
-            review worth something. You can have up to 3 awaiting attestation at a time.
+            If the operator can't remember or confirm a review, they'll decline it — that keeps every verified
+            review worth something. You can have up to 3 awaiting verification at a time.
           </p>
         </div>
 
@@ -3420,7 +3608,7 @@ function LegacyReviewsSheet({ talent, onClose }) {
         <button onClick={saveLinks} className="tap h-10 px-4 rounded-xl text-[13px] font-semibold" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.pine }}>Save links</button>
         {linkNote && <p className="text-[12px] mt-1.5" style={{ color: C.pine }}>{linkNote}</p>}
 
-        <div className="mt-6"><SectionLabel trailing={rows ? `${rows.length}` : null}>Submitted for attestation</SectionLabel></div>
+        <div className="mt-6"><SectionLabel trailing={rows ? `${rows.length}` : null}>Submitted for verification</SectionLabel></div>
         {rows && rows.length === 0 && !adding && (
           <p className="text-[12.5px] mb-2" style={{ color: C.muted }}>Nothing yet — add a past review below.</p>
         )}
@@ -3440,20 +3628,22 @@ function LegacyReviewsSheet({ talent, onClose }) {
                       {r.operator_phone && (
                         <button onClick={() => waInvite(r)} className="tap text-[11.5px] font-semibold rounded-full px-2.5 py-1 inline-flex items-center gap-1"
                           style={{ background: "rgba(37,211,102,.13)", border: "1px solid rgba(37,211,102,.45)", color: "#1FA855" }}>
-                          <MessageCircle size={11} /> Invite
+                          <MessageCircle size={11} /> Send for approval
                         </button>
                       )}
                       {r.operator_email && (
                         <button onClick={() => emailInvite(r)} className="tap text-[11.5px] font-semibold rounded-full px-2.5 py-1"
                           style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }}>Email</button>
                       )}
+                      <button onClick={() => shareVerify(r)} className="tap text-[11.5px] font-semibold rounded-full px-2.5 py-1"
+                        style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }}>Copy link</button>
                       <button onClick={() => { setLinkFor(linkFor === r.id ? null : r.id); setLinkQuery(""); }}
                         className="tap text-[11.5px] font-semibold rounded-full px-2.5 py-1"
                         style={{ background: C.pineSoft, color: C.pine }}>They joined</button>
                       <button onClick={() => withdraw(r.id)} className="tap text-[11.5px] ml-auto" style={{ color: C.maroon }}>Withdraw</button>
                     </>
-                  ) : r.status === "attested" ? (
-                    <span className="text-[11.5px] font-semibold rounded-full px-2.5 py-1" style={{ background: C.pineSoft, color: C.pine }}>Attested by {op ? op.name : "operator"} ✓</span>
+                  ) : r.status === "verified" ? (
+                    <span className="text-[11.5px] font-semibold rounded-full px-2.5 py-1" style={{ background: C.pineSoft, color: C.pine }}>Verified by {op ? op.name : "operator"} ✓</span>
                   ) : r.status === "declined" ? (
                     <span className="text-[11.5px] font-semibold rounded-full px-2.5 py-1" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.muted }}>Declined</span>
                   ) : (
@@ -3463,6 +3653,8 @@ function LegacyReviewsSheet({ talent, onClose }) {
                         style={{ background: "rgba(37,211,102,.13)", border: "1px solid rgba(37,211,102,.45)", color: "#1FA855" }}>
                         <MessageCircle size={11} /> Nudge
                       </button>
+                      <button onClick={() => shareVerify(r)} className="tap text-[11.5px] font-semibold rounded-full px-2.5 py-1"
+                        style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }}>Send link</button>
                       <button onClick={() => withdraw(r.id)} className="tap text-[11.5px] ml-auto" style={{ color: C.maroon }}>Withdraw</button>
                     </>
                   )}
@@ -3487,7 +3679,7 @@ function LegacyReviewsSheet({ talent, onClose }) {
         {!adding ? (
           pendingCount >= 3 ? (
             <p className="text-[12.5px] mt-4 text-center" style={{ color: C.muted }}>
-              3 reviews are awaiting attestation — nudge those operators, or withdraw one to add another.
+              3 reviews are awaiting verification — nudge those operators, or withdraw one to add another.
             </p>
           ) : (
           <button onClick={() => setAdding(true)} className="tap w-full h-11 rounded-xl text-[14px] font-semibold mt-4" style={{ background: C.pine, color: "#fff" }}>
@@ -3499,7 +3691,7 @@ function LegacyReviewsSheet({ talent, onClose }) {
             <div className="rounded-xl px-3 py-2.5 text-[12px] leading-snug mb-3" style={{ background: C.goldSoft, color: "#7a5a1e" }}>
               Handwritten notes and WhatsApp messages: type the words exactly as written into the box below
               (transcribe them), and attach a photo of the original. The photo is shown only to the operator
-              you choose — never publicly — so they can verify before attesting.
+              you choose — never publicly — so they can verify before verifying.
             </div>
 
             {!chosenOp ? (
@@ -3539,7 +3731,7 @@ function LegacyReviewsSheet({ talent, onClose }) {
                     className="flex-1 h-11 px-3.5 rounded-xl text-[13.5px]" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }} />
                 </div>
                 <p className="text-[11.5px] mt-2 leading-snug" style={{ color: "#7a5a1e" }}>
-                  We'll prepare an invitation explaining how to join and how to attest your review with complete honesty.
+                  We'll prepare an invitation explaining how to join and how to verify your review with complete honesty.
                 </p>
                 <button onClick={() => setOffMode(false)} className="tap text-[12px] mt-1" style={{ color: C.muted }}>Back to search</button>
               </div>
@@ -3586,7 +3778,7 @@ function LegacyReviewsSheet({ talent, onClose }) {
               <button onClick={() => { setAdding(false); setErr(null); }} className="tap flex-1 h-11 rounded-xl text-[13.5px] font-semibold"
                 style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.muted }}>Cancel</button>
               <button onClick={submit} disabled={busy} className="tap flex-1 h-11 rounded-xl text-[13.5px] font-semibold"
-                style={{ background: C.pine, color: "#fff" }}>{busy ? "Submitting…" : "Send for attestation"}</button>
+                style={{ background: C.pine, color: "#fff" }}>{busy ? "Submitting…" : "Send for verification"}</button>
             </div>
           </div>
         )}
@@ -5982,6 +6174,8 @@ function BusinessAvailability({ business, viewer }) {
 
   const request = async () => {
     if (!start || !end || end < start) { setMsg("Pick a valid date range first."); return; }
+    const clash = rows.find((b) => ["confirmed", "blocked"].includes(b.status) && b.start_date <= end && b.end_date >= start);
+    if (clash) { setMsg("Those days are already taken. Pick days that are free on the calendar above."); return; }
     setBusy(true); setMsg(null);
     const { error } = await supabase.from("business_bookings").insert({
       business_id: business.id, operator_id: viewer.talentId,
@@ -6272,7 +6466,7 @@ function Onboard({ mode: initialMode, session, presetRole, onBack, onDone }) {
             { id: "operator", label: "Tour Operator", sub: "I book guides and drivers", Icon: Building2,
               points: ["Search verified guides and drivers", "Post jobs and hire in minutes", "Run every trip in one place"] },
             { id: "business", label: "Business", sub: "I run a hotel, boutique or shop", Icon: Store,
-              points: ["A verified page guides and operators can find", "Share rooms, products and offers on the feed", "Direct messages from every tour passing through"] },
+              points: ["A verified page tour operators can find", "Share rooms, products and offers on the feed", "Direct messages from every tour passing through"] },
           ].map(({ id, label, sub: subT, Icon, points }) => (
             <button key={id} onClick={() => { setRole(id); setStep("about"); }} className="tap w-full text-left rounded-2xl p-4 mb-3"
               style={{ background: C.card, border: `1.5px solid ${role === id ? C.pine : C.line}` }}>
@@ -8236,7 +8430,7 @@ function Tutorial({ user, nav, setTab, onDone }) {
         { kind: "tab", tab: "post", title: "Your Feed", body: "Post your rooms, products and offers — every guide and operator on the hub sees this feed." },
         { kind: "tab", tab: "bookings", title: "Bookings", body: "Your live calendar. Tap days to block them, and confirm operator requests right here." },
         { kind: "tab", tab: "discover", title: "Discover", body: "Browse verified guides, drivers and fellow businesses across Bhutan." },
-        { kind: "tab", tab: "chats", title: "Messages", body: "Operators and guides can message you directly to plan stops and stays." },
+        { kind: "tab", tab: "chats", title: "Messages", body: "Tour operators message you here to plan stays. The guide on the trip can reach you too." },
         { kind: "tab", tab: "profile", title: "Your Page", body: "Photos, what you offer, and your location — this is what passing tours see." },
         { kind: "top", title: "Search & alerts", body: "Search anyone by name, and tap the bell for messages and follows." },
         { kind: "outro", title: "One last thing", body: user.licenseStatus === "submitted"
