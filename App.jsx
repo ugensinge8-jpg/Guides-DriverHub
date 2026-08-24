@@ -6,7 +6,7 @@ import {
   BadgeCheck, MapPin, Inbox, ChevronLeft, Star, Phone, Mail, Briefcase,
   Search, LogOut, Newspaper, User, CalendarCheck, MessageCircle,
   Map as MapIcon, MessageSquare, Users, Download, Mic, Video as VideoIcon, Heart, Share2, Trash2, Maximize2, Upload, Loader2, ArrowRight,
-  Award, UserX, RefreshCw, FileCheck2, ExternalLink, UserPlus, Send as SendIcon, Lock, Eye, EyeOff, CalendarDays, UserCheck, Plus, CheckCheck, Camera, Navigation as NavIcon, Bell, Smartphone, Share, PhoneCall, Wallet,
+  Award, UserX, RefreshCw, FileCheck2, ExternalLink, UserPlus, Send as SendIcon, Lock, Eye, EyeOff, CalendarDays, UserCheck, Plus, CheckCheck, Camera, Navigation as NavIcon, Bell, Share, PhoneCall, Wallet,
   ShieldAlert, Store, Sparkles,
 } from "lucide-react";
 import mapImg from "./map.jpg";
@@ -53,7 +53,7 @@ const sysMsg = (text) => ({ id: uid(), senderId: null, kind: "system", body: tex
 /* ── Cloud (Supabase) ── posts are global when configured; everything falls back to local demo mode when not. */
 const CLOUD = Boolean(supabase);
 const DEMO_MODE = false;   // set true only for local demos without a database
-const BUILD = "BUILD 16 — 14 Aug";   // bump every deploy; shown at the top of the welcome screen
+const BUILD = "BUILD 17 — 24 Aug";   // bump every deploy; shown at the top of the welcome screen
 
 /* ---- Install state ---- */
 // 43 characters of randomness — not guessable
@@ -1539,6 +1539,21 @@ function Shell({ user, posts, jobs, trips, listings, actions, engagement, dm, di
   const lastAlertCount = useRef(0);
   const [notifyOn, setNotifyOn] = useState(typeof Notification !== "undefined" && Notification.permission === "granted");
   const [installSheet, setInstallSheet] = useState(false);
+  const [feedbackOpen, setFeedbackOpen] = useState(false);
+  // Ask once the app has actually been used, never twice in a fortnight, never after they answer.
+  useEffect(() => {
+    let t;
+    try {
+      if (localStorage.getItem("bth_feedback_sent")) return;
+      const seen = Number(localStorage.getItem("bth_feedback_asked") || 0);
+      if (Date.now() - seen < 14 * 86400000) return;
+      const opens = Number(localStorage.getItem("bth_opens") || 0) + 1;
+      localStorage.setItem("bth_opens", String(opens));
+      if (opens < 3) return;
+      t = setTimeout(() => setFeedbackOpen(true), 90000);
+    } catch (e) {}
+    return () => clearTimeout(t);
+  }, []);
   const [firstRun, setFirstRun] = useState(() => {
     try { return CLOUD && !localStorage.getItem("bth_seen_intro_" + (user.talentId || user.id)); } catch (e) { return false; }
   });
@@ -1699,6 +1714,11 @@ function Shell({ user, posts, jobs, trips, listings, actions, engagement, dm, di
       {installSheet && !installed && (
         <InstallSheet installEvent={installEvent}
           onClose={() => { setInstallSheet(false); try { localStorage.setItem("bth_install_dismissed", String(Date.now())); } catch (e) {} }} />
+      )}
+
+      {feedbackOpen && (
+        <FeedbackSheet user={user}
+          onClose={() => { setFeedbackOpen(false); try { localStorage.setItem("bth_feedback_asked", String(Date.now())); } catch (e) {} }} />
       )}
 
       {alertsOpen && (
@@ -3145,13 +3165,13 @@ function OperatorDesk({ user, trips, listings, jobs, actions, onOpenProfile, onN
   useEffect(() => { loadRv(); }, [myTrips.length]);
 
   // ---- past-review verifications awaiting this operator ----
-  const [verifys, setVerifys] = useState([]);
-  const loadVerifys = async () => {
+  const [toVerify, setToVerify] = useState([]);
+  const loadToVerify = async () => {
     const { data } = await supabase.from("legacy_reviews").select("*")
       .eq("operator_id", me).eq("status", "pending").order("created_at");
-    setVerifys(data || []);
+    setToVerify(data || []);
   };
-  useEffect(() => { loadVerifys(); }, [me]);
+  useEffect(() => { loadToVerify(); }, [me]);
   const decideVerify = async (r, status) => {
     await supabase.from("legacy_reviews").update({ status, decided_at: new Date().toISOString() }).eq("id", r.id);
     await supabase.from("system_nudges").insert({
@@ -3159,7 +3179,7 @@ function OperatorDesk({ user, trips, listings, jobs, actions, onOpenProfile, onN
       title: status === "verified" ? "Your past review was verified ✓" : "A past review was declined",
       body: `“${r.trip_label}” — ${status === "verified" ? `${t.name} verified it. It now shows on your Portfolio.` : `${t.name} could not confirm this one.`}`,
     });
-    loadVerifys();
+    loadToVerify();
   };
   const viewVerifyNote = async (r) => {
     if (!r.photo_path) return;
@@ -3313,14 +3333,14 @@ function OperatorDesk({ user, trips, listings, jobs, actions, onOpenProfile, onN
       )}
 
       {/* verifications */}
-      {verifys.length > 0 && (
+      {toVerify.length > 0 && (
         <>
-          <div className="mt-6"><SectionLabel trailing={`${verifys.length}`}>Reviews waiting for you to verify</SectionLabel></div>
+          <div className="mt-6"><SectionLabel trailing={`${toVerify.length}`}>Reviews waiting for you to verify</SectionLabel></div>
           <p className="text-[11.5px] mb-2 leading-snug" style={{ color: C.muted }}>
             Say yes only to what you remember yourself — your name goes on it, visible to every operator and guest.
           </p>
           <div className="space-y-2.5">
-            {verifys.map((r) => {
+            {toVerify.map((r) => {
               const g = talentById(r.profile_id);
               return (
                 <div key={r.id} className="rounded-2xl p-4" style={{ background: C.card, border: `1.5px solid ${C.gold}` }}>
@@ -8621,8 +8641,140 @@ function Tutorial({ user, nav, setTab, onDone }) {
 }
 
 /* ==================== Privacy, data rights & policy ===================== */
+/* ---------- What do you need? Asked inside the app, while it is fresh. --------- */
+function FeedbackSheet({ user, onClose }) {
+  const [rating, setRating] = useState(0);
+  const [trouble, setTrouble] = useState("");
+  const [wish, setWish] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [sent, setSent] = useState(false);
+  const [err, setErr] = useState(null);
+  const [past, setPast] = useState(null);
+
+  const isAdmin = user?.kind === "admin";
+  useEffect(() => {
+    if (!isAdmin || !CLOUD) return;
+    (async () => {
+      const { data } = await supabase.from("app_feedback").select("*").order("created_at", { ascending: false }).limit(60);
+      setPast(data || []);
+    })();
+  }, [isAdmin]);
+
+  const send = async () => {
+    if (busy) return;
+    if (!rating && !trouble.trim() && !wish.trim()) { setErr("Tell us one thing first, or tap Not now."); return; }
+    setBusy(true); setErr(null);
+    const { error } = await supabase.from("app_feedback").insert({
+      profile_id: user.talentId, role: user.kind, rating: rating || null,
+      trouble: trouble.trim() || null, wish: wish.trim() || null, build: BUILD,
+    });
+    setBusy(false);
+    if (error) { setErr("That did not send. Check your connection and try once more."); return; }
+    try { localStorage.setItem("bth_feedback_sent", String(Date.now())); } catch (e) {}
+    setSent(true);
+  };
+
+  return createPortal((
+    <div className="fixed inset-0 flex items-end" style={{ background: "rgba(8,10,8,.55)", zIndex: 232 }} onClick={onClose}>
+      <div className="w-full rounded-t-3xl flex flex-col safe-bottom" style={{ background: C.bg, maxHeight: "86dvh" }} onClick={(e) => e.stopPropagation()}>
+        <div className="pt-3 shrink-0"><div className="w-10 h-1 rounded-full mx-auto" style={{ background: C.line }} /></div>
+        <div className="px-5 pt-3 pb-6 overflow-y-auto hidescroll" style={{ scrollbarWidth: "none" }}>
+        {sent ? (
+          <div className="text-center py-6">
+            <div className="w-14 h-14 rounded-2xl mx-auto flex items-center justify-center" style={{ background: C.pineSoft }}>
+              <Check size={26} color={C.pine} strokeWidth={2.6} />
+            </div>
+            <div className="text-[18px] font-semibold mt-3" style={{ color: C.ink }}>Thank you. This is read.</div>
+            <p className="text-[14px] mt-2 leading-relaxed" style={{ color: C.muted }}>
+              Every message goes straight to the people building this app. If you told us something is broken,
+              it goes on the list to fix.
+            </p>
+            <button onClick={onClose} className="tap w-full rounded-2xl text-[15px] font-semibold mt-5"
+              style={{ height: 50, background: C.pine, color: "#fff" }}>Close</button>
+          </div>
+        ) : (
+          <>
+            <div className="inline-flex items-center gap-2 rounded-full px-3 py-1.5" style={{ background: C.goldSoft }}>
+              <Sparkles size={13} color={C.gold} />
+              <span className="text-[11px] font-bold tracking-[.08em] uppercase" style={{ color: C.gold }}>Prototype</span>
+            </div>
+
+            <h2 className="text-[21px] leading-tight font-semibold mt-3" style={{ color: C.ink }}>
+              This app is still being built, around you.
+            </h2>
+            <p className="text-[14px] mt-2 leading-relaxed" style={{ color: C.muted }}>
+              Nothing here is fixed yet. Tell us what is hard and what is missing, and we will build it.
+              You are one of the first people using this.
+            </p>
+
+            <div className="mt-5">
+              <BLabel>How is it so far?</BLabel>
+              <div className="flex gap-2">
+                {[1, 2, 3, 4, 5].map((n) => (
+                  <button key={n} onClick={() => setRating(n)} aria-label={`${n} star`}
+                    className="tap flex-1 rounded-xl flex items-center justify-center"
+                    style={{ height: 52, background: n <= rating ? C.goldSoft : C.card, border: `1px solid ${n <= rating ? C.gold : C.line}` }}>
+                    <Star size={22} color={n <= rating ? C.gold : "#C7CEC7"} fill={n <= rating ? C.gold : "none"} />
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="mt-4">
+              <BLabel>What is hard right now?</BLabel>
+              <textarea value={trouble} onChange={(e) => setTrouble(e.target.value)} rows={3} maxLength={600}
+                placeholder="Something confusing, slow, or not working."
+                className="w-full px-3.5 py-3 rounded-xl text-[15px] leading-relaxed resize-none"
+                style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }} />
+            </div>
+
+            <div className="mt-4">
+              <BLabel>What should we add?</BLabel>
+              <textarea value={wish} onChange={(e) => setWish(e.target.value)} rows={3} maxLength={600}
+                placeholder="Anything that would make your work easier."
+                className="w-full px-3.5 py-3 rounded-xl text-[15px] leading-relaxed resize-none"
+                style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }} />
+            </div>
+
+            {err && <p className="text-[13px] mt-3" style={{ color: C.maroon }}>{err}</p>}
+
+            <button onClick={send} disabled={busy}
+              className="tap w-full rounded-2xl flex items-center justify-center gap-2 text-[15.5px] font-semibold mt-5"
+              style={{ height: 54, background: C.pine, color: "#fff" }}>
+              <Send size={17} /> {busy ? "Sending…" : "Send to the builders"}
+            </button>
+            <button onClick={onClose} className="tap w-full text-center text-[13.5px] font-semibold mt-3" style={{ color: C.muted }}>
+              Not now
+            </button>
+
+            {isAdmin && past && (
+              <div className="mt-7">
+                <SectionLabel trailing={`${past.length}`}>What people have said</SectionLabel>
+                {past.length === 0 && <p className="text-[13px]" style={{ color: C.muted }}>Nothing yet.</p>}
+                {past.map((f) => (
+                  <div key={f.id} className="rounded-xl p-3 mb-2" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+                    <div className="flex items-center gap-2 mb-1">
+                      {f.rating ? <span className="text-[12px] font-bold" style={{ color: C.gold }}>{"★".repeat(f.rating)}</span> : null}
+                      <span className="text-[11.5px]" style={{ color: C.muted }}>{f.role || "user"} · {new Date(f.created_at).toLocaleDateString("en-GB")}</span>
+                    </div>
+                    {f.trouble && <p className="text-[13.5px] leading-snug" style={{ color: C.ink }}>Hard: {f.trouble}</p>}
+                    {f.wish && <p className="text-[13.5px] leading-snug mt-1" style={{ color: C.pine }}>Wants: {f.wish}</p>}
+                    {f.build && <p className="text-[10.5px] mt-1.5" style={{ color: C.line }}>{f.build}</p>}
+                  </div>
+                ))}
+              </div>
+            )}
+          </>
+        )}
+        </div>
+      </div>
+    </div>
+  ), document.body);
+}
+
 function PrivacyPanel({ talent }) {
   const [legacyOpen, setLegacyOpen] = useState(false);
+  const [fb, setFb] = useState(false);
   const [open, setOpen] = useState(null);   // 'privacy' | 'terms' | 'data' | null
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState(null);
@@ -8694,8 +8846,10 @@ function PrivacyPanel({ talent }) {
       {note && <div className="mx-4 mb-2 rounded-lg px-3 py-2 text-[12.5px]" style={{ background: C.pineSoft, color: C.pine }}>{note}</div>}
 
       {legacyOpen && <LegacyReviewsSheet talent={talent} onClose={() => setLegacyOpen(false)} />}
+      {fb && <FeedbackSheet user={{ talentId: talent.id, kind: talent.role }} onClose={() => setFb(false)} />}
       {[
         ...(["guide", "driver"].includes(talent.role) ? [["Past trip reviews", () => setLegacyOpen(true)]] : []),
+        ["Send feedback about the app", () => setFb(true)],
         ["Privacy policy", () => setOpen("privacy")],
         ["Terms of use", () => setOpen("terms")],
         ["What we store about you", () => setOpen("data")],
