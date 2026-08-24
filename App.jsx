@@ -8056,10 +8056,10 @@ function TalentAvailability({ talent, onSet, viewerOnly = false, onRequestDates 
             </div>
           ) : (
             <>
-              <MonthCal ym={ym} marks={marks} onDay={viewerOnly && onRequestDates ? pickDay : undefined}
+              <MonthCal ym={ym} marks={marks}
                 onPrev={() => setYm(([y, m]) => { const d = new Date(y, m - 1, 1); return [d.getFullYear(), d.getMonth()]; })}
                 onNext={() => setYm(([y, m]) => { const d = new Date(y, m + 1, 1); return [d.getFullYear(), d.getMonth()]; })}
-                onDay={null} />
+                onDay={viewerOnly && onRequestDates ? pickDay : null} />
               <div className="text-[12px] font-semibold mt-2" style={{ color: C.pine }}>
                 {monthName}: {openDays} open day{openDays === 1 ? "" : "s"} — {viewerOnly ? "tap the days you need" : "your opportunities"}
               </div>
