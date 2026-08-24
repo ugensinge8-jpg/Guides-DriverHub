@@ -53,7 +53,7 @@ const sysMsg = (text) => ({ id: uid(), senderId: null, kind: "system", body: tex
 /* ── Cloud (Supabase) ── posts are global when configured; everything falls back to local demo mode when not. */
 const CLOUD = Boolean(supabase);
 const DEMO_MODE = false;   // set true only for local demos without a database
-const BUILD = "BUILD 17 — 24 Aug";   // bump every deploy; shown at the top of the welcome screen
+const BUILD = "BUILD 18 — 24 Aug";   // bump every deploy; shown at the top of the welcome screen
 
 /* ---- Install state ---- */
 // 43 characters of randomness — not guessable
@@ -3113,17 +3113,31 @@ function RequestForm({ talent, operator, presetStart, presetEnd, onBack, onSend 
 function Label({ children }) { return <div className="text-[13px] font-medium mb-1.5" style={{ color: C.ink }}>{children}</div>; }
 
 /* ============================== Trips + chat ============================== */
+/* A crew chat opens 3 days before the trip starts and closes 3 days after it ends.
+   Outside that window there is nothing to say, and an open channel just goes stale. */
+const TRIP_WINDOW_DAYS = 3;
 function tripStateNow(trip) {
-  const end = new Date(trip.end + "T23:59").getTime();
-  if (Date.now() > end) return "completed";
-  return trip.chat.state; // scheduled | active
+  const DAY = 86400000;
+  const startsAt = new Date(trip.start + "T00:00").getTime();
+  const endsAt = new Date(trip.end + "T23:59").getTime();
+  const now = Date.now();
+  if (now < startsAt - TRIP_WINDOW_DAYS * DAY) return "scheduled";
+  if (now > endsAt + TRIP_WINDOW_DAYS * DAY) return "completed";
+  if (now > endsAt) return "wrapping";
+  return "active";
+}
+function tripDaysLeft(trip) {
+  const DAY = 86400000;
+  const shuts = new Date(trip.end + "T23:59").getTime() + TRIP_WINDOW_DAYS * DAY;
+  return Math.max(0, Math.ceil((shuts - Date.now()) / DAY));
 }
 function TripStateBadge({ state }) {
   const m = {
     scheduled: { bg: C.goldSoft, fg: "#7a5a1e", label: "Opens soon" },
     active: { bg: C.pineSoft, fg: C.pine, label: "Live" },
+    wrapping: { bg: C.goldSoft, fg: "#7a5a1e", label: "Closing soon" },
     completed: { bg: C.bg, fg: C.muted, label: "Completed" },
-  }[state];
+  }[state] || { bg: C.bg, fg: C.muted, label: "Completed" };
   return <span className="rounded-full px-2.5 py-1 text-[11.5px] font-semibold" style={{ background: m.bg, color: m.fg }}>{m.label}</span>;
 }
 function CrewAvatars({ members, size = 26 }) {
@@ -4677,11 +4691,17 @@ function TripHub({ user, meId, trip, actions, onMessage, onBack }) {
           </>
         )}
 
-        <SectionLabel>Group chat</SectionLabel>
-        <div className="rounded-xl px-4 py-3.5 flex items-center gap-3" style={{ background: C.card, border: `1px solid ${C.line}` }}>
-          <div className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0" style={{ background: C.pine }}><MessageSquare size={17} color={C.goldSoft} /></div>
-          <div className="flex-1 text-[13.5px]" style={{ color: C.muted }}>Crew chat for this trip lives in <b style={{ color: C.ink }}>Messages</b>.</div>
-        </div>
+        <SectionLabel trailing={["active", "wrapping"].includes(tripStateNow(trip)) ? `closes in ${tripDaysLeft(trip)}d` : undefined}>Crew chat</SectionLabel>
+        {tripStateNow(trip) === "scheduled" ? (
+          <div className="rounded-xl px-4 py-3.5 flex items-center gap-3" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+            <div className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0" style={{ background: C.goldSoft }}><Clock size={17} color={C.gold} /></div>
+            <div className="flex-1 text-[13.5px]" style={{ color: C.muted }}>
+              This chat opens <b style={{ color: C.ink }}>3 days before</b> the trip starts.
+            </div>
+          </div>
+        ) : (
+          <Chat user={user} meId={meId} trip={trip} state={tripStateNow(trip)} actions={actions} />
+        )}
       </div>
     </div>
   );
@@ -6839,7 +6859,6 @@ function Onboard({ mode: initialMode, session, presetRole, onBack, onDone }) {
 /* ===================== Messages · unified inbox (trips + DMs) ==================== */
 function ChatsTab({ user, me, dm, trips, actions, posts, dirTick, onOpenPost, openWith, onOpened, onOpenProfile }) {
   const [withId, setWithId] = useState(openWith || null);
-  const [tripId, setTripId] = useState(null);
   const [find, setFind] = useState(false);
   const msgs = dm?.dms || [];
 
@@ -6863,50 +6882,20 @@ function ChatsTab({ user, me, dm, trips, actions, posts, dirTick, onOpenPost, op
     return Object.values(byPerson).sort((a, b) => (b.ts || 0) - (a.ts || 0));
   }, [msgs, me]);
 
-  const openTrip = myTrips.find((t) => t.id === tripId);
-  if (openTrip) return <TripChatView user={user} meId={me} trip={openTrip} actions={actions} onBack={() => setTripId(null)} />;
   if (withId) return <DmThread me={me} otherId={withId} dm={dm} posts={posts} onOpenPost={onOpenPost} onBack={() => setWithId(null)} onOpenProfile={onOpenProfile} />;
   if (find) return <PickContact me={me} dirTick={dirTick} onPick={(id) => { setFind(false); setWithId(id); }} onBack={() => setFind(false)} />;
 
   return (
     <div className="px-5 py-4">
-      {/* TRIP CHANNELS */}
-      <div className="flex items-center justify-between mb-2.5">
-        <div className="text-[11.5px] font-semibold tracking-[.14em] uppercase" style={{ color: C.gold }}>Trip channels</div>
-        <span className="text-[11.5px]" style={{ color: C.muted }}>{myTrips.length}</span>
-      </div>
-      {myTrips.length === 0 ? (
-        <div className="rounded-xl px-4 py-3 mb-6 text-[13px]" style={{ background: C.card, border: `1px dashed ${C.line}`, color: C.muted }}>
-          No trips yet — a channel opens automatically when a booking is confirmed.
-        </div>
-      ) : (
-        <div className="rounded-2xl overflow-hidden mb-6" style={{ border: `1px solid ${C.line}` }}>
-          {myTrips.map((tr, idx) => {
-            const state = tripStateNow(tr);
-            const last = [...tr.chat.messages].reverse().find((m) => m.kind !== "system");
-            const live = state === "active";
-            return (
-              <button key={tr.id} onClick={() => setTripId(tr.id)} className="tap w-full text-left px-4 py-3.5 flex items-center gap-3"
-                style={{ background: C.card, borderTop: idx ? `1px solid ${C.lineSoft}` : "none" }}>
-                <div className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0" style={{ background: live ? C.pine : C.bg }}>
-                  <span className="text-[15px] font-bold" style={{ color: live ? C.goldSoft : C.muted }}>#</span>
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="text-[14.5px] font-semibold truncate" style={{ color: C.ink }}>{tr.title}</div>
-                  <div className="text-[12px] truncate" style={{ color: C.muted }}>
-                    {last ? `${last.senderId === me ? "You: " : ""}${last.kind === "photo" ? "Photo" : last.body}` : `${fmtDate(tr.start)} – ${fmtDate(tr.end)}`}
-                  </div>
-                </div>
-                <div className="shrink-0 flex items-center gap-2">
-                  <CrewAvatars members={tr.members} size={22} />
-                  <TripStateBadge state={state} />
-                </div>
-              </button>
-            );
-          })}
+      {/* Trip chats now live inside each trip. This tab is people, not trips. */}
+      {myTrips.some((tr) => ["active", "wrapping"].includes(tripStateNow(tr))) && (
+        <div className="rounded-xl px-4 py-3 mb-5 flex items-center gap-3" style={{ background: C.pineSoft }}>
+          <MessageSquare size={16} color={C.pine} className="shrink-0" />
+          <span className="flex-1 text-[12.5px] leading-snug" style={{ color: C.pine }}>
+            Crew chat for a trip is inside the trip itself, under <b>Trips</b>.
+          </span>
         </div>
       )}
-
       {/* DIRECT MESSAGES */}
       <div className="flex items-center justify-between mb-2.5">
         <div className="text-[11.5px] font-semibold tracking-[.14em] uppercase" style={{ color: C.gold }}>Direct messages</div>
@@ -6950,87 +6939,6 @@ function ChatsTab({ user, me, dm, trips, actions, posts, dirTick, onOpenPost, op
 }
 
 /* trip channel opened from the inbox — chat first, details behind the ⋯ menu */
-function TripChatView({ user, meId, trip, actions, onBack }) {
-  const [showDetails, setShowDetails] = useState(false);
-  const state = tripStateNow(trip);
-  return (
-    <div className="fade">
-      <div className="h-14 px-3 flex items-center gap-2.5" style={{ borderBottom: `1px solid ${C.lineSoft}`, background: C.card }}>
-        <button onClick={onBack} className="tap w-9 h-9 rounded-full flex items-center justify-center" style={{ border: `1px solid ${C.line}` }}><ChevronLeft size={19} color={C.ink} /></button>
-        <div className="flex-1 min-w-0">
-          <div className="text-[15px] font-semibold truncate" style={{ color: C.ink }}># {trip.title}</div>
-          <div className="text-[11.5px]" style={{ color: C.muted }}>{trip.members.length} in crew · {fmtDate(trip.start)} – {fmtDate(trip.end)}</div>
-        </div>
-        <TripStateBadge state={state} />
-        <button onClick={() => setShowDetails((v) => !v)} className="tap w-9 h-9 rounded-full flex items-center justify-center" style={{ border: `1px solid ${C.line}` }} aria-label="Trip details">
-          <span className="text-[16px] leading-none" style={{ color: C.muted }}>⋯</span>
-        </button>
-      </div>
-
-      {showDetails && (
-        <div className="px-5 py-4 fade" style={{ borderBottom: `1px solid ${C.lineSoft}` }}>
-          <div className="rounded-xl p-3.5 mb-3" style={{ background: C.card, border: `1px solid ${C.line}` }}>
-            <div className="flex items-center gap-2 text-[13px] font-medium" style={{ color: C.ink }}><MapPin size={14} color={C.gold} /> Meeting point</div>
-            <div className="text-[13px] mt-1" style={{ color: C.muted }}>{trip.meetingPoint}</div>
-          </div>
-          <div className="rounded-xl divide-y mb-3" style={{ background: C.card, border: `1px solid ${C.line}`, borderColor: C.line }}>
-            {(trip.members || []).map((m) => {
-              const mp = m.id === meId ? null : talentById(m.id)?.phone;
-              const dial = mp ? dialNumber(mp) : null;
-              return (
-                <div key={m.id} className="flex items-center gap-3 px-3.5 py-2.5">
-                  <Avatar initials={m.initials} size={32} />
-                  <div className="flex-1 min-w-0">
-                    <div className="text-[13.5px] font-semibold truncate" style={{ color: C.ink }}>{m.name}</div>
-                    <div className="text-[11.5px] capitalize" style={{ color: C.muted }}>{String(m.roleInTrip || "crew").replace("_", " ")}{dial ? ` · ${dial}` : ""}</div>
-                  </div>
-                  {m.id === meId ? (
-                    <span className="text-[10.5px] font-semibold rounded-full px-2 py-0.5" style={{ background: C.goldSoft, color: "#7a5a1e" }}>You</span>
-                  ) : (
-                    <div className="flex items-center gap-1.5 shrink-0">
-                      <button onClick={() => { setTripId(null); setWithId(m.id); }} className="tap w-8 h-8 rounded-lg flex items-center justify-center"
-                        style={{ background: C.bg, border: `1px solid ${C.line}` }} aria-label={`Message ${m.name}`}>
-                        <MessageCircle size={14} color={C.ink} />
-                      </button>
-                      {dial && (
-                        <a href={`tel:${dial}`} className="tap w-8 h-8 rounded-lg flex items-center justify-center"
-                          style={{ background: C.pineSoft, border: `1px solid ${C.line}` }} aria-label={`Call ${m.name}`}>
-                          <PhoneCall size={14} color={C.pine} />
-                        </a>
-                      )}
-                      {dial && (
-                        <a href={`https://wa.me/${dial.replace("+", "")}`} target="_blank" rel="noreferrer"
-                          className="tap w-8 h-8 rounded-lg flex items-center justify-center"
-                          style={{ background: "rgba(37,211,102,.13)", border: "1px solid rgba(37,211,102,.45)" }} aria-label={`WhatsApp ${m.name}`}>
-                          <MessageCircle size={14} color="#1FA855" />
-                        </a>
-                      )}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-          {trip.itinerary.length > 0 && (
-            <div className="space-y-2">
-              {(trip.itinerary || []).map((it) => (
-                <div key={it.day} className="flex items-center gap-3 rounded-xl px-3.5 py-2.5" style={{ background: C.card, border: `1px solid ${C.line}` }}>
-                  <div className="w-6 h-6 rounded-md flex items-center justify-center shrink-0" style={{ background: C.pine }}><span className="text-[11px] font-bold" style={{ color: C.goldSoft }}>{it.day}</span></div>
-                  <span className="text-[13.5px] font-medium" style={{ color: C.ink }}>{it.title}</span>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
-      <div className="px-5 py-4">
-        <Chat user={user} meId={meId} trip={trip} state={state} actions={actions} />
-      </div>
-    </div>
-  );
-}
-
 function PickContact({ me, dirTick, onPick, onBack }) {
   const [q, setQ] = useState("");
   const [people, setPeople] = useState(null);   // null = loading
