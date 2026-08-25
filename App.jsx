@@ -6,7 +6,7 @@ import {
   BadgeCheck, MapPin, Inbox, ChevronLeft, Star, Phone, Mail, Briefcase,
   Search, LogOut, Newspaper, User, CalendarCheck, MessageCircle,
   Map as MapIcon, MessageSquare, Users, Download, Mic, Video as VideoIcon, Heart, Share2, Trash2, Maximize2, Upload, Loader2, ArrowRight,
-  Award, UserX, RefreshCw, FileCheck2, ExternalLink, UserPlus, Send as SendIcon, Lock, Eye, EyeOff, CalendarDays, UserCheck, Plus, CheckCheck, Camera, Navigation as NavIcon, Bell, Share, PhoneCall, Wallet,
+  Award, UserX, RefreshCw, FileCheck2, ExternalLink, UserPlus, Send as SendIcon, Lock, Eye, EyeOff, CalendarDays, UserCheck, Plus, CheckCheck, Camera, Navigation as NavIcon, Bell, Share, PhoneCall, Wallet, AlertTriangle,
   ShieldAlert, Store, Sparkles,
 } from "lucide-react";
 import mapImg from "./map.jpg";
@@ -53,7 +53,7 @@ const sysMsg = (text) => ({ id: uid(), senderId: null, kind: "system", body: tex
 /* ── Cloud (Supabase) ── posts are global when configured; everything falls back to local demo mode when not. */
 const CLOUD = Boolean(supabase);
 const DEMO_MODE = false;   // set true only for local demos without a database
-const BUILD = "BUILD 25 — 25 Aug";   // bump every deploy; shown at the top of the welcome screen
+const BUILD = "BUILD 27 — 25 Aug";   // bump every deploy; shown at the top of the welcome screen
 
 /* ---- Install state ---- */
 // 43 characters of randomness — not guessable
@@ -1720,14 +1720,18 @@ function Shell({ user, posts, jobs, trips, listings, actions, engagement, dm, di
       )}
 
       {/* Floating smart search. Feed only, operator only. */}
-      {tab === "post" && user.kind === "operator" && !smartOpen && (
-        <div className="absolute left-0 right-0 flex justify-center px-5" style={{ bottom: 14, zIndex: 200, pointerEvents: "none" }}>
+      {tab === "post" && user.kind === "operator" && !smartOpen && !overlay && !alertsOpen && !installSheet && !feedbackOpen && (
+        <div className="fixed left-0 right-0 flex justify-center px-5"
+          style={{ bottom: "calc(74px + env(safe-area-inset-bottom, 0px))", zIndex: 241, pointerEvents: "none" }}>
           <button onClick={() => setSmartOpen(true)}
             className="tap w-full max-w-md rounded-full pl-4 pr-2 py-2 flex items-center gap-2.5"
             style={{ background: C.pine, color: "#fff", boxShadow: "0 10px 30px rgba(8,10,8,.28)", pointerEvents: "auto" }}>
-            <Sparkles size={17} color={C.goldSoft} className="shrink-0" />
-            <span className="flex-1 text-left text-[14px]" style={{ color: "rgba(255,255,255,.92)" }}>
-              Find a guide, driver or hotel
+            <Sparkles size={18} color={C.goldSoft} className="shrink-0" />
+            <span className="flex-1 text-left leading-tight">
+              <span className="block text-[14.5px] font-semibold" style={{ color: "#fff" }}>Find your guide</span>
+              <span className="block text-[11px]" style={{ color: "rgba(255,255,255,.72)" }}>
+                Smart search · guides, drivers, hotels
+              </span>
             </span>
             <span className="rounded-full px-3 py-1.5 text-[12.5px] font-semibold shrink-0"
               style={{ background: "rgba(255,255,255,.16)", color: "#fff" }}>Search</span>
@@ -9726,7 +9730,7 @@ function EnhanceEditor({ slides, onDone, onClose }) {
   );
 
   return createPortal((
-    <div className="fixed inset-0 flex flex-col" style={{ background: "#0b0d0b", zIndex: 240, height: "100dvh" }}>
+    <div className="fixed inset-0 flex flex-col" style={{ background: "#0b0d0b", zIndex: 248, height: "100dvh" }}>
       <div className="shrink-0 h-14 px-3 flex items-center justify-between" style={{ borderBottom: "1px solid rgba(255,255,255,.12)" }}>
         <button onClick={onClose} className="tap w-9 h-9 rounded-full flex items-center justify-center" style={{ background: "rgba(255,255,255,.12)" }}>
           <X size={18} color="#fff" />
@@ -10264,6 +10268,9 @@ function CardScanEditor({ image, onDone, onClose }) {
   const [busy, setBusy] = useState(false);
   const dragIdx = useRef(-1);
   const [dragging, setDragging] = useState(-1); // which handle is held — powers the loupe
+  const [autoFound, setAutoFound] = useState(true); // did edge detection actually find a card
+  const [touched, setTouched] = useState(false);    // has the user dragged at all
+  const fallbackPts = useRef(null);                 // the 80%-of-frame default, to compare against
 
   const measure = () => {
     const wrap = wrapRef.current, img = imgRef.current;
@@ -10282,17 +10289,35 @@ function CardScanEditor({ image, onDone, onClose }) {
     const img = imgRef.current;
     if (!img || !img.naturalWidth) return;
     const found = detectCardCorners(img);
+    setTouched(false);
     if (found) {
       setPts(found);
+      setAutoFound(true);
       setNote("Card detected — drag any corner to fine-tune.");
     } else {
+      // Fallback is 80% of the whole frame. Saving that stores the entire photo,
+      // not the licence, so the corners must be placed by hand before scanning.
       const w = img.naturalWidth, h = img.naturalHeight, ix = w * 0.1, iy = h * 0.1;
-      setPts([[ix, iy], [w - ix, iy], [w - ix, h - iy], [ix, h - iy]]);
-      setNote("Drag the four corners onto the card's corners.");
+      const fb = [[ix, iy], [w - ix, iy], [w - ix, h - iy], [ix, h - iy]];
+      fallbackPts.current = fb;
+      setPts(fb);
+      setAutoFound(false);
+      setNote("Card edges not found. Drag each corner onto the card.");
     }
   };
 
   const onImgLoad = () => { measure(); runAuto(); };
+  const Warn = () => (!autoFound && !touched) || ratioOff ? (
+    <div className="mx-3 mb-2 rounded-xl px-3 py-2.5 flex items-start gap-2"
+      style={{ background: "rgba(192,135,43,.16)", border: `1px solid ${C.gold}` }}>
+      <AlertTriangle size={15} color={C.gold} className="shrink-0 mt-0.5" />
+      <span className="text-[12.5px] leading-snug" style={{ color: "#F3E8CF" }}>
+        {blocked
+          ? "We could not find the card edges. Drag each corner onto the licence, or the whole photo gets saved instead of the card."
+          : "That shape does not look like a licence card. Check the corners sit on the card itself."}
+      </span>
+    </div>
+  ) : null;
   useEffect(() => {
     const onR = () => measure();
     window.addEventListener("resize", onR);
@@ -10311,6 +10336,7 @@ function CardScanEditor({ image, onDone, onClose }) {
     e.preventDefault();
     dragIdx.current = i;
     setDragging(i);
+    setTouched(true);
     const move = (ev) => {
       if (dragIdx.current < 0 || !view) return;
       const t = ev.touches ? ev.touches[0] : ev;
@@ -10327,8 +10353,28 @@ function CardScanEditor({ image, onDone, onClose }) {
     window.addEventListener("pointerup", up);
   };
 
+  // Shape check: a Bhutan DOT card is about 1.586 wide to tall. Anything far from
+  // that means the quad is around the photo, not the card.
+  const quadRatio = () => {
+    if (!pts) return 0;
+    const d = (a, b) => Math.hypot(pts[a][0] - pts[b][0], pts[a][1] - pts[b][1]);
+    const w = (d(0, 1) + d(3, 2)) / 2, h = (d(0, 3) + d(1, 2)) / 2;
+    return h > 0 ? w / h : 0;
+  };
+  const ratioOff = pts ? (quadRatio() < 1.15 || quadRatio() > 2.3) : false;
+  // A nudge is not a placement. A 4:3 photo has ratio 1.33, which sits inside the
+  // band above, so shape alone cannot tell "whole photo" from "card". Distance can.
+  const placed = (() => {
+    const fb = fallbackPts.current;
+    if (!pts || !fb || !imgRef.current) return touched;
+    const minMove = imgRef.current.naturalWidth * 0.04;
+    return pts.some((p, i) => Math.hypot(p[0] - fb[i][0], p[1] - fb[i][1]) > minMove);
+  })();
+  const blocked = !autoFound && !placed;
+
   const scan = () => {
     if (!pts || !imgRef.current || busy) return;
+    if (blocked) { setNote("Place the four corners on the card first."); return; }
     setBusy(true);
     setTimeout(() => {
       try {
@@ -10350,10 +10396,14 @@ function CardScanEditor({ image, onDone, onClose }) {
           <X size={18} color="#fff" />
         </button>
         <span className="text-[15px] font-semibold text-white">Scan card</span>
-        <button onClick={scan} disabled={busy || !pts} className="tap h-9 px-4 rounded-full text-[14px] font-semibold inline-flex items-center gap-1.5" style={{ background: C.gold, color: "#fff" }}>
+        <button onClick={scan} disabled={busy || !pts || blocked}
+          className="tap h-9 px-4 rounded-full text-[14px] font-semibold inline-flex items-center gap-1.5"
+          style={{ background: blocked ? C.line : C.gold, color: blocked ? C.muted : "#fff" }}>
           {busy ? <Loader2 size={16} className="animate-spin" /> : <>Scan <Check size={15} strokeWidth={2.6} /></>}
         </button>
       </div>
+
+      <Warn />
 
       <div ref={wrapRef} className="flex-1 min-h-0 relative overflow-hidden">
         <img ref={imgRef} src={image} alt="" onLoad={onImgLoad}
@@ -10485,7 +10535,7 @@ function CropEditor({ slides, initialRatio, onDone, onClose }) {
   };
 
   return createPortal((
-    <div className="fixed inset-0 flex flex-col" style={{ background: "#0b0d0b", zIndex: 240, height: "100dvh" }}>
+    <div className="fixed inset-0 flex flex-col" style={{ background: "#0b0d0b", zIndex: 248, height: "100dvh" }}>
       <div className="shrink-0 h-14 px-3 flex items-center justify-between" style={{ borderBottom: "1px solid rgba(255,255,255,.12)" }}>
         <button onClick={onClose} className="tap w-9 h-9 rounded-full flex items-center justify-center" style={{ background: "rgba(255,255,255,.12)" }}>
           <X size={18} color="#fff" />
