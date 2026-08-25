@@ -53,7 +53,7 @@ const sysMsg = (text) => ({ id: uid(), senderId: null, kind: "system", body: tex
 /* ── Cloud (Supabase) ── posts are global when configured; everything falls back to local demo mode when not. */
 const CLOUD = Boolean(supabase);
 const DEMO_MODE = false;   // set true only for local demos without a database
-const BUILD = "BUILD 23 — 24 Aug";   // bump every deploy; shown at the top of the welcome screen
+const BUILD = "BUILD 25 — 25 Aug";   // bump every deploy; shown at the top of the welcome screen
 
 /* ---- Install state ---- */
 // 43 characters of randomness — not guessable
@@ -1539,6 +1539,7 @@ function Shell({ user, posts, jobs, trips, listings, actions, engagement, dm, di
   const lastAlertCount = useRef(0);
   const [notifyOn, setNotifyOn] = useState(typeof Notification !== "undefined" && Notification.permission === "granted");
   const [installSheet, setInstallSheet] = useState(false);
+  const [smartOpen, setSmartOpen] = useState(false);
   const [feedbackOpen, setFeedbackOpen] = useState(false);
   // Ask once the app has actually been used, never twice in a fortnight, never after they answer.
   useEffect(() => {
@@ -1717,6 +1718,23 @@ function Shell({ user, posts, jobs, trips, listings, actions, engagement, dm, di
         <InstallSheet installEvent={installEvent}
           onClose={() => { setInstallSheet(false); try { localStorage.setItem("bth_install_dismissed", String(Date.now())); } catch (e) {} }} />
       )}
+
+      {/* Floating smart search. Feed only, operator only. */}
+      {tab === "post" && user.kind === "operator" && !smartOpen && (
+        <div className="absolute left-0 right-0 flex justify-center px-5" style={{ bottom: 14, zIndex: 200, pointerEvents: "none" }}>
+          <button onClick={() => setSmartOpen(true)}
+            className="tap w-full max-w-md rounded-full pl-4 pr-2 py-2 flex items-center gap-2.5"
+            style={{ background: C.pine, color: "#fff", boxShadow: "0 10px 30px rgba(8,10,8,.28)", pointerEvents: "auto" }}>
+            <Sparkles size={17} color={C.goldSoft} className="shrink-0" />
+            <span className="flex-1 text-left text-[14px]" style={{ color: "rgba(255,255,255,.92)" }}>
+              Find a guide, driver or hotel
+            </span>
+            <span className="rounded-full px-3 py-1.5 text-[12.5px] font-semibold shrink-0"
+              style={{ background: "rgba(255,255,255,.16)", color: "#fff" }}>Search</span>
+          </button>
+        </div>
+      )}
+      {smartOpen && <SmartSearchSheet onClose={() => setSmartOpen(false)} onOpenProfile={openProfile} />}
 
       {feedbackOpen && (
         <FeedbackSheet user={user}
@@ -8595,6 +8613,244 @@ function Tutorial({ user, nav, setTab, onDone }) {
 }
 
 /* ==================== Privacy, data rights & policy ===================== */
+/* ---- Smart match engine. Pure, offline, deterministic. Tested in matcher.js ---- */
+const LANG_WORDS = {
+  dzongkha: "Dzongkha", english: "English", hindi: "Hindi", nepali: "Nepali",
+  japanese: "Japanese", japan: "Japanese", nihongo: "Japanese",
+  mandarin: "Mandarin", chinese: "Mandarin", china: "Mandarin",
+  german: "German", deutsch: "German", germany: "German",
+  french: "French", france: "French",
+  spanish: "Spanish", spain: "Spanish",
+  korean: "Korean", korea: "Korean",
+};
+const SPEC_WORDS = {
+  "Culture & Dzong": ["culture", "cultural", "dzong", "temple", "monastery", "heritage", "festival", "tshechu", "history"],
+  "Alpine Trekking & Camping": ["trek", "trekking", "hike", "hiking", "camp", "camping", "snowman", "druk path", "alpine", "mountain walk"],
+  "Birdwatching & Wildlife": ["bird", "birds", "birding", "birdwatching", "wildlife", "nature", "crane", "takin"],
+  "Spiritual & Meditation": ["spiritual", "meditation", "retreat", "buddhis", "monk", "pilgrimage", "dharma"],
+  "Adventure & Outdoors": ["adventure", "raft", "rafting", "cycling", "bike", "kayak", "outdoor", "climbing"],
+};
+const DRIVE_WORDS = {
+  "Airport transfers": ["airport", "pickup", "pick up", "transfer", "drop"],
+  "Long-distance touring": ["long distance", "long-distance", "cross country", "east", "eastern", "long haul"],
+  "Mountain & high passes": ["pass", "passes", "dochula", "thrumshingla", "chelela", "high altitude", "mountain road"],
+  "Excursion & day trips": ["day trip", "excursion", "half day", "short trip"],
+  "Off-road & trailheads": ["off road", "off-road", "trailhead", "rough road", "4x4"],
+};
+const VEHICLE_WORDS = {
+  "Sedan": ["sedan", "car"], "SUV": ["suv", "jeep", "4wd"], "Hiace Van": ["hiace", "van"],
+  "Coaster Bus": ["coaster"], "Large Coach": ["coach", "big bus", "large bus"],
+};
+const BIZ_WORDS = {
+  "Hotel": ["hotel"], "Farmstay / Homestay": ["farmstay", "homestay", "farm stay", "home stay"],
+  "Boutique & Handicrafts": ["boutique", "handicraft", "craft", "souvenir"],
+  "Restaurant / Café": ["restaurant", "cafe", "café", "food", "eat"],
+  "Wellness & Spa": ["spa", "wellness", "massage", "hot stone"],
+  "Textiles & Art": ["textile", "weaving", "art", "painting"],
+};
+const TOWNS = ["Thimphu", "Paro", "Punakha", "Bumthang", "Trongsa", "Wangdue", "Haa", "Trashigang",
+  "Phuentsholing", "Gelephu", "Mongar", "Jakar", "Lhuentse", "Zhemgang", "Tsirang", "Dagana",
+  "Sarpang", "Chhukha", "Samdrup Jongkhar", "Pemagatshel", "Punakha"];
+const TOWN_ALIAS = { phuntsholing: "Phuentsholing", phuensholing: "Phuentsholing", wangdi: "Wangdue", bumthan: "Bumthang", tashigang: "Trashigang" };
+
+function readQuery(raw) {
+  const q = " " + String(raw || "").toLowerCase().replace(/[^a-z0-9\s/-]/g, " ").replace(/\s+/g, " ") + " ";
+  const has = (w) => q.includes(" " + w + " ") || q.includes(" " + w);
+  const spec = { role: null, langs: [], specs: [], drives: [], vehicles: [], biz: [], towns: [], free: false, verified: false, minYears: 0 };
+
+  if (/\b(driver|drive|chauffeur|vehicle)\b/.test(q)) spec.role = "driver";
+  if (/\b(hotel|stay|room|lodge|resort|farmstay|homestay|guesthouse|accommodation)\b/.test(q)) spec.role = "business";
+  if (/\b(guide|guiding)\b/.test(q)) spec.role = "guide";
+
+  for (const [w, name] of Object.entries(LANG_WORDS)) if (has(w) && !spec.langs.includes(name)) spec.langs.push(name);
+  for (const [tag, words] of Object.entries(SPEC_WORDS)) if (words.some(has)) spec.specs.push(tag);
+  for (const [tag, words] of Object.entries(DRIVE_WORDS)) if (words.some(has)) spec.drives.push(tag);
+  for (const [v, words] of Object.entries(VEHICLE_WORDS)) if (words.some(has)) spec.vehicles.push(v);
+  for (const [b, words] of Object.entries(BIZ_WORDS)) if (words.some(has)) spec.biz.push(b);
+
+  for (const t of TOWNS) if (has(t.toLowerCase()) && !spec.towns.includes(t)) spec.towns.push(t);
+  for (const [alias, real] of Object.entries(TOWN_ALIAS)) if (has(alias) && !spec.towns.includes(real)) spec.towns.push(real);
+
+  if (/\b(free|available|now|today|open)\b/.test(q)) spec.free = true;
+  if (/\b(verified|licensed|licence|license)\b/.test(q)) spec.verified = true;
+
+  const yrs = q.match(/(\d+)\s*(\+)?\s*(years|year|yrs|yr)/);
+  if (yrs) spec.minYears = parseInt(yrs[1], 10);
+  else if (/\b(experienced|senior|veteran|expert|seasoned)\b/.test(q)) spec.minYears = 5;
+
+  // vehicle or drive words imply a driver unless a guide was named outright
+  if (!spec.role && (spec.vehicles.length || spec.drives.length)) spec.role = "driver";
+  if (!spec.role && spec.biz.length) spec.role = "business";
+  return spec;
+}
+
+function langNames(p) {
+  return (p.languages || []).map((l) => (typeof l === "string" ? l : l && l.n) || "").filter(Boolean);
+}
+
+function scoreOne(p, spec, rawWords) {
+  const why = [];
+  let score = 0;
+  const tags = p.tags || [];
+
+  for (const L of spec.langs) if (langNames(p).some((n) => n.toLowerCase() === L.toLowerCase())) { score += 3; why.push(L); }
+  for (const t of [...spec.specs, ...spec.drives, ...spec.biz]) if (tags.some((x) => x.toLowerCase() === t.toLowerCase())) { score += 3; why.push(t); }
+  if (spec.vehicles.length && p.vehicle && spec.vehicles.some((v) => v.toLowerCase() === String(p.vehicle).toLowerCase())) { score += 3; why.push(p.vehicle); }
+  for (const t of spec.towns) if (String(p.base || "").toLowerCase().includes(t.toLowerCase())) { score += 2; why.push(t); }
+  if (spec.free && p.availability === "open") { score += 2; why.push("Free now"); }
+  if (spec.verified && p.verified) { score += 2; why.push("Verified"); }
+  if (spec.minYears > 0 && (p.years || 0) >= spec.minYears) { score += 2; why.push(`${p.years} yrs`); }
+
+  // leftover words still get a plain text chance against name, base, pitch, tags
+  const hay = [p.name, p.base, p.pitch, tags.join(" "), langNames(p).join(" ")].join(" ").toLowerCase();
+  for (const w of rawWords) if (w.length > 2 && hay.includes(w)) score += 1;
+
+  return { score, why: [...new Set(why)] };
+}
+
+const STOP = new Set(["the","a","an","and","or","for","with","who","that","need","want","looking","find","me","my","is","are","can","speak","speaks","speaking","someone","person","please","in","on","at","to","of","i","we","us","good","best","guide","guides","driver","drivers","hotel","hotels"]);
+
+function smartMatch(raw, people) {
+  const spec = readQuery(raw);
+  const rawWords = String(raw || "").toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter((w) => w && !STOP.has(w));
+  const anySignal = spec.langs.length || spec.specs.length || spec.drives.length || spec.vehicles.length ||
+                    spec.biz.length || spec.towns.length || spec.free || spec.verified || spec.minYears > 0;
+
+  // Asking for something is a filter, not a bonus. "free now" must not show busy people.
+  let pool = people;
+  if (spec.role) pool = pool.filter((p) => p.role === spec.role);
+  if (spec.free) pool = pool.filter((p) => p.availability === "open");
+  if (spec.verified) pool = pool.filter((p) => p.verified);
+  if (spec.minYears > 0) pool = pool.filter((p) => (p.years || 0) >= spec.minYears);
+
+  const scored = pool.map((p) => ({ p, ...scoreOne(p, spec, rawWords) }))
+    .filter((r) => (anySignal || rawWords.length) ? r.score > 0 : true)
+    .sort((a, b) => b.score - a.score || (b.p.years || 0) - (a.p.years || 0));
+
+  const hints = [];
+  if (scored.length === 0) {
+    if (spec.role) hints.push(`No ${spec.role === "business" ? "place" : spec.role} matches everything. Try fewer words.`);
+    else hints.push("Nothing matched. Try a language, a town, or a speciality.");
+  } else {
+    if (scored.length > 5 && !spec.langs.length) hints.push("Add a language to narrow it down.");
+    if (scored.length > 5 && !spec.towns.length) hints.push("Add a town, like Paro or Thimphu.");
+    if (!spec.free) hints.push("Say “free now” to see only people open for work.");
+  }
+  return { spec, results: scored, hints: hints.slice(0, 2) };
+}
+
+
+function SmartSearchSheet({ onClose, onOpenProfile }) {
+  const [q, setQ] = useState("");
+  const [ran, setRan] = useState(false);
+  const people = useMemo(() => allProfiles().map(profileToTalent)
+    .filter((p) => ["guide", "driver", "business"].includes(p.role)), []);
+  const out = useMemo(() => (ran && q.trim() ? smartMatch(q, people) : null), [ran, q, people]);
+
+  const examples = ["German speaking bird guide", "Trekking guide in Paro, free now",
+                    "Driver with a Hiace for the east", "Hotel in Punakha with a spa"];
+
+  return createPortal((
+    <div className="fixed inset-0 flex flex-col" style={{ background: C.bg, zIndex: 260 }}>
+      <div className="px-5 pt-4 pb-3 shrink-0" style={{ borderBottom: `1px solid ${C.line}` }}>
+        <div className="flex items-center gap-2.5">
+          <button onClick={onClose} className="tap w-9 h-9 rounded-full flex items-center justify-center shrink-0"
+            style={{ border: `1px solid ${C.line}`, background: C.card }} aria-label="Close">
+            <ChevronLeft size={19} color={C.ink} />
+          </button>
+          <div className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1" style={{ background: C.pineSoft }}>
+            <Sparkles size={12} color={C.pine} />
+            <span className="text-[10.5px] font-bold tracking-[.09em] uppercase" style={{ color: C.pine }}>Smart search</span>
+          </div>
+        </div>
+
+        <div className="mt-3 flex gap-2">
+          <input value={q} onChange={(e) => { setQ(e.target.value); setRan(false); }}
+            onKeyDown={(e) => { if (e.key === "Enter") setRan(true); }} autoFocus maxLength={140}
+            placeholder="Say what you need, in simple words"
+            className="flex-1 h-12 px-4 rounded-2xl text-[15px]"
+            style={{ background: C.card, border: `1.5px solid ${ran ? C.line : C.pine}`, color: C.ink }} />
+          <button onClick={() => setRan(true)} disabled={!q.trim()}
+            className="tap h-12 px-4 rounded-2xl text-[14.5px] font-semibold shrink-0"
+            style={{ background: q.trim() ? C.pine : C.line, color: q.trim() ? "#fff" : C.muted }}>Find</button>
+        </div>
+        <p className="text-[11.5px] mt-2" style={{ color: C.muted }}>
+          Finds guides, drivers and hotels. {people.length} people and places searched.
+        </p>
+      </div>
+
+      <div className="flex-1 overflow-y-auto hidescroll px-5 py-4" style={{ scrollbarWidth: "none" }}>
+        {!out && (
+          <>
+            <div className="text-[11.5px] font-semibold tracking-[.14em] uppercase mb-2.5" style={{ color: C.gold }}>Try one of these</div>
+            {examples.map((x) => (
+              <button key={x} onClick={() => { setQ(x); setRan(true); }}
+                className="tap w-full text-left rounded-xl px-4 py-3 mb-2 text-[14px]"
+                style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }}>{x}</button>
+            ))}
+            <p className="text-[12.5px] leading-snug mt-4" style={{ color: C.muted }}>
+              You can name a language, a town, a speciality, a vehicle, or say
+              <b style={{ color: C.ink }}> free now</b> and <b style={{ color: C.ink }}> verified</b>.
+            </p>
+          </>
+        )}
+
+        {out && (
+          <>
+            <div className="flex items-baseline justify-between mb-3">
+              <div className="text-[13px] font-semibold" style={{ color: C.ink }}>
+                {out.results.length} match{out.results.length === 1 ? "" : "es"}
+              </div>
+              {out.results.length > 0 && <div className="text-[11.5px]" style={{ color: C.muted }}>best first</div>}
+            </div>
+
+            {out.hints.length > 0 && (
+              <div className="rounded-xl px-3.5 py-2.5 mb-3" style={{ background: C.goldSoft }}>
+                {out.hints.map((h) => (
+                  <div key={h} className="text-[12.5px] leading-snug" style={{ color: "#7a5a1e" }}>{h}</div>
+                ))}
+              </div>
+            )}
+
+            {out.results.map(({ p, why }) => (
+              <button key={p.id} onClick={() => { onClose(); onOpenProfile(p.id); }}
+                className="tap w-full text-left rounded-2xl p-3.5 mb-2.5 flex items-start gap-3"
+                style={{ background: C.card, border: `1px solid ${C.line}` }}>
+                <div className="w-11 h-11 rounded-xl flex items-center justify-center text-[14px] font-semibold shrink-0"
+                  style={{ background: C.pineDeep, color: C.goldSoft }}>{p.initials}</div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[15px] font-semibold truncate" style={{ color: C.ink }}>{p.name}</span>
+                    {p.verified && <BadgeCheck size={14} color={C.pine} className="shrink-0" />}
+                  </div>
+                  <div className="text-[12.5px]" style={{ color: C.muted }}>
+                    {roleLabel(p.role)}{p.base ? ` · ${p.base}` : ""}{p.years ? ` · ${p.years} yrs` : ""}
+                  </div>
+                  {why.length > 0 && (
+                    <div className="flex flex-wrap gap-1 mt-1.5">
+                      {why.map((w) => (
+                        <span key={w} className="text-[11px] font-medium rounded-full px-2 py-0.5"
+                          style={{ background: C.pineSoft, color: C.pine }}>{w}</span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </button>
+            ))}
+
+            {out.results.length === 0 && (
+              <div className="rounded-2xl px-4 py-6 text-center" style={{ background: C.card, border: `1px dashed ${C.line}` }}>
+                <div className="text-[14.5px] font-semibold" style={{ color: C.ink }}>Nothing matched</div>
+                <p className="text-[12.5px] mt-1" style={{ color: C.muted }}>Try fewer words, or a different language or town.</p>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  ), document.body);
+}
+
 /* --- The guide asked. The guest answered. Only the operator can confirm it. --- */
 function TripReviewApprovals({ trip }) {
   const [rows, setRows] = useState(null);
