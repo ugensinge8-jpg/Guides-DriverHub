@@ -53,7 +53,7 @@ const sysMsg = (text) => ({ id: uid(), senderId: null, kind: "system", body: tex
 /* ── Cloud (Supabase) ── posts are global when configured; everything falls back to local demo mode when not. */
 const CLOUD = Boolean(supabase);
 const DEMO_MODE = false;   // set true only for local demos without a database
-const BUILD = "BUILD 27 — 25 Aug";   // bump every deploy; shown at the top of the welcome screen
+const BUILD = "BUILD 28 — 25 Aug";   // bump every deploy; shown at the top of the welcome screen
 
 /* ---- Install state ---- */
 // 43 characters of randomness — not guessable
@@ -997,7 +997,9 @@ export default function App() {
         const p = talentById(m.user_id);
         return { id: m.user_id, name: p?.name || m.display_name || "Member", initials: p?.initials || initialsOf(m.display_name || "?"), roleInTrip: m.role_in_trip };
       }),
-      itinerary: (IT || []).filter((i) => i.trip_id === tr.id).map((i) => ({ day: i.day_no, title: i.title })),
+      itinerary: (IT || []).filter((i) => i.trip_id === tr.id).map((i) => ({ day: i.day_no, title: i.title, detail: i.detail || null })),
+      specialNotes: tr.special_notes || null,
+      allergies: tr.allergies || null,
       chat: {
         state: tr.chat_state || "active",
         messages: (MS || []).filter((m) => m.trip_id === tr.id).map((m) => ({
@@ -4398,10 +4400,95 @@ function TripCard({ trip, onOpen, tone, needsSign, tally }) {
   );
 }
 
+/* ---------------- Trip detail: itinerary, notes, allergies ---------------- */
+function TripEmpty({ text, canEdit, onEdit }) {
+  return (
+    <div className="rounded-2xl px-4 py-5 text-center" style={{ background: C.card, border: `1px dashed ${C.line}` }}>
+      <p className="text-[13.5px]" style={{ color: C.muted }}>{text}</p>
+      {canEdit && (
+        <button onClick={onEdit} className="tap text-[13px] font-semibold mt-2" style={{ color: C.pine }}>Add it now</button>
+      )}
+    </div>
+  );
+}
+
+function TripNote({ body, tone = "pine", icon: Ic }) {
+  const maroon = tone === "maroon";
+  return (
+    <div className="rounded-2xl p-4 flex items-start gap-3"
+      style={{ background: maroon ? C.maroonSoft : C.card, border: `1px solid ${maroon ? "rgba(122,46,46,.3)" : C.line}` }}>
+      {Ic && <Ic size={17} color={maroon ? C.maroon : C.gold} className="shrink-0 mt-0.5" />}
+      <p className="flex-1 text-[14.5px] leading-relaxed whitespace-pre-line" style={{ color: maroon ? C.maroon : C.ink }}>{body}</p>
+    </div>
+  );
+}
+
+function TripDetailSheet({ trip, onClose, onSaved }) {
+  const [notes, setNotes] = useState(trip.specialNotes || "");
+  const [allerg, setAllerg] = useState(trip.allergies || "");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+
+  const save = async () => {
+    if (busy) return;
+    setBusy(true); setErr(null);
+    const { error } = await supabase.from("trips").update({
+      special_notes: notes.trim() || null,
+      allergies: allerg.trim() || null,
+    }).eq("id", trip.id);
+    setBusy(false);
+    if (error) { setErr("That did not save. Check your connection and try again."); return; }
+    onSaved && onSaved();
+    onClose();
+  };
+
+  return createPortal((
+    <div className="fixed inset-0 flex items-end" style={{ background: "rgba(8,10,8,.55)", zIndex: 232 }} onClick={onClose}>
+      <div className="w-full rounded-t-3xl flex flex-col safe-bottom" style={{ background: C.bg, maxHeight: "86dvh" }} onClick={(e) => e.stopPropagation()}>
+        <div className="pt-3 shrink-0"><div className="w-10 h-1 rounded-full mx-auto" style={{ background: C.line }} /></div>
+        <div className="px-5 pt-3 pb-6 overflow-y-auto hidescroll" style={{ scrollbarWidth: "none" }}>
+          <h2 className="text-[19px] font-semibold" style={{ color: C.ink }}>Trip details</h2>
+          <p className="text-[13px] mt-1 leading-snug" style={{ color: C.muted }}>
+            Everyone on this trip can read these. Write what the crew needs to know before they arrive.
+          </p>
+
+          <div className="mt-4">
+            <BLabel>Special notes</BLabel>
+            <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={4} maxLength={1200}
+              placeholder="Guest is celebrating an anniversary. Slow walker. Prefers an early start."
+              className="w-full px-3.5 py-3 rounded-xl text-[15px] leading-relaxed resize-none"
+              style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }} />
+          </div>
+
+          <div className="mt-4">
+            <BLabel>Allergies and medical</BLabel>
+            <textarea value={allerg} onChange={(e) => setAllerg(e.target.value)} rows={3} maxLength={800}
+              placeholder="Severe peanut allergy. Carries an EpiPen. One guest is asthmatic."
+              className="w-full px-3.5 py-3 rounded-xl text-[15px] leading-relaxed resize-none"
+              style={{ background: C.card, border: `1.5px solid rgba(122,46,46,.35)`, color: C.ink }} />
+            <p className="text-[11.5px] mt-1.5 leading-snug" style={{ color: C.maroon }}>
+              This is shown in red to the crew. Write it exactly as the guest told you.
+            </p>
+          </div>
+
+          {err && <p className="text-[13px] mt-3" style={{ color: C.maroon }}>{err}</p>}
+
+          <button onClick={save} disabled={busy} className="tap w-full rounded-2xl text-[15.5px] font-semibold mt-5"
+            style={{ height: 52, background: C.pine, color: "#fff" }}>{busy ? "Saving…" : "Save"}</button>
+          <button onClick={onClose} className="tap w-full text-center text-[13.5px] font-semibold mt-3" style={{ color: C.muted }}>Cancel</button>
+        </div>
+      </div>
+    </div>
+  ), document.body);
+}
+
 function TripHub({ user, meId, trip, actions, onMessage, onBack }) {
   const state = tripStateNow(trip);
   const [inviting, setInviting] = useState(false);
   const isTripOperator = trip.operatorId === meId;
+  const [detailTab, setDetailTab] = useState("itinerary");
+  const [crewOpen, setCrewOpen] = useState(false);
+  const [editDetail, setEditDetail] = useState(false);
   const [mpEdit, setMpEdit] = useState(false);
   const [mpPlace, setMpPlace] = useState("");
   const [mpNote, setMpNote] = useState("");
@@ -4624,6 +4711,7 @@ function TripHub({ user, meId, trip, actions, onMessage, onBack }) {
         )}
 
         {inviting && <ReviewInvite user={user} trip={trip} onClose={() => setInviting(false)} />}
+        {editDetail && <TripDetailSheet trip={trip} onClose={() => setEditDetail(false)} onSaved={() => actions.fetchTrips && actions.fetchTrips()} />}
 
         {isTripOperator && (trip.members || []).some((mm) => mm.roleInTrip !== "operator") && (
           <p className="text-[11.5px] mb-2" style={{ color: C.muted }}>
@@ -4632,7 +4720,71 @@ function TripHub({ user, meId, trip, actions, onMessage, onBack }) {
           </p>
         )}
 
-        <SectionLabel>Crew</SectionLabel>
+        {/* Itinerary | Special notes | Allergies — what the operator set for this trip */}
+        <div className="flex gap-1.5 mb-3 overflow-x-auto hidescroll" style={{ scrollbarWidth: "none" }}>
+          {[["itinerary", "Itinerary"], ["notes", "Special notes"], ["allergies", "Allergies"]].map(([id, label]) => {
+            const on = detailTab === id;
+            const filled = id === "itinerary" ? (trip.itinerary || []).length > 0 : id === "notes" ? !!trip.specialNotes : !!trip.allergies;
+            return (
+              <button key={id} onClick={() => setDetailTab(id)}
+                className="tap rounded-full px-3.5 h-9 text-[13px] font-semibold shrink-0 inline-flex items-center gap-1.5"
+                style={{ background: on ? C.pine : C.card, color: on ? "#fff" : C.ink, border: `1px solid ${on ? C.pine : C.line}` }}>
+                {label}
+                {filled && <span className="w-1.5 h-1.5 rounded-full" style={{ background: on ? C.goldSoft : C.gold }} />}
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="mb-5">
+          {detailTab === "itinerary" && ((trip.itinerary || []).length > 0 ? (
+            <div className="space-y-2">
+              {(trip.itinerary || []).map((it) => (
+                <div key={it.day} className="flex items-center gap-3 rounded-xl px-4 py-3" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+                  <div className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0" style={{ background: C.pine }}><span className="text-[12px] font-bold" style={{ color: C.goldSoft }}>{it.day}</span></div>
+                  <span className="text-[14px] font-medium" style={{ color: C.ink }}>{it.title}</span>
+                </div>
+              ))}
+            </div>
+          ) : <TripEmpty text="No itinerary yet." canEdit={isTripOperator} onEdit={() => setEditDetail(true)} />)}
+
+          {detailTab === "notes" && (trip.specialNotes
+            ? <TripNote tone="pine" body={trip.specialNotes} />
+            : <TripEmpty text="No special notes for this trip." canEdit={isTripOperator} onEdit={() => setEditDetail(true)} />)}
+
+          {detailTab === "allergies" && (trip.allergies
+            ? <TripNote tone="maroon" body={trip.allergies} icon={AlertTriangle} />
+            : <TripEmpty text="No allergies recorded." canEdit={isTripOperator} onEdit={() => setEditDetail(true)} />)}
+
+          {isTripOperator && (detailTab === "notes" ? trip.specialNotes : detailTab === "allergies" ? trip.allergies : (trip.itinerary || []).length) ? (
+            <button onClick={() => setEditDetail(true)} className="tap text-[12.5px] font-semibold mt-2.5" style={{ color: C.pine }}>Edit</button>
+          ) : null}
+        </div>
+        <SectionLabel trailing={["active", "wrapping"].includes(tripStateNow(trip)) ? `closes in ${tripDaysLeft(trip)}d` : undefined}>Crew chat</SectionLabel>
+        {tripStateNow(trip) === "scheduled" ? (
+          <div className="rounded-xl px-4 py-3.5 flex items-center gap-3" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+            <div className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0" style={{ background: C.goldSoft }}><Clock size={17} color={C.gold} /></div>
+            <div className="flex-1 text-[13.5px]" style={{ color: C.muted }}>
+              This chat opens <b style={{ color: C.ink }}>3 days before</b> the trip starts.
+            </div>
+          </div>
+        ) : (
+          <div className="rounded-2xl overflow-hidden" style={{ border: `1px solid ${C.line}` }}>
+            <button onClick={() => setCrewOpen((v) => !v)} className="tap w-full px-3.5 py-2.5 flex items-center gap-2"
+              style={{ background: C.card, borderBottom: crewOpen ? `1px solid ${C.line}` : "none" }}>
+              <div className="flex -space-x-2 shrink-0">
+                {(trip.members || []).slice(0, 4).map((m) => (
+                  <div key={m.id} className="w-7 h-7 rounded-lg flex items-center justify-center text-[10.5px] font-semibold"
+                    style={{ background: C.pineDeep, color: C.goldSoft, border: `1.5px solid ${C.card}` }}>{initialsOf(m.name || "?")}</div>
+                ))}
+              </div>
+              <span className="flex-1 text-left text-[13px] font-semibold" style={{ color: C.ink }}>
+                {(trip.members || []).length} in crew
+              </span>
+              <span className="text-[12px]" style={{ color: C.muted }}>{crewOpen ? "Hide" : "Contacts"}</span>
+              <ChevronLeft size={15} color={C.muted} style={{ transform: crewOpen ? "rotate(90deg)" : "rotate(-90deg)" }} />
+            </button>
+            {crewOpen && <div className="px-3.5 py-3" style={{ background: C.bg }}>
         <div className="rounded-2xl divide-y mb-5" style={{ background: C.card, border: `1px solid ${C.line}`, borderColor: C.line }}>
           {(trip.members || []).map((m) => {
             const mp = m.id === meId ? null : talentById(m.id)?.phone;
@@ -4704,31 +4856,11 @@ function TripHub({ user, meId, trip, actions, onMessage, onBack }) {
             );
           })}
         </div>
-
-        {trip.itinerary.length > 0 && (
-          <>
-            <SectionLabel>Itinerary</SectionLabel>
-            <div className="space-y-2 mb-5">
-              {(trip.itinerary || []).map((it) => (
-                <div key={it.day} className="flex items-center gap-3 rounded-xl px-4 py-3" style={{ background: C.card, border: `1px solid ${C.line}` }}>
-                  <div className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0" style={{ background: C.pine }}><span className="text-[12px] font-bold" style={{ color: C.goldSoft }}>{it.day}</span></div>
-                  <span className="text-[14px] font-medium" style={{ color: C.ink }}>{it.title}</span>
-                </div>
-              ))}
-            </div>
-          </>
-        )}
-
-        <SectionLabel trailing={["active", "wrapping"].includes(tripStateNow(trip)) ? `closes in ${tripDaysLeft(trip)}d` : undefined}>Crew chat</SectionLabel>
-        {tripStateNow(trip) === "scheduled" ? (
-          <div className="rounded-xl px-4 py-3.5 flex items-center gap-3" style={{ background: C.card, border: `1px solid ${C.line}` }}>
-            <div className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0" style={{ background: C.goldSoft }}><Clock size={17} color={C.gold} /></div>
-            <div className="flex-1 text-[13.5px]" style={{ color: C.muted }}>
-              This chat opens <b style={{ color: C.ink }}>3 days before</b> the trip starts.
-            </div>
+            </div>}
           </div>
-        ) : (
-          <Chat user={user} meId={meId} trip={trip} state={tripStateNow(trip)} actions={actions} />
+          <div className="mt-2.5">
+            <Chat user={user} meId={meId} trip={trip} state={tripStateNow(trip)} actions={actions} />
+          </div>
         )}
       </div>
     </div>
