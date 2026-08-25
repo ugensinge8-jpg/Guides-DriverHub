@@ -53,7 +53,7 @@ const sysMsg = (text) => ({ id: uid(), senderId: null, kind: "system", body: tex
 /* ── Cloud (Supabase) ── posts are global when configured; everything falls back to local demo mode when not. */
 const CLOUD = Boolean(supabase);
 const DEMO_MODE = false;   // set true only for local demos without a database
-const BUILD = "BUILD 30 — 25 Aug";   // bump every deploy; shown at the top of the welcome screen
+const BUILD = "BUILD 31 — 25 Aug";   // bump every deploy; shown at the top of the welcome screen
 
 /* ---- Install state ---- */
 // 43 characters of randomness — not guessable
@@ -4400,6 +4400,233 @@ function TripCard({ trip, onOpen, tone, needsSign, tally }) {
   );
 }
 
+/* ---- Window seats. The app cannot book the airline. It wakes you at the
+        exact minute the window opens, holding everything you need. ---- */
+const SEAT_STATUS = {
+  waiting: { label: "Waiting", bg: C.goldSoft, fg: "#7a5a1e" },
+  won:     { label: "Got them", bg: C.pineSoft, fg: C.pine },
+  missed:  { label: "Missed", bg: C.maroonSoft, fg: C.maroon },
+  na:      { label: "Not needed", bg: C.bg, fg: C.muted },
+};
+const BHUTAN_OFFSET_MIN = 360;   // UTC+6, no daylight saving
+
+function bhutanLocalString(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  const shifted = new Date(d.getTime() + (BHUTAN_OFFSET_MIN + d.getTimezoneOffset()) * 60000);
+  return shifted.toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hour12: false }) + " BTT";
+}
+/* Build a UTC instant from a Bhutan wall-clock date and time. */
+function bhutanInstant(dateStr, hhmm) {
+  if (!dateStr) return null;
+  const [h, m] = (hhmm || "02:30").split(":").map(Number);
+  const [Y, M, D] = dateStr.split("-").map(Number);
+  return new Date(Date.UTC(Y, M - 1, D, h, m) - BHUTAN_OFFSET_MIN * 60000).toISOString();
+}
+
+function WindowSeats({ trip, isOperator }) {
+  const [rows, setRows] = useState(null);
+  const [adding, setAdding] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const [f, setF] = useState({ flight_no: "", route: "", flight_date: "", pax: "", seat_side: "left", open_date: "", open_time: "02:30", booking_ref: "", note: "" });
+  const [, tick] = useState(0);
+  useEffect(() => { const t = setInterval(() => tick((x) => x + 1), 30000); return () => clearInterval(t); }, []);
+
+  const load = async () => {
+    const { data, error } = await supabase.from("trip_flights").select("*").eq("trip_id", trip.id).order("flight_date");
+    if (error) { setErr("Could not load flights."); setRows([]); return; }
+    setRows(data || []);
+  };
+  useEffect(() => { if (CLOUD) load(); else setRows([]); }, [trip.id]);
+
+  const add = async () => {
+    if (busy) return;
+    if (!f.flight_no.trim() && !f.route.trim()) { setErr("Add a flight number or a route."); return; }
+    setBusy(true); setErr(null);
+    const { error } = await supabase.from("trip_flights").insert({
+      trip_id: trip.id, operator_id: trip.operatorId,
+      flight_no: f.flight_no.trim() || null, route: f.route.trim() || null,
+      flight_date: f.flight_date || null, pax: f.pax ? Number(f.pax) : null,
+      seat_side: f.seat_side,
+      opens_at: f.open_date ? bhutanInstant(f.open_date, f.open_time) : null,
+      booking_ref: f.booking_ref.trim() || null, note: f.note.trim() || null,
+    });
+    setBusy(false);
+    if (error) { setErr("That did not save. Try once more."); return; }
+    setF({ flight_no: "", route: "", flight_date: "", pax: "", seat_side: "left", open_date: "", open_time: "02:30", booking_ref: "", note: "" });
+    setAdding(false); load();
+  };
+
+  const mark = async (r, status, seats) => {
+    await supabase.from("trip_flights").update({ status, seats_got: seats ?? r.seats_got }).eq("id", r.id);
+    load();
+  };
+  const remove = async (r) => { await supabase.from("trip_flights").delete().eq("id", r.id); load(); };
+
+  const countdown = (iso) => {
+    if (!iso) return null;
+    const ms = new Date(iso).getTime() - Date.now();
+    if (ms <= 0) return "open now";
+    const h = Math.floor(ms / 3600000), m = Math.floor((ms % 3600000) / 60000);
+    return h >= 24 ? `in ${Math.floor(h / 24)}d ${h % 24}h` : h >= 1 ? `in ${h}h ${m}m` : `in ${m}m`;
+  };
+
+  return (
+    <div>
+      {rows === null && <p className="text-[13px]" style={{ color: C.muted }}>Loading…</p>}
+
+      {rows && rows.length === 0 && !adding && (
+        <TripEmpty text={isOperator ? "No flights on this trip yet." : "No flights recorded for this trip."}
+          canEdit={isOperator} onEdit={() => setAdding(true)} />
+      )}
+
+      {(rows || []).map((r) => {
+        const st = SEAT_STATUS[r.status] || SEAT_STATUS.waiting;
+        const cd = r.status === "waiting" ? countdown(r.opens_at) : null;
+        const open = cd === "open now";
+        return (
+          <div key={r.id} className="rounded-2xl p-4 mb-2.5"
+            style={{ background: C.card, border: `${open ? 1.5 : 1}px solid ${open ? C.gold : C.line}` }}>
+            <div className="flex items-start gap-2.5">
+              <div className="flex-1 min-w-0">
+                <div className="text-[15.5px] font-semibold" style={{ color: C.ink }}>
+                  {r.flight_no || "Flight"}{r.route ? ` · ${r.route}` : ""}
+                </div>
+                <div className="text-[12.5px] mt-0.5" style={{ color: C.muted }}>
+                  {[r.flight_date ? fmtDate(r.flight_date) : null,
+                    r.pax ? `${r.pax} guest${r.pax === 1 ? "" : "s"}` : null,
+                    r.seat_side === "either" ? "window seat" : `${r.seat_side} side`].filter(Boolean).join(" · ")}
+                </div>
+              </div>
+              <span className="text-[11px] font-semibold rounded-full px-2.5 py-1 shrink-0" style={{ background: st.bg, color: st.fg }}>{st.label}</span>
+            </div>
+
+            {r.status === "waiting" && r.opens_at && (
+              <div className="rounded-xl px-3.5 py-2.5 mt-3" style={{ background: open ? C.goldSoft : C.bg, border: `1px solid ${open ? C.gold : C.line}` }}>
+                <div className="flex items-center gap-2">
+                  <Bell size={15} color={open ? C.gold : C.muted} className="shrink-0" />
+                  <div className="flex-1 min-w-0">
+                    <div className="text-[13px] font-semibold" style={{ color: open ? "#7a5a1e" : C.ink }}>
+                      Seats open {cd}
+                    </div>
+                    <div className="text-[11.5px]" style={{ color: open ? "#7a5a1e" : C.muted }}>
+                      {bhutanLocalString(r.opens_at)} · we will wake you
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {r.booking_ref && (
+              <div className="text-[12.5px] mt-2" style={{ color: C.muted }}>
+                Booking ref <b style={{ color: C.ink }}>{r.booking_ref}</b>
+              </div>
+            )}
+            {r.seats_got && <div className="text-[13px] mt-1.5" style={{ color: C.pine }}>Seats: {r.seats_got}</div>}
+            {r.note && <p className="text-[13px] leading-snug mt-2" style={{ color: C.ink }}>{r.note}</p>}
+
+            {isOperator && (
+              <div className="flex flex-wrap gap-1.5 mt-3">
+                <a href="https://www.drukair.com.bt" target="_blank" rel="noopener noreferrer"
+                  className="tap text-[11.5px] font-semibold rounded-full px-2.5 py-1 inline-flex items-center gap-1"
+                  style={{ background: C.pine, color: "#fff", textDecoration: "none" }}>
+                  Open Drukair <ExternalLink size={11} />
+                </a>
+                {r.status === "waiting" && (
+                  <>
+                    <button onClick={() => { const g = prompt("Which seats did you get? e.g. 8A, 8B"); if (g !== null) mark(r, "won", g.trim() || null); }}
+                      className="tap text-[11.5px] font-semibold rounded-full px-2.5 py-1" style={{ background: C.pineSoft, color: C.pine }}>Got them</button>
+                    <button onClick={() => mark(r, "missed")} className="tap text-[11.5px] font-semibold rounded-full px-2.5 py-1"
+                      style={{ background: C.maroonSoft, color: C.maroon }}>Missed</button>
+                  </>
+                )}
+                {r.status !== "waiting" && (
+                  <button onClick={() => mark(r, "waiting")} className="tap text-[11.5px] font-semibold rounded-full px-2.5 py-1"
+                    style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }}>Reopen</button>
+                )}
+                <button onClick={() => remove(r)} className="tap text-[11.5px] font-semibold px-2 py-1" style={{ color: C.maroon }}>Remove</button>
+              </div>
+            )}
+          </div>
+        );
+      })}
+
+      {isOperator && (adding ? (
+        <div className="rounded-2xl p-4 mt-2" style={{ background: C.card, border: `1.5px solid ${C.gold}` }}>
+          <div className="flex gap-2 mb-3">
+            <div style={{ width: 120 }}>
+              <BLabel>Flight no</BLabel>
+              <input value={f.flight_no} onChange={(e) => setF({ ...f, flight_no: e.target.value.toUpperCase() })} maxLength={10}
+                placeholder="KB121" className="w-full h-11 px-3 rounded-xl text-[15px]" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
+            </div>
+            <div className="flex-1">
+              <BLabel>Route</BLabel>
+              <input value={f.route} onChange={(e) => setF({ ...f, route: e.target.value })} maxLength={60}
+                placeholder="Paro to Kathmandu" className="w-full h-11 px-3 rounded-xl text-[15px]" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
+            </div>
+          </div>
+
+          <div className="flex gap-2 mb-3">
+            <div className="flex-1">
+              <BLabel>Flight date</BLabel>
+              <input type="date" value={f.flight_date} onChange={(e) => setF({ ...f, flight_date: e.target.value })}
+                className="w-full h-11 px-3 rounded-xl text-[14px]" style={{ background: C.bg, border: `1px solid ${C.line}`, color: f.flight_date ? C.ink : C.muted }} />
+            </div>
+            <div style={{ width: 90 }}>
+              <BLabel>Guests</BLabel>
+              <input value={f.pax} onChange={(e) => setF({ ...f, pax: e.target.value.replace(/[^0-9]/g, "") })} maxLength={3} inputMode="numeric"
+                className="w-full h-11 px-3 rounded-xl text-[15px]" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
+            </div>
+          </div>
+
+          <BLabel>Which side</BLabel>
+          <div className="flex gap-1.5 mb-3">
+            {[["left", "Left"], ["right", "Right"], ["either", "Either"]].map(([id, lbl]) => (
+              <button key={id} onClick={() => setF({ ...f, seat_side: id })}
+                className="tap flex-1 h-10 rounded-xl text-[13.5px] font-semibold"
+                style={{ background: f.seat_side === id ? C.pine : C.bg, color: f.seat_side === id ? "#fff" : C.ink, border: `1px solid ${f.seat_side === id ? C.pine : C.line}` }}>{lbl}</button>
+            ))}
+          </div>
+
+          <BLabel>Wake me when seats open</BLabel>
+          <div className="flex gap-2 mb-3">
+            <input type="date" value={f.open_date} onChange={(e) => setF({ ...f, open_date: e.target.value })}
+              className="flex-1 h-11 px-3 rounded-xl text-[14px]" style={{ background: C.bg, border: `1px solid ${C.line}`, color: f.open_date ? C.ink : C.muted }} />
+            <input type="time" value={f.open_time} onChange={(e) => setF({ ...f, open_time: e.target.value })}
+              style={{ width: 118, background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} className="h-11 px-3 rounded-xl text-[14px]" />
+          </div>
+          <p className="text-[11.5px] mb-3 leading-snug" style={{ color: C.muted }}>
+            Bhutan time. Leave it at 02:30 if that is when your seats open.
+          </p>
+
+          <BLabel>Booking reference</BLabel>
+          <input value={f.booking_ref} onChange={(e) => setF({ ...f, booking_ref: e.target.value.toUpperCase() })} maxLength={20}
+            placeholder="So you are not hunting for it at 2am"
+            className="w-full h-11 px-3 rounded-xl text-[15px] mb-3" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
+
+          {err && <p className="text-[12.5px] mb-2" style={{ color: C.maroon }}>{err}</p>}
+          <button onClick={add} disabled={busy} className="tap w-full h-11 rounded-xl text-[14.5px] font-semibold"
+            style={{ background: C.pine, color: "#fff" }}>{busy ? "Saving…" : "Save flight"}</button>
+          <button onClick={() => { setAdding(false); setErr(null); }} className="tap w-full text-[13px] font-semibold mt-2.5" style={{ color: C.muted }}>Cancel</button>
+        </div>
+      ) : (
+        (rows || []).length > 0 && (
+          <button onClick={() => setAdding(true)} className="tap w-full h-11 rounded-2xl flex items-center justify-center gap-2 text-[14px] font-semibold mt-1"
+            style={{ background: C.card, border: `1.5px dashed ${C.line}`, color: C.pine }}>
+            <Plus size={16} /> Add another flight
+          </button>
+        )
+      ))}
+
+      <p className="text-[11.5px] mt-3 leading-snug" style={{ color: C.muted }}>
+        We cannot book the airline for you. We wake you at the exact minute with the flight,
+        the reference and the side to pick, so you are not fumbling at 2am.
+      </p>
+    </div>
+  );
+}
+
 /* ---------------- Trip detail: itinerary, notes, allergies ---------------- */
 function TripEmpty({ text, canEdit, onEdit }) {
   return (
@@ -4722,9 +4949,9 @@ function TripHub({ user, meId, trip, actions, onMessage, onBack }) {
 
         {/* Itinerary | Special notes | Allergies — what the operator set for this trip */}
         <div className="flex gap-1.5 mb-3 overflow-x-auto hidescroll" style={{ scrollbarWidth: "none" }}>
-          {[["itinerary", "Itinerary"], ["notes", "Special notes"], ["allergies", "Allergies"]].map(([id, label]) => {
+          {[["itinerary", "Itinerary"], ["seats", "Window seats"], ["notes", "Special notes"], ["allergies", "Allergies"]].map(([id, label]) => {
             const on = detailTab === id;
-            const filled = id === "itinerary" ? (trip.itinerary || []).length > 0 : id === "notes" ? !!trip.specialNotes : !!trip.allergies;
+            const filled = id === "itinerary" ? (trip.itinerary || []).length > 0 : id === "seats" ? false : id === "notes" ? !!trip.specialNotes : !!trip.allergies;
             return (
               <button key={id} onClick={() => setDetailTab(id)}
                 className="tap rounded-full px-3.5 h-9 text-[13px] font-semibold shrink-0 inline-flex items-center gap-1.5"
@@ -4747,6 +4974,8 @@ function TripHub({ user, meId, trip, actions, onMessage, onBack }) {
               ))}
             </div>
           ) : <TripEmpty text="No itinerary yet." canEdit={isTripOperator} onEdit={() => setEditDetail(true)} />)}
+
+          {detailTab === "seats" && <WindowSeats trip={trip} isOperator={isTripOperator} />}
 
           {detailTab === "notes" && (trip.specialNotes
             ? <TripNote tone="pine" body={trip.specialNotes} />
