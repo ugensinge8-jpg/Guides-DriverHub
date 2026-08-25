@@ -53,7 +53,7 @@ const sysMsg = (text) => ({ id: uid(), senderId: null, kind: "system", body: tex
 /* ── Cloud (Supabase) ── posts are global when configured; everything falls back to local demo mode when not. */
 const CLOUD = Boolean(supabase);
 const DEMO_MODE = false;   // set true only for local demos without a database
-const BUILD = "BUILD 18 — 24 Aug";   // bump every deploy; shown at the top of the welcome screen
+const BUILD = "BUILD 21 — 24 Aug";   // bump every deploy; shown at the top of the welcome screen
 
 /* ---- Install state ---- */
 // 43 characters of randomness — not guessable
@@ -1521,11 +1521,11 @@ function WelcomeBullet({ Icon, title, body }) {
 const NAV = {
   guide: [{ id: "post", label: "Feed", Icon: Newspaper }, { id: "trips", label: "Trips", Icon: Briefcase }, { id: "chats", label: "Messages", Icon: MessageSquare }, { id: "profile", label: "Profile", Icon: User }],
   driver: [{ id: "post", label: "Feed", Icon: Newspaper }, { id: "trips", label: "Trips", Icon: Briefcase }, { id: "chats", label: "Messages", Icon: MessageSquare }, { id: "profile", label: "Profile", Icon: User }],
-  operator: [{ id: "discover", label: "Discover", Icon: Search }, { id: "trips", label: "Trips", Icon: Briefcase }, { id: "chats", label: "Messages", Icon: MessageSquare }, { id: "post", label: "Feed", Icon: Newspaper }, { id: "profile", label: "Profile", Icon: User }],
+  operator: [{ id: "post", label: "Feed", Icon: Newspaper }, { id: "trips", label: "Trips", Icon: Briefcase }, { id: "discover", label: "Find", Icon: Search }, { id: "action", label: "Action", Icon: Sparkles }, { id: "profile", label: "Profile", Icon: User }],
   business: [{ id: "post", label: "Feed", Icon: Newspaper }, { id: "bookings", label: "Bookings", Icon: CalendarDays }, { id: "discover", label: "Discover", Icon: Search }, { id: "chats", label: "Messages", Icon: MessageSquare }, { id: "profile", label: "Profile", Icon: User }],
   admin: [{ id: "review", label: "Review", Icon: ShieldCheck }, { id: "users", label: "Users", Icon: Users }, { id: "feed", label: "Feed", Icon: Newspaper }],
 };
-const DEFAULT_TAB = { guide: "post", driver: "post", operator: "discover", business: "post", admin: "review" };
+const DEFAULT_TAB = { guide: "post", driver: "post", operator: "post", business: "post", admin: "review" };
 
 function Shell({ user, posts, jobs, trips, listings, actions, engagement, dm, dirTick, onLogout }) {
   const [tab, setTab] = useState(DEFAULT_TAB[user.kind]);
@@ -1691,6 +1691,7 @@ function Shell({ user, posts, jobs, trips, listings, actions, engagement, dm, di
               ? <OperatorDesk user={user} trips={trips} listings={listings} jobs={jobs} actions={actions} onOpenProfile={openProfile} onNavigate={setTab} />
               : <TalentProfile talent={talentById(user.talentId)} posts={posts} eng={eng} self onSetAvailability={actions.setAvailability} onOpenProfile={openProfile} onProfileSaved={actions.reloadDirectory} onBack={null} />)}
             {tab === "discover" && <Discover onOpen={openProfile} initialQuery={searchTerm} dirTick={dirTick} viewerKind={user.kind} />}
+            {tab === "action" && <ActionTab user={user} unread={unreadDm} onOpenMessages={() => setTab("chats")} />}
             {tab === "bookings" && <BusinessBookings user={user} />}
             {tab === "feed" && <Feed posts={posts} eng={eng} admin={user.kind === "admin"} onDelete={actions.deletePost} onOpenProfile={openProfile} following={myFollowing} />}
             {tab === "review" && <Review posts={posts} onApprove={actions.approve} onReject={actions.reject} eng={eng} />}
@@ -2455,7 +2456,7 @@ function Discover({ onOpen, initialQuery, dirTick, viewerKind }) {
       <Segmented value={tab} onChange={(v) => { setTab(v); setBizType(null); setGClass(null); }}
         options={bizViewer
           ? [["operator", `Tour Operators (${counts.operator})`], ["business", `Hotels (${counts.business})`]]
-          : [["guide", `Guides (${counts.guide})`], ["driver", `Drivers (${counts.driver})`], ["business", `Hotels (${counts.business})`]]} />
+          : [["guide", `Guides (${counts.guide})`], ["driver", `Drivers (${counts.driver})`]]} />
 
       <div className="relative mt-3 mb-3">
         <Search size={16} color={C.muted} className="absolute left-3.5 top-1/2 -translate-y-1/2" />
@@ -4459,8 +4460,10 @@ function TripHub({ user, meId, trip, actions, onMessage, onBack }) {
       { onConflict: "trip_id,profile_id,operator_id,kind" });
     loadAccountability();
   };
-  const [askingOperator, setAskingOperator] = useState(false);
-  const tripDone = state === "active" || state === "completed";
+  const tripDone = ["active", "wrapping", "completed"].includes(state);
+  // The guest is standing in front of you. That is the moment, and only that day.
+  const todayIso = (() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; })();
+  const isLastDay = todayIso === trip.end;
   const canInvite = tripDone && (user.kind === "operator" || user.kind === "admin");
   const isTalent = user.kind === "guide" || user.kind === "driver";
   return (
@@ -4577,25 +4580,41 @@ function TripHub({ user, meId, trip, actions, onMessage, onBack }) {
           </button>
         )}
 
-        {isTalent && tripDone && (
-          <button onClick={() => setAskingOperator(true)}
-            className="tap w-full rounded-2xl p-4 mb-4 flex items-center gap-3 text-left"
-            style={{ background: C.goldSoft, border: `1px solid ${C.gold}33` }}>
-            <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0" style={{ background: C.gold }}>
-              <Star size={18} color="#fff" fill="#fff" />
-            </div>
-            <div className="flex-1">
-              <div className="text-[14px] font-semibold" style={{ color: "#7a5a1e" }}>Get a review for this trip</div>
-              <div className="text-[12.5px] mt-0.5 leading-snug" style={{ color: "#7a5a1e", opacity: .85 }}>
-                Ask {trip.operator || "your operator"} to send your guests a review link.
+        {isTalent && state !== "scheduled" && (
+          isLastDay ? (
+            <button onClick={() => setInviting(true)}
+              className="tap w-full rounded-2xl p-4 mb-4 flex items-center gap-3 text-left"
+              style={{ background: C.goldSoft, border: `1.5px solid ${C.gold}` }}>
+              <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0" style={{ background: C.gold }}>
+                <Star size={18} color="#fff" fill="#fff" />
+              </div>
+              <div className="flex-1">
+                <div className="text-[14px] font-semibold" style={{ color: "#7a5a1e" }}>Ask your guest for feedback</div>
+                <div className="text-[12.5px] mt-0.5 leading-snug" style={{ color: "#7a5a1e", opacity: .85 }}>
+                  Today is the last day. Make the link and give it to them face to face.
+                </div>
+              </div>
+              <ChevronLeft size={17} color="#7a5a1e" style={{ transform: "rotate(180deg)" }} />
+            </button>
+          ) : (
+            <div className="w-full rounded-2xl p-4 mb-4 flex items-center gap-3"
+              style={{ background: C.card, border: `1px solid ${C.line}`, opacity: .75 }}>
+              <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0" style={{ background: C.bg }}>
+                <Star size={18} color={C.muted} />
+              </div>
+              <div className="flex-1">
+                <div className="text-[14px] font-semibold" style={{ color: C.muted }}>Ask your guest for feedback</div>
+                <div className="text-[12.5px] mt-0.5 leading-snug" style={{ color: C.muted }}>
+                  {todayIso < trip.end
+                    ? `Opens on the last day of the trip, ${fmtDate(trip.end)}.`
+                    : `The last day was ${fmtDate(trip.end)}. That window has closed.`}
+                </div>
               </div>
             </div>
-            <ChevronLeft size={17} color="#7a5a1e" style={{ transform: "rotate(180deg)" }} />
-          </button>
+          )
         )}
 
         {inviting && <ReviewInvite user={user} trip={trip} onClose={() => setInviting(false)} />}
-        {askingOperator && <OperatorInvite user={user} trip={trip} onClose={() => setAskingOperator(false)} />}
 
         {isTripOperator && (trip.members || []).some((mm) => mm.roleInTrip !== "operator") && (
           <p className="text-[11.5px] mb-2" style={{ color: C.muted }}>
@@ -8549,6 +8568,215 @@ function Tutorial({ user, nav, setTab, onDone }) {
 }
 
 /* ==================== Privacy, data rights & policy ===================== */
+/* ------- Enquiries: a trip before it is real. Private to the operator. ------- */
+const ENQ_STATUS = {
+  open:   { label: "Open",   bg: C.goldSoft, fg: "#7a5a1e" },
+  quoted: { label: "Quoted", bg: C.pineSoft, fg: C.pine },
+  won:    { label: "Won",    bg: C.pineSoft, fg: C.pine },
+  lost:   { label: "Lost",   bg: C.bg,       fg: C.muted },
+};
+
+function EnquiriesBoard({ user }) {
+  const me = user.talentId;
+  const [rows, setRows] = useState(null);
+  const [adding, setAdding] = useState(false);
+  const [showLost, setShowLost] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const [f, setF] = useState({ guest_name: "", guest_country: "", party_size: "", start_date: "", end_date: "", note: "" });
+
+  const load = async () => {
+    const { data, error } = await supabase.from("enquiries").select("*")
+      .eq("operator_id", me).order("created_at", { ascending: false });
+    if (error) { setErr("Could not load your enquiries."); setRows([]); return; }
+    setRows(data || []);
+  };
+  useEffect(() => { if (CLOUD && me) load(); else setRows([]); }, [me]);
+
+  const add = async () => {
+    if (busy) return;
+    if (!f.guest_name.trim()) { setErr("Give it a name so you can find it again."); return; }
+    setBusy(true); setErr(null);
+    const { error } = await supabase.from("enquiries").insert({
+      operator_id: me,
+      guest_name: f.guest_name.trim(),
+      guest_country: f.guest_country.trim() || null,
+      party_size: f.party_size ? Number(f.party_size) : null,
+      start_date: f.start_date || null,
+      end_date: f.end_date || null,
+      note: f.note.trim() || null,
+    });
+    setBusy(false);
+    if (error) { setErr("That did not save. Try once more."); return; }
+    setF({ guest_name: "", guest_country: "", party_size: "", start_date: "", end_date: "", note: "" });
+    setAdding(false); load();
+  };
+
+  const setStatus = async (id, status) => {
+    await supabase.from("enquiries").update({ status, updated_at: new Date().toISOString() }).eq("id", id);
+    load();
+  };
+  const remove = async (id) => { await supabase.from("enquiries").delete().eq("id", id); load(); };
+
+  const live = (rows || []).filter((r) => r.status !== "lost");
+  const lost = (rows || []).filter((r) => r.status === "lost");
+  const fmt = (d) => { try { return new Date(d + "T00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short" }); } catch (e) { return d; } };
+
+  return (
+    <div>
+      <SectionLabel trailing={rows ? `${live.length}` : undefined}>Enquiries</SectionLabel>
+      <p className="text-[12.5px] leading-snug mb-3" style={{ color: C.muted }}>
+        A guest wrote to you but nothing is booked yet. Keep it here. Nobody else can see it.
+      </p>
+
+      {rows === null && <p className="text-[13px]" style={{ color: C.muted }}>Loading…</p>}
+
+      {rows && live.length === 0 && !adding && (
+        <div className="rounded-2xl px-4 py-5 text-center" style={{ background: C.card, border: `1px dashed ${C.line}` }}>
+          <div className="text-[14.5px] font-semibold" style={{ color: C.ink }}>Nothing in progress</div>
+          <p className="text-[12.5px] mt-1" style={{ color: C.muted }}>Next time a guest writes to you, put it here first.</p>
+        </div>
+      )}
+
+      {live.map((r) => {
+        const st = ENQ_STATUS[r.status] || ENQ_STATUS.open;
+        return (
+          <div key={r.id} className="rounded-2xl p-3.5 mb-2.5" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+            <div className="flex items-start gap-2.5">
+              <div className="flex-1 min-w-0">
+                <div className="text-[15px] font-semibold truncate" style={{ color: C.ink }}>{r.guest_name}</div>
+                <div className="text-[12.5px]" style={{ color: C.muted }}>
+                  {[r.guest_country, r.party_size ? `${r.party_size} guest${r.party_size === 1 ? "" : "s"}` : null,
+                    r.start_date ? (r.end_date && r.end_date !== r.start_date ? `${fmt(r.start_date)} to ${fmt(r.end_date)}` : fmt(r.start_date)) : null]
+                    .filter(Boolean).join(" · ") || "No dates yet"}
+                </div>
+              </div>
+              <span className="text-[11px] font-semibold rounded-full px-2 py-0.5 shrink-0" style={{ background: st.bg, color: st.fg }}>{st.label}</span>
+            </div>
+
+            {r.note && <p className="text-[13px] leading-snug mt-2" style={{ color: C.ink }}>{r.note}</p>}
+
+            <div className="flex flex-wrap gap-1.5 mt-3">
+              {r.status === "open" && (
+                <button onClick={() => setStatus(r.id, "quoted")} className="tap text-[11.5px] font-semibold rounded-full px-2.5 py-1"
+                  style={{ background: C.pineSoft, color: C.pine }}>I sent a price</button>
+              )}
+              {r.status === "quoted" && (
+                <button onClick={() => setStatus(r.id, "open")} className="tap text-[11.5px] font-semibold rounded-full px-2.5 py-1"
+                  style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }}>Back to open</button>
+              )}
+              {r.status !== "won" && (
+                <button onClick={() => setStatus(r.id, "won")} className="tap text-[11.5px] font-semibold rounded-full px-2.5 py-1"
+                  style={{ background: C.pine, color: "#fff" }}>Guest said yes</button>
+              )}
+              <button onClick={() => setStatus(r.id, "lost")} className="tap text-[11.5px] font-semibold rounded-full px-2.5 py-1"
+                style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.muted }}>Went quiet</button>
+            </div>
+
+            {r.status === "won" && (
+              <p className="text-[11.5px] mt-2.5 leading-snug" style={{ color: C.pine }}>
+                Now hire the crew from Find, and the trip appears under Trips.
+              </p>
+            )}
+          </div>
+        );
+      })}
+
+      {adding ? (
+        <div className="rounded-2xl p-4 mt-2" style={{ background: C.card, border: `1.5px solid ${C.gold}` }}>
+          <BLabel>Who is asking?</BLabel>
+          <input value={f.guest_name} onChange={(e) => setF({ ...f, guest_name: e.target.value })} maxLength={80}
+            placeholder="Name, or the agent who wrote"
+            className="w-full h-11 px-3 rounded-xl text-[15px] mb-3" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
+
+          <div className="flex gap-2 mb-3">
+            <div className="flex-1">
+              <BLabel>Country</BLabel>
+              <input value={f.guest_country} onChange={(e) => setF({ ...f, guest_country: e.target.value })} maxLength={40}
+                className="w-full h-11 px-3 rounded-xl text-[15px]" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
+            </div>
+            <div style={{ width: 96 }}>
+              <BLabel>Guests</BLabel>
+              <input value={f.party_size} onChange={(e) => setF({ ...f, party_size: e.target.value.replace(/[^0-9]/g, "") })} maxLength={3}
+                inputMode="numeric" className="w-full h-11 px-3 rounded-xl text-[15px]" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
+            </div>
+          </div>
+
+          <div className="flex gap-2 mb-3">
+            <div className="flex-1">
+              <BLabel>From</BLabel>
+              <input type="date" value={f.start_date} onChange={(e) => setF({ ...f, start_date: e.target.value })}
+                className="w-full h-11 px-3 rounded-xl text-[14px]" style={{ background: C.bg, border: `1px solid ${C.line}`, color: f.start_date ? C.ink : C.muted }} />
+            </div>
+            <div className="flex-1">
+              <BLabel>To</BLabel>
+              <input type="date" value={f.end_date} min={f.start_date || undefined} onChange={(e) => setF({ ...f, end_date: e.target.value })}
+                className="w-full h-11 px-3 rounded-xl text-[14px]" style={{ background: C.bg, border: `1px solid ${C.line}`, color: f.end_date ? C.ink : C.muted }} />
+            </div>
+          </div>
+
+          <BLabel>Anything to remember</BLabel>
+          <textarea value={f.note} onChange={(e) => setF({ ...f, note: e.target.value })} rows={2} maxLength={400}
+            placeholder="Wants a trekking guide. Arriving Paro."
+            className="w-full px-3 py-2.5 rounded-xl text-[14.5px] resize-none" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
+
+          {err && <p className="text-[12.5px] mt-2" style={{ color: C.maroon }}>{err}</p>}
+
+          <button onClick={add} disabled={busy} className="tap w-full h-11 rounded-xl text-[14.5px] font-semibold mt-3"
+            style={{ background: C.pine, color: "#fff" }}>{busy ? "Saving…" : "Keep this enquiry"}</button>
+          <button onClick={() => { setAdding(false); setErr(null); }} className="tap w-full text-[13px] font-semibold mt-2.5" style={{ color: C.muted }}>Cancel</button>
+        </div>
+      ) : (
+        <button onClick={() => { setAdding(true); setErr(null); }} className="tap w-full h-12 rounded-2xl flex items-center justify-center gap-2 text-[14.5px] font-semibold mt-2"
+          style={{ background: C.card, border: `1.5px dashed ${C.line}`, color: C.pine }}>
+          <Plus size={17} /> New enquiry
+        </button>
+      )}
+
+      {lost.length > 0 && (
+        <div className="mt-6">
+          <button onClick={() => setShowLost((v) => !v)} className="tap text-[12.5px] font-semibold" style={{ color: C.muted }}>
+            {showLost ? "Hide" : "Show"} {lost.length} that went quiet
+          </button>
+          {showLost && lost.map((r) => (
+            <div key={r.id} className="rounded-xl p-3 mt-2 flex items-center gap-2" style={{ background: C.bg, border: `1px solid ${C.line}` }}>
+              <div className="flex-1 min-w-0">
+                <div className="text-[13.5px] font-medium truncate" style={{ color: C.muted }}>{r.guest_name}</div>
+              </div>
+              <button onClick={() => setStatus(r.id, "open")} className="tap text-[11.5px] font-semibold rounded-full px-2.5 py-1 shrink-0"
+                style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }}>Reopen</button>
+              <button onClick={() => remove(r.id)} className="tap text-[11.5px] font-semibold shrink-0" style={{ color: C.maroon }}>Delete</button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ActionTab({ user, unread, onOpenMessages }) {
+  return (
+    <div className="px-5 py-4">
+      <button onClick={onOpenMessages} className="tap w-full rounded-2xl p-3.5 mb-5 flex items-center gap-3 text-left"
+        style={{ background: C.card, border: `1px solid ${C.line}` }}>
+        <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0" style={{ background: unread > 0 ? C.pine : C.bg }}>
+          <MessageSquare size={18} color={unread > 0 ? C.goldSoft : C.muted} />
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="text-[14.5px] font-semibold" style={{ color: C.ink }}>Messages</div>
+          <div className="text-[12px]" style={{ color: C.muted }}>
+            {unread > 0 ? `${unread} unread` : "Guides, drivers and hotels"}
+          </div>
+        </div>
+        {unread > 0 && <span className="text-[11px] font-bold rounded-full px-2 py-0.5 shrink-0" style={{ background: C.maroon, color: "#fff" }}>{unread}</span>}
+        <ChevronLeft size={17} color={C.muted} style={{ transform: "rotate(180deg)" }} className="shrink-0" />
+      </button>
+
+      <EnquiriesBoard user={user} />
+    </div>
+  );
+}
+
 /* ---------- What do you need? Asked inside the app, while it is fresh. --------- */
 function FeedbackSheet({ user, onClose }) {
   const [rating, setRating] = useState(0);
@@ -10031,7 +10259,11 @@ function ReviewInvite({ user, trip, onClose }) {
 
   // who is being reviewed — never the person issuing the invite
   const crew = (trip.members || []).filter((m) => m.roleInTrip !== "operator" && m.id !== meId);
-  const [subject, setSubject] = useState(crew.length > 1 ? "ALL" : (crew[0]?.id || ""));
+  const isTalentIssuer = user.kind === "guide" || user.kind === "driver";
+  // A guide asks about their own work. They cannot issue a review for the whole crew.
+  const [subject, setSubject] = useState(
+    isTalentIssuer ? meId : (crew.length > 1 ? "ALL" : (crew[0]?.id || ""))
+  );
 
   const load = async () => {
     if (!CLOUD) return;
@@ -10044,6 +10276,7 @@ function ReviewInvite({ user, trip, onClose }) {
 
   const create = async () => {
     if (!subject) { setErr("Choose which crew member the review is for."); return; }
+    if (isTalentIssuer && subject !== meId) { setErr("You can only ask for feedback about your own work."); return; }
     const emailValid = /\S+@\S+\.\S+/.test(guestEmail);
     if (phoneNat.trim() && !phoneValid) { setErr("That WhatsApp number isn't valid — check the country code and digits."); return; }
     if (!emailValid && !phoneValid) { setErr("Add the guest's email or a valid WhatsApp number — the review needs a verified way to reach them."); return; }
@@ -10060,7 +10293,7 @@ function ReviewInvite({ user, trip, onClose }) {
       guest_email: guestEmail.trim() || null,
       guest_phone: phoneValid ? guestPhone : null,
       issued_by: meId,
-      issuer_role: isAdmin ? "admin" : "operator",
+      issuer_role: isAdmin ? "admin" : isTalentIssuer ? user.kind : "operator",
     });
     setBusy(false);
     if (error) {
@@ -10132,8 +10365,8 @@ The link works once and expires in 14 days.`;
             <>
               <div className="text-[12.5px] font-medium mb-1.5" style={{ color: C.ink }}>Review is for</div>
               <div className="flex flex-wrap gap-2 mb-4">
-                {crew.length > 1 && <Chip on={subject === "ALL"} onClick={() => setSubject("ALL")}>Whole crew · one link</Chip>}
-                {crew.map((m) => (
+                {!isTalentIssuer && crew.length > 1 && <Chip on={subject === "ALL"} onClick={() => setSubject("ALL")}>Whole crew · one link</Chip>}
+                {(isTalentIssuer ? crew.filter((m) => m.id === meId) : crew).map((m) => (
                   <Chip key={m.id} on={subject === m.id} onClick={() => setSubject(m.id)}>{m.name}</Chip>
                 ))}
               </div>
