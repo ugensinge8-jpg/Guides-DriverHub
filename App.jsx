@@ -53,7 +53,7 @@ const sysMsg = (text) => ({ id: uid(), senderId: null, kind: "system", body: tex
 /* ── Cloud (Supabase) ── posts are global when configured; everything falls back to local demo mode when not. */
 const CLOUD = Boolean(supabase);
 const DEMO_MODE = false;   // set true only for local demos without a database
-const BUILD = "BUILD 21 — 24 Aug";   // bump every deploy; shown at the top of the welcome screen
+const BUILD = "BUILD 23 — 24 Aug";   // bump every deploy; shown at the top of the welcome screen
 
 /* ---- Install state ---- */
 // 43 characters of randomness — not guessable
@@ -1521,7 +1521,7 @@ function WelcomeBullet({ Icon, title, body }) {
 const NAV = {
   guide: [{ id: "post", label: "Feed", Icon: Newspaper }, { id: "trips", label: "Trips", Icon: Briefcase }, { id: "chats", label: "Messages", Icon: MessageSquare }, { id: "profile", label: "Profile", Icon: User }],
   driver: [{ id: "post", label: "Feed", Icon: Newspaper }, { id: "trips", label: "Trips", Icon: Briefcase }, { id: "chats", label: "Messages", Icon: MessageSquare }, { id: "profile", label: "Profile", Icon: User }],
-  operator: [{ id: "post", label: "Feed", Icon: Newspaper }, { id: "trips", label: "Trips", Icon: Briefcase }, { id: "discover", label: "Find", Icon: Search }, { id: "action", label: "Action", Icon: Sparkles }, { id: "profile", label: "Profile", Icon: User }],
+  operator: [{ id: "post", label: "Feed", Icon: Newspaper }, { id: "trips", label: "Trips", Icon: Briefcase }, { id: "discover", label: "Find", Icon: Search }, { id: "hotels", label: "Hotels", Icon: Store }, { id: "action", label: "Action", Icon: Sparkles }, { id: "profile", label: "Profile", Icon: User }],
   business: [{ id: "post", label: "Feed", Icon: Newspaper }, { id: "bookings", label: "Bookings", Icon: CalendarDays }, { id: "discover", label: "Discover", Icon: Search }, { id: "chats", label: "Messages", Icon: MessageSquare }, { id: "profile", label: "Profile", Icon: User }],
   admin: [{ id: "review", label: "Review", Icon: ShieldCheck }, { id: "users", label: "Users", Icon: Users }, { id: "feed", label: "Feed", Icon: Newspaper }],
 };
@@ -1692,6 +1692,7 @@ function Shell({ user, posts, jobs, trips, listings, actions, engagement, dm, di
               : <TalentProfile talent={talentById(user.talentId)} posts={posts} eng={eng} self onSetAvailability={actions.setAvailability} onOpenProfile={openProfile} onProfileSaved={actions.reloadDirectory} onBack={null} />)}
             {tab === "discover" && <Discover onOpen={openProfile} initialQuery={searchTerm} dirTick={dirTick} viewerKind={user.kind} />}
             {tab === "action" && <ActionTab user={user} unread={unreadDm} onOpenMessages={() => setTab("chats")} />}
+            {tab === "hotels" && <HotelsTab user={user} onOpenProfile={openProfile} />}
             {tab === "bookings" && <BusinessBookings user={user} />}
             {tab === "feed" && <Feed posts={posts} eng={eng} admin={user.kind === "admin"} onDelete={actions.deletePost} onOpenProfile={openProfile} following={myFollowing} />}
             {tab === "review" && <Review posts={posts} onApprove={actions.approve} onReject={actions.reject} eng={eng} />}
@@ -4464,7 +4465,8 @@ function TripHub({ user, meId, trip, actions, onMessage, onBack }) {
   // The guest is standing in front of you. That is the moment, and only that day.
   const todayIso = (() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; })();
   const isLastDay = todayIso === trip.end;
-  const canInvite = tripDone && (user.kind === "operator" || user.kind === "admin");
+  // Operators no longer ask the guest. The crew does that, and the operator confirms.
+  const canApprove = user.kind === "operator" || user.kind === "admin";
   const isTalent = user.kind === "guide" || user.kind === "driver";
   return (
     <div className="pb-6 fade">
@@ -4563,22 +4565,7 @@ function TripHub({ user, meId, trip, actions, onMessage, onBack }) {
         </div>
         </>)}
 
-        {canInvite && (
-          <button onClick={() => setInviting(true)}
-            className="tap w-full rounded-2xl p-4 mb-4 flex items-center gap-3 text-left"
-            style={{ background: C.pineSoft, border: `1px solid ${C.pine}33` }}>
-            <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0" style={{ background: C.pine }}>
-              <Star size={18} color={C.goldSoft} fill={C.goldSoft} />
-            </div>
-            <div className="flex-1">
-              <div className="text-[14px] font-semibold" style={{ color: C.pine }}>Ask a guest for a review</div>
-              <div className="text-[12.5px] mt-0.5" style={{ color: C.pine, opacity: .8 }}>
-                Creates a one-time link. Best shared face to face on the last day.
-              </div>
-            </div>
-            <ChevronLeft size={17} color={C.pine} style={{ transform: "rotate(180deg)" }} />
-          </button>
-        )}
+        {canApprove && tripDone && <TripReviewApprovals trip={trip} />}
 
         {isTalent && state !== "scheduled" && (
           isLastDay ? (
@@ -6184,6 +6171,20 @@ function BusinessBookings({ user }) {
       if (error) console.error("unblock day failed:", error.message); else reload();
     }
   };
+  const [quoting, setQuoting] = useState(null);
+  const [qAmt, setQAmt] = useState("");
+  const [qNote, setQNote] = useState("");
+  const sendQuote = async (id) => {
+    if (!qAmt) return;
+    setBusyId(id);
+    const { error } = await supabase.from("business_bookings").update({
+      status: "quoted", quote_amount: Number(qAmt), quote_note: qNote.trim() || null,
+      quoted_by: user.talentId, quoted_at: new Date().toISOString(),
+    }).eq("id", id);
+    setBusyId(null);
+    if (!error) { setQuoting(null); setQAmt(""); setQNote(""); load(); }
+  };
+
   const setStatus = async (id, status) => {
     setBusyId(id);
     const { error } = await supabase.from("business_bookings").update({ status }).eq("id", id);
@@ -6235,10 +6236,36 @@ function BusinessBookings({ user }) {
             <div className="text-[14.5px] font-semibold" style={{ color: C.ink }}>{b.operator_name || "Tour operator"}</div>
             <div className="flex flex-wrap gap-2 mt-2"><Pill Icon={CalendarCheck}>{fmtRange(b.start_date, b.end_date)}</Pill>{b.guests ? <Pill Icon={Users}>{b.guests} guests</Pill> : null}</div>
             {b.note && <p className="text-[13.5px] mt-2.5 leading-snug" style={{ color: C.muted }}>{b.note}</p>}
-            <div className="flex gap-2 mt-3.5">
-              <button disabled={busyId === b.id} onClick={() => setStatus(b.id, "confirmed")} className="tap flex-1 h-11 rounded-xl text-[14px] font-semibold" style={{ background: C.pine, color: "#fff" }}>Confirm</button>
-              <button disabled={busyId === b.id} onClick={() => setStatus(b.id, "declined")} className="tap flex-1 h-11 rounded-xl text-[14px] font-semibold" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.maroon }}>Decline</button>
-            </div>
+            {b.quote_amount != null && (
+              <div className="rounded-xl px-3.5 py-2.5 mt-3" style={{ background: C.bg, border: `1px solid ${C.line}` }}>
+                <span className="text-[18px] font-semibold" style={{ color: C.ink }}>Nu {Number(b.quote_amount).toLocaleString("en-IN")}</span>
+                <span className="text-[11.5px] ml-2" style={{ color: C.muted }}>you offered · waiting for them</span>
+              </div>
+            )}
+            {quoting === b.id ? (
+              <div className="rounded-xl p-3 mt-3" style={{ background: C.bg, border: `1px solid ${C.gold}` }}>
+                <BLabel>Your price for the whole stay (Nu)</BLabel>
+                <input value={qAmt} onChange={(e) => setQAmt(e.target.value.replace(/[^0-9.]/g, ""))} inputMode="decimal"
+                  placeholder="12000" className="w-full h-11 px-3 rounded-xl text-[15px] mb-2"
+                  style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }} />
+                <input value={qNote} onChange={(e) => setQNote(e.target.value)} maxLength={140}
+                  placeholder="What it includes (optional)" className="w-full h-11 px-3 rounded-xl text-[14px]"
+                  style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }} />
+                <div className="flex gap-2 mt-2.5">
+                  <button disabled={busyId === b.id || !qAmt} onClick={() => sendQuote(b.id)}
+                    className="tap flex-1 h-11 rounded-xl text-[14px] font-semibold" style={{ background: C.gold, color: "#fff" }}>Send this price</button>
+                  <button onClick={() => setQuoting(null)} className="tap h-11 px-4 rounded-xl text-[14px] font-semibold"
+                    style={{ background: C.card, border: `1px solid ${C.line}`, color: C.muted }}>Cancel</button>
+                </div>
+              </div>
+            ) : (
+              <div className="flex gap-2 mt-3.5">
+                <button disabled={busyId === b.id} onClick={() => setStatus(b.id, "confirmed")} className="tap flex-1 h-11 rounded-xl text-[14px] font-semibold" style={{ background: C.pine, color: "#fff" }}>Confirm</button>
+                <button disabled={busyId === b.id} onClick={() => { setQuoting(b.id); setQAmt(b.quote_amount ? String(b.quote_amount) : ""); setQNote(b.quote_note || ""); }}
+                  className="tap flex-1 h-11 rounded-xl text-[14px] font-semibold" style={{ background: C.goldSoft, color: "#7a5a1e" }}>Send a price</button>
+                <button disabled={busyId === b.id} onClick={() => setStatus(b.id, "declined")} className="tap h-11 px-4 rounded-xl text-[14px] font-semibold" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.maroon }}>Decline</button>
+              </div>
+            )}
           </div>
         ))}
       </>)}
@@ -8568,6 +8595,270 @@ function Tutorial({ user, nav, setTab, onDone }) {
 }
 
 /* ==================== Privacy, data rights & policy ===================== */
+/* --- The guide asked. The guest answered. Only the operator can confirm it. --- */
+function TripReviewApprovals({ trip }) {
+  const [rows, setRows] = useState(null);
+  const [busy, setBusy] = useState(null);
+  const [err, setErr] = useState(null);
+
+  const load = async () => {
+    const { data, error } = await supabase.from("guest_reviews").select("*")
+      .eq("trip_id", trip.id).order("created_at", { ascending: false });
+    if (error) { setErr("Could not load reviews for this trip."); setRows([]); return; }
+    setRows(data || []);
+  };
+  useEffect(() => { if (CLOUD) load(); else setRows([]); }, [trip.id]);
+
+  const decide = async (r, status) => {
+    setBusy(r.id); setErr(null);
+    const { error } = await supabase.from("guest_reviews").update({ status }).eq("id", r.id);
+    setBusy(null);
+    if (error) { setErr("That did not save. Try once more."); return; }
+    load();
+  };
+
+  const nameOf = (id) => (trip.members || []).find((m) => String(m.id) === String(id))?.name || "your crew";
+  const waiting = (rows || []).filter((r) => r.status === "pending");
+  const done = (rows || []).filter((r) => r.status !== "pending");
+  if (rows && rows.length === 0) return null;
+
+  return (
+    <div className="mb-4">
+      <SectionLabel trailing={waiting.length ? `${waiting.length} to confirm` : undefined}>Guest feedback</SectionLabel>
+
+      {waiting.map((r) => (
+        <div key={r.id} className="rounded-2xl p-4 mb-2.5" style={{ background: C.card, border: `1.5px solid ${C.gold}` }}>
+          <div className="flex items-center gap-2 mb-2">
+            <span className="text-[13px] font-semibold" style={{ color: C.gold }}>{"★".repeat(r.rating || 0)}</span>
+            <span className="text-[12.5px]" style={{ color: C.muted }}>for {nameOf(r.talent_id)}</span>
+          </div>
+          {r.body && <p className="text-[14px] leading-relaxed" style={{ color: C.ink }}>{r.body}</p>}
+          <div className="text-[12px] mt-2" style={{ color: C.muted }}>{r.guest_name || "Guest"}</div>
+
+          <p className="text-[11.5px] leading-snug mt-3" style={{ color: C.muted }}>
+            You ran this trip, so only you can say it really happened. Confirm it and it goes on their profile.
+          </p>
+          <div className="flex gap-2 mt-3">
+            <button onClick={() => decide(r, "published")} disabled={busy === r.id}
+              className="tap flex-1 h-11 rounded-xl flex items-center justify-center gap-1.5 text-[14px] font-semibold"
+              style={{ background: C.pine, color: "#fff" }}>
+              <Check size={16} strokeWidth={2.6} /> Confirm
+            </button>
+            <button onClick={() => decide(r, "hidden")} disabled={busy === r.id}
+              className="tap flex-1 h-11 rounded-xl text-[14px] font-semibold"
+              style={{ background: C.card, border: `1px solid ${C.line}`, color: C.maroon }}>Not right</button>
+          </div>
+        </div>
+      ))}
+
+      {err && <p className="text-[12.5px] mb-2" style={{ color: C.maroon }}>{err}</p>}
+
+      {done.map((r) => (
+        <div key={r.id} className="rounded-xl p-3 mb-2 flex items-center gap-2.5"
+          style={{ background: C.bg, border: `1px solid ${C.line}` }}>
+          <div className="flex-1 min-w-0">
+            <div className="text-[13px] font-medium truncate" style={{ color: C.ink }}>
+              {nameOf(r.talent_id)} · {"★".repeat(r.rating || 0)}
+            </div>
+          </div>
+          <span className="text-[11px] font-semibold rounded-full px-2 py-0.5 shrink-0"
+            style={{ background: r.status === "published" ? C.pineSoft : C.maroonSoft, color: r.status === "published" ? C.pine : C.maroon }}>
+            {r.status === "published" ? "On their profile" : "Held back"}
+          </span>
+          {r.status === "hidden" && (
+            <button onClick={() => decide(r, "published")} className="tap text-[11.5px] font-semibold shrink-0" style={{ color: C.pine }}>Confirm</button>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/* ------------- Hotels: the operator side. Only operators see this. ------------- */
+const BK_TONE = {
+  requested: { label: "Waiting for the hotel", bg: C.goldSoft, fg: "#7a5a1e", dot: C.gold },
+  quoted:    { label: "Price offered",         bg: C.goldSoft, fg: "#7a5a1e", dot: C.gold },
+  confirmed: { label: "Booked",                bg: C.pineSoft, fg: C.pine,    dot: C.pine },
+  declined:  { label: "Declined",              bg: C.maroonSoft, fg: C.maroon, dot: C.maroon },
+  cancelled: { label: "Cancelled",             bg: C.maroonSoft, fg: C.maroon, dot: C.maroon },
+};
+const nu = (n) => Number(n).toLocaleString("en-IN", { maximumFractionDigits: 2 });
+
+function BookingCard({ bk, hotel, meId, onAct, busy }) {
+  const t = BK_TONE[bk.status] || BK_TONE.requested;
+  const iQuoted = bk.quoted_by === meId;
+  const mineToAnswer = bk.status === "quoted" && !iQuoted;
+  const nights = Math.max(1, Math.round((new Date(bk.end_date) - new Date(bk.start_date)) / 86400000));
+
+  return (
+    <div className="rounded-2xl mb-3 overflow-hidden" style={{ background: C.card, border: `1px solid ${mineToAnswer ? C.gold : C.line}`, borderWidth: mineToAnswer ? 1.5 : 1 }}>
+      <div className="px-4 pt-3.5 pb-3">
+        <div className="flex items-start gap-2.5">
+          <div className="flex-1 min-w-0">
+            <div className="text-[15.5px] font-semibold truncate" style={{ color: C.ink }}>{hotel?.name || "Hotel"}</div>
+            <div className="text-[12.5px] mt-0.5" style={{ color: C.muted }}>
+              {fmtRange(bk.start_date, bk.end_date)} · {nights} night{nights === 1 ? "" : "s"}
+              {bk.guests ? ` · ${bk.guests} guest${bk.guests === 1 ? "" : "s"}` : ""}
+            </div>
+          </div>
+          <span className="text-[11px] font-semibold rounded-full px-2.5 py-1 shrink-0" style={{ background: t.bg, color: t.fg }}>{t.label}</span>
+        </div>
+
+        {bk.note && <p className="text-[13px] leading-snug mt-2.5" style={{ color: C.ink }}>{bk.note}</p>}
+
+        {bk.quote_amount != null && (
+          <div className="rounded-xl px-3.5 py-3 mt-3" style={{ background: C.bg, border: `1px solid ${C.line}` }}>
+            <div className="flex items-baseline gap-2">
+              <span className="text-[21px] font-semibold tracking-[-0.01em]" style={{ color: C.ink }}>Nu {nu(bk.quote_amount)}</span>
+              <span className="text-[11.5px]" style={{ color: C.muted }}>{iQuoted ? "you offered" : "offered by the hotel"}</span>
+            </div>
+            {bk.quote_note && <p className="text-[12.5px] mt-1.5 leading-snug" style={{ color: C.muted }}>{bk.quote_note}</p>}
+          </div>
+        )}
+
+        {bk.status === "cancelled" && (
+          <div className="rounded-xl px-3.5 py-2.5 mt-3" style={{ background: C.maroonSoft }}>
+            <div className="text-[12.5px] font-semibold" style={{ color: C.maroon }}>
+              Cancelled{bk.cancelled_by === meId ? " by you" : " by the hotel"}
+            </div>
+            {bk.cancel_reason && <p className="text-[12.5px] mt-0.5 leading-snug" style={{ color: C.maroon, opacity: .9 }}>{bk.cancel_reason}</p>}
+          </div>
+        )}
+      </div>
+
+      {["requested", "quoted", "confirmed"].includes(bk.status) && (
+        <div className="px-4 pb-3.5 flex gap-2">
+          {mineToAnswer && (
+            <button onClick={() => onAct(bk, "confirmed")} disabled={busy}
+              className="tap flex-1 h-11 rounded-xl flex items-center justify-center gap-1.5 text-[14px] font-semibold"
+              style={{ background: C.pine, color: "#fff" }}>
+              <Check size={16} strokeWidth={2.6} /> Accept
+            </button>
+          )}
+          {mineToAnswer && (
+            <button onClick={() => onAct(bk, "declined")} disabled={busy}
+              className="tap flex-1 h-11 rounded-xl text-[14px] font-semibold"
+              style={{ background: C.card, border: `1px solid ${C.line}`, color: C.maroon }}>Decline</button>
+          )}
+          {!mineToAnswer && (
+            <button onClick={() => onAct(bk, "cancelled")} disabled={busy}
+              className="tap flex-1 h-10 rounded-xl text-[13px] font-semibold"
+              style={{ background: C.card, border: `1px solid ${C.line}`, color: C.maroon }}>
+              {bk.status === "confirmed" ? "Cancel this booking" : "Withdraw request"}
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function HotelsTab({ user, onOpenProfile }) {
+  const meId = user.talentId;
+  const [hotels, setHotels] = useState([]);
+  const [rows, setRows] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const [view, setView] = useState("live");
+
+  const load = async () => {
+    const { data } = await supabase.from("business_bookings").select("*")
+      .eq("operator_id", meId).order("start_date", { ascending: false });
+    setRows(data || []);
+  };
+  useEffect(() => {
+    if (!CLOUD || !meId) { setRows([]); return; }
+    load();
+    (async () => {
+      const { data } = await supabase.from("profiles").select("id, full_name, base, tags")
+        .eq("role", "business").order("full_name");
+      setHotels(data || []);
+    })();
+    const ch = supabase.channel("op-bookings-" + meId)
+      .on("postgres_changes", { event: "*", schema: "public", table: "business_bookings", filter: `operator_id=eq.${meId}` }, load)
+      .subscribe();
+    return () => { supabase.removeChannel(ch); };
+  }, [meId]);
+
+  const act = async (bk, status) => {
+    if (busy) return;
+    setBusy(true); setErr(null);
+    const patch = { status };
+    if (status === "cancelled") { patch.cancelled_at = new Date().toISOString(); patch.cancelled_by = meId; }
+    const { error } = await supabase.from("business_bookings").update(patch).eq("id", bk.id);
+    setBusy(false);
+    if (error) { setErr("That did not save. Check your connection and try again."); return; }
+    load();
+  };
+
+  const byId = Object.fromEntries(hotels.map((h) => [h.id, { name: h.full_name, base: h.base }]));
+  const all = rows || [];
+  const needsMe = all.filter((b) => b.status === "quoted" && b.quoted_by !== meId);
+  const live = all.filter((b) => ["requested", "quoted", "confirmed"].includes(b.status));
+  const past = all.filter((b) => ["declined", "cancelled"].includes(b.status));
+  const shown = view === "live" ? live : past;
+
+  return (
+    <div className="px-5 py-4">
+      <SectionLabel trailing={rows ? `${live.length} live` : undefined}>Hotels</SectionLabel>
+
+      {needsMe.length > 0 && (
+        <div className="rounded-2xl px-4 py-3 mb-4 flex items-center gap-3" style={{ background: C.goldSoft, border: `1px solid ${C.gold}` }}>
+          <Bell size={17} color={C.gold} className="shrink-0" />
+          <div className="flex-1 text-[13px] font-semibold" style={{ color: "#7a5a1e" }}>
+            {needsMe.length} price{needsMe.length === 1 ? "" : "s"} waiting for your answer
+          </div>
+        </div>
+      )}
+
+      <Segmented value={view} onChange={setView}
+        options={[["live", `In progress (${live.length})`], ["past", `Closed (${past.length})`]]} />
+
+      <div className="mt-4">
+        {rows === null && <p className="text-[13px]" style={{ color: C.muted }}>Loading…</p>}
+        {err && <p className="text-[13px] mb-2" style={{ color: C.maroon }}>{err}</p>}
+
+        {rows && shown.length === 0 && (
+          <div className="rounded-2xl px-4 py-6 text-center" style={{ background: C.card, border: `1px dashed ${C.line}` }}>
+            <div className="text-[14.5px] font-semibold" style={{ color: C.ink }}>
+              {view === "live" ? "No hotel bookings yet" : "Nothing closed yet"}
+            </div>
+            <p className="text-[12.5px] mt-1 leading-snug" style={{ color: C.muted }}>
+              {view === "live" ? "Open a hotel below, pick your dates, and send a request." : "Declined and cancelled bookings are kept here."}
+            </p>
+          </div>
+        )}
+
+        {shown.map((b) => (
+          <BookingCard key={b.id} bk={b} hotel={byId[b.business_id]} meId={meId} onAct={act} busy={busy} />
+        ))}
+      </div>
+
+      <div className="mt-7">
+        <SectionLabel trailing={`${hotels.length}`}>Places you can book</SectionLabel>
+        {hotels.length === 0 && <p className="text-[13px]" style={{ color: C.muted }}>No hotels have joined yet.</p>}
+        {hotels.map((h) => (
+          <button key={h.id} onClick={() => onOpenProfile(h.id)}
+            className="tap w-full rounded-2xl p-3.5 mb-2 flex items-center gap-3 text-left"
+            style={{ background: C.card, border: `1px solid ${C.line}` }}>
+            <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0" style={{ background: C.pineSoft }}>
+              <Store size={18} color={C.pine} />
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="text-[14.5px] font-semibold truncate" style={{ color: C.ink }}>{h.full_name}</div>
+              <div className="text-[12px] truncate" style={{ color: C.muted }}>{h.base || "Bhutan"}</div>
+            </div>
+            <ChevronLeft size={16} color={C.muted} style={{ transform: "rotate(180deg)" }} className="shrink-0" />
+          </button>
+        ))}
+        <p className="text-[11.5px] mt-2 leading-snug" style={{ color: C.muted }}>
+          Open a place to see its calendar, pick your dates and send a request.
+        </p>
+      </div>
+    </div>
+  );
+}
+
 /* ------- Enquiries: a trip before it is real. Private to the operator. ------- */
 const ENQ_STATUS = {
   open:   { label: "Open",   bg: C.goldSoft, fg: "#7a5a1e" },
