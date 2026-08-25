@@ -53,7 +53,7 @@ const sysMsg = (text) => ({ id: uid(), senderId: null, kind: "system", body: tex
 /* ── Cloud (Supabase) ── posts are global when configured; everything falls back to local demo mode when not. */
 const CLOUD = Boolean(supabase);
 const DEMO_MODE = false;   // set true only for local demos without a database
-const BUILD = "BUILD 28 — 25 Aug";   // bump every deploy; shown at the top of the welcome screen
+const BUILD = "BUILD 30 — 25 Aug";   // bump every deploy; shown at the top of the welcome screen
 
 /* ---- Install state ---- */
 // 43 characters of randomness — not guessable
@@ -4769,6 +4769,7 @@ function TripHub({ user, meId, trip, actions, onMessage, onBack }) {
             </div>
           </div>
         ) : (
+          <>
           <div className="rounded-2xl overflow-hidden" style={{ border: `1px solid ${C.line}` }}>
             <button onClick={() => setCrewOpen((v) => !v)} className="tap w-full px-3.5 py-2.5 flex items-center gap-2"
               style={{ background: C.card, borderBottom: crewOpen ? `1px solid ${C.line}` : "none" }}>
@@ -4861,6 +4862,7 @@ function TripHub({ user, meId, trip, actions, onMessage, onBack }) {
           <div className="mt-2.5">
             <Chat user={user} meId={meId} trip={trip} state={tripStateNow(trip)} actions={actions} />
           </div>
+          </>
         )}
       </div>
     </div>
