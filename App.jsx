@@ -53,7 +53,7 @@ const sysMsg = (text) => ({ id: uid(), senderId: null, kind: "system", body: tex
 /* ── Cloud (Supabase) ── posts are global when configured; everything falls back to local demo mode when not. */
 const CLOUD = Boolean(supabase);
 const DEMO_MODE = false;   // set true only for local demos without a database
-const BUILD = "BUILD 31 — 25 Aug";   // bump every deploy; shown at the top of the welcome screen
+const BUILD = "BUILD 34 — 26 Aug";   // bump every deploy; shown at the top of the welcome screen
 
 /* ---- Install state ---- */
 // 43 characters of randomness — not guessable
@@ -1044,7 +1044,20 @@ export default function App() {
     const { error: tmErr } = await supabase.from("trip_members").upsert({
       trip_id: tripId, user_id: job.toTalentId, display_name: t?.name || "Member", role_in_trip: t?.role || "guide",
     });
-    if (tmErr) console.error("trip_members.upsert failed:", tmErr.message);
+    if (tmErr) {
+      // The database refuses a crew member who is already on an overlapping trip.
+      // Say so plainly instead of creating a trip that quietly has no crew.
+      console.error("trip_members.upsert failed:", tmErr.message);
+      const clash = String(tmErr.message || "").match(/DOUBLE_BOOKED:\s*(.*)$/);
+      await supabase.from("trip_messages").insert({
+        trip_id: tripId, sender_id: null, kind: "system",
+        body: clash
+          ? `${t?.name || "That person"} could NOT be added — ${clash[1]}. A guide or driver can only be on one trip at a time.`
+          : `${t?.name || "That person"} could not be added to this trip.`,
+      });
+      fetchTrips();
+      return;   // do not announce a join that did not happen
+    }
     { const { error: _e } = await supabase.from("trip_messages").insert({ trip_id: tripId, sender_id: null, kind: "system", body: `${t?.name || "A crew member"} joined the trip.` }); if (_e) console.error("trip_messages.join failed:", _e.message); }
     fetchTrips();
   };
@@ -4310,8 +4323,210 @@ function WorkHub({ user, jobs, listings, posts, trips, actions, eng, onOpenProfi
   );
 }
 
+/* ---- Build a trip: dates, details, and crew who are provably free. ---- */
+function NewTripSheet({ user, onClose, onDone }) {
+  const [f, setF] = useState({ title: "", start: "", end: "", meeting: "", notes: "", allergies: "" });
+  const [crew, setCrew] = useState([]);            // [{id,name,role}]
+  const [busy, setBusy] = useState({});            // user_id -> {title, starts, ends}
+  const [q, setQ] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState(null);
+  const [checking, setChecking] = useState(false);
+
+  const people = useMemo(() => allProfiles().map(profileToTalent)
+    .filter((p) => ["guide", "driver"].includes(p.role)), []);
+
+  // Who is already committed across these dates. Re-checked whenever dates move.
+  useEffect(() => {
+    if (!f.start) { setBusy({}); return; }
+    let dead = false;
+    setChecking(true);
+    (async () => {
+      const { data } = await supabase.rpc("crew_busy_between", { d1: f.start, d2: f.end || f.start });
+      if (dead) return;
+      const m = {};
+      (data || []).forEach((r) => { if (!m[r.user_id]) m[r.user_id] = r; });
+      setBusy(m); setChecking(false);
+    })();
+    return () => { dead = true; };
+  }, [f.start, f.end]);
+
+  // Anyone picked before the dates changed may now clash. Drop them, loudly.
+  useEffect(() => {
+    const bad = crew.filter((c) => busy[c.id]);
+    if (bad.length) {
+      setCrew((L) => L.filter((c) => !busy[c.id]));
+      setErr(`${bad.map((b) => b.name.split(" ")[0]).join(" and ")} became unavailable for these dates and ${bad.length === 1 ? "was" : "were"} removed.`);
+    }
+  }, [busy]);
+
+  const shown = people.filter((p) => {
+    if (crew.some((c) => c.id === p.id)) return false;
+    if (!q.trim()) return true;
+    const t = q.toLowerCase();
+    return (p.name || "").toLowerCase().includes(t) || (p.base || "").toLowerCase().includes(t);
+  });
+
+  const fmt = (d) => { try { return new Date(d + "T00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short" }); } catch (e) { return d; } };
+
+  const save = async () => {
+    if (saving) return;
+    if (!f.title.trim()) { setErr("Give the trip a name."); return; }
+    if (!f.start) { setErr("Set the start date."); return; }
+    if (f.end && f.end < f.start) { setErr("The end date is before the start date."); return; }
+    setSaving(true); setErr(null);
+
+    const { data: trip, error: tErr } = await supabase.from("trips").insert({
+      operator_id: user.talentId, operator_name: user.name,
+      title: f.title.trim(), start_date: f.start, end_date: f.end || f.start,
+      meeting_point: f.meeting.trim() || null,
+      special_notes: f.notes.trim() || null,
+      allergies: f.allergies.trim() || null,
+      chat_state: "scheduled",
+    }).select("id").single();
+
+    if (tErr || !trip) { setSaving(false); setErr("Could not create the trip. Try once more."); return; }
+
+    await supabase.from("trip_members").insert({
+      trip_id: trip.id, user_id: user.talentId, display_name: user.name, role_in_trip: "operator",
+    });
+
+    const failed = [];
+    for (const c of crew) {
+      const { error } = await supabase.from("trip_members").insert({
+        trip_id: trip.id, user_id: c.id, display_name: c.name, role_in_trip: c.role,
+      });
+      if (error) failed.push({ name: c.name, why: String(error.message || "").replace(/^.*DOUBLE_BOOKED:\s*/, "") });
+    }
+
+    setSaving(false);
+    if (failed.length) {
+      setErr(failed.map((x) => `${x.name} could not be added — ${x.why}`).join(" "));
+      return;   // the trip exists; the operator can fix the crew on the trip page
+    }
+    onDone && onDone();
+    onClose();
+  };
+
+  return createPortal((
+    <div className="fixed inset-0 flex items-end" style={{ background: "rgba(8,10,8,.55)", zIndex: 234 }} onClick={onClose}>
+      <div className="w-full rounded-t-3xl flex flex-col safe-bottom" style={{ background: C.bg, maxHeight: "92dvh" }} onClick={(e) => e.stopPropagation()}>
+        <div className="pt-3 shrink-0"><div className="w-10 h-1 rounded-full mx-auto" style={{ background: C.line }} /></div>
+        <div className="px-5 pt-3 pb-6 overflow-y-auto hidescroll" style={{ scrollbarWidth: "none" }}>
+          <h2 className="text-[20px] font-semibold" style={{ color: C.ink }}>New trip</h2>
+          <p className="text-[12.5px] mt-1 leading-snug" style={{ color: C.muted }}>
+            Set the dates first. Nobody already booked can be added to them.
+          </p>
+
+          <div className="mt-4">
+            <BLabel>Trip name</BLabel>
+            <input value={f.title} onChange={(e) => setF({ ...f, title: e.target.value })} maxLength={80}
+              placeholder="7-day Western Cultural Tour"
+              className="w-full h-12 px-3.5 rounded-xl text-[15px]" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }} />
+          </div>
+
+          <div className="flex gap-2 mt-3">
+            <div className="flex-1">
+              <BLabel>Starts</BLabel>
+              <input type="date" value={f.start} onChange={(e) => setF({ ...f, start: e.target.value })}
+                className="w-full h-12 px-3 rounded-xl text-[14px]" style={{ background: C.card, border: `1px solid ${C.line}`, color: f.start ? C.ink : C.muted }} />
+            </div>
+            <div className="flex-1">
+              <BLabel>Ends</BLabel>
+              <input type="date" value={f.end} min={f.start || undefined} onChange={(e) => setF({ ...f, end: e.target.value })}
+                className="w-full h-12 px-3 rounded-xl text-[14px]" style={{ background: C.card, border: `1px solid ${C.line}`, color: f.end ? C.ink : C.muted }} />
+            </div>
+          </div>
+
+          <div className="mt-3">
+            <BLabel>Meeting point</BLabel>
+            <input value={f.meeting} onChange={(e) => setF({ ...f, meeting: e.target.value })} maxLength={90}
+              placeholder="Le Meridien, Thimphu"
+              className="w-full h-12 px-3.5 rounded-xl text-[15px]" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }} />
+          </div>
+
+          <div className="mt-3">
+            <BLabel>Special notes</BLabel>
+            <textarea value={f.notes} onChange={(e) => setF({ ...f, notes: e.target.value })} rows={2} maxLength={1200}
+              placeholder="Family of four. Slow walker. Early starts."
+              className="w-full px-3.5 py-3 rounded-xl text-[15px] leading-relaxed resize-none"
+              style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }} />
+          </div>
+
+          <div className="mt-3">
+            <BLabel>Allergies and medical</BLabel>
+            <textarea value={f.allergies} onChange={(e) => setF({ ...f, allergies: e.target.value })} rows={2} maxLength={800}
+              placeholder="Severe peanut allergy. Carries an EpiPen."
+              className="w-full px-3.5 py-3 rounded-xl text-[15px] leading-relaxed resize-none"
+              style={{ background: C.card, border: `1.5px solid rgba(122,46,46,.35)`, color: C.ink }} />
+          </div>
+
+          <div className="mt-5">
+            <SectionLabel trailing={crew.length ? `${crew.length} picked` : undefined}>Crew</SectionLabel>
+
+            {crew.map((c) => (
+              <div key={c.id} className="rounded-xl px-3.5 py-2.5 mb-2 flex items-center gap-2.5" style={{ background: C.pineSoft }}>
+                <div className="w-8 h-8 rounded-lg flex items-center justify-center text-[11px] font-semibold shrink-0"
+                  style={{ background: C.pineDeep, color: C.goldSoft }}>{initialsOf(c.name)}</div>
+                <div className="flex-1 min-w-0">
+                  <div className="text-[14px] font-semibold truncate" style={{ color: C.pine }}>{c.name}</div>
+                  <div className="text-[11.5px]" style={{ color: C.pine, opacity: .8 }}>{c.role === "driver" ? "Driver" : "Guide"}</div>
+                </div>
+                <button onClick={() => setCrew((L) => L.filter((x) => x.id !== c.id))}
+                  className="tap text-[12px] font-semibold shrink-0" style={{ color: C.maroon }}>Remove</button>
+              </div>
+            ))}
+
+            {!f.start ? (
+              <p className="text-[12.5px] leading-snug" style={{ color: C.muted }}>Set the start date to see who is free.</p>
+            ) : (
+              <>
+                <input value={q} onChange={(e) => setQ(e.target.value)} maxLength={40}
+                  placeholder={checking ? "Checking who is free…" : "Search a guide or driver"}
+                  className="w-full h-11 px-3.5 rounded-xl text-[14.5px] mb-2"
+                  style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }} />
+                <div style={{ maxHeight: 240, overflowY: "auto" }} className="hidescroll">
+                  {shown.length === 0 && <p className="text-[12.5px]" style={{ color: C.muted }}>Nobody matches that.</p>}
+                  {shown.map((p) => {
+                    const clash = busy[p.id];
+                    return (
+                      <button key={p.id} disabled={!!clash}
+                        onClick={() => { setErr(null); setCrew((L) => [...L, { id: p.id, name: p.name, role: p.role }]); setQ(""); }}
+                        className="tap w-full text-left rounded-xl px-3.5 py-2.5 mb-1.5 flex items-center gap-2.5"
+                        style={{ background: C.card, border: `1px solid ${C.line}`, opacity: clash ? .55 : 1 }}>
+                        <div className="w-8 h-8 rounded-lg flex items-center justify-center text-[11px] font-semibold shrink-0"
+                          style={{ background: clash ? C.line : C.pineDeep, color: clash ? C.muted : C.goldSoft }}>{p.initials}</div>
+                        <div className="flex-1 min-w-0">
+                          <div className="text-[14px] font-semibold truncate" style={{ color: C.ink }}>{p.name}</div>
+                          <div className="text-[11.5px] truncate" style={{ color: clash ? C.maroon : C.muted }}>
+                            {clash ? `On "${clash.trip_title}" ${fmt(clash.starts)} to ${fmt(clash.ends)}`
+                                   : `${p.role === "driver" ? "Driver" : "Guide"}${p.base ? " · " + p.base : ""} · free`}
+                          </div>
+                        </div>
+                        {clash ? <Lock size={14} color={C.maroon} className="shrink-0" />
+                               : <Plus size={16} color={C.pine} className="shrink-0" />}
+                      </button>
+                    );
+                  })}
+                </div>
+              </>
+            )}
+          </div>
+
+          {err && <p className="text-[13px] mt-3 leading-snug" style={{ color: C.maroon }}>{err}</p>}
+
+          <button onClick={save} disabled={saving} className="tap w-full rounded-2xl text-[15.5px] font-semibold mt-5"
+            style={{ height: 54, background: C.pine, color: "#fff" }}>{saving ? "Creating…" : "Create trip"}</button>
+          <button onClick={onClose} className="tap w-full text-center text-[13.5px] font-semibold mt-3" style={{ color: C.muted }}>Cancel</button>
+        </div>
+      </div>
+    </div>
+  ), document.body);
+}
+
 function TripsTab({ user, trips, actions, onMessage }) {
   const [openId, setOpenId] = useState(null);
+  const [newTrip, setNewTrip] = useState(false);
   const meId = user.talentId || user.id;
   const mineId = user.talentId || user.id;
   const mine = trips.filter((tr) => (tr.members || []).some((m) => m.id === mineId) || (tr.operatorId && tr.operatorId === mineId));
@@ -4334,10 +4549,38 @@ function TripsTab({ user, trips, actions, onMessage }) {
   const amCrew = (tr) => (tr.members || []).some((m) => m.id === mineId && m.roleInTrip !== "operator");
   const awaiting = mine.filter((tr) => amCrew(tr) && !iSigned(tr) && (!tr.end || tr.end >= todayIso));
   const confirmed = mine.filter((tr) => !awaiting.includes(tr));
-  const live = confirmed.filter((tr) => tr.start && tr.start <= todayIso && (tr.end || tr.start) >= todayIso);
-  const upcoming = confirmed.filter((tr) => tr.start && tr.start > todayIso);
-  const completed = confirmed.filter((tr) => (tr.end || tr.start || "") < todayIso)
+
+  // One source of truth, shared with the trip page: a trip stays Live for 3 days
+  // after it ends, which is when reviews are asked for and grades are given.
+  // tripStateNow opens the CHAT 3 days before departure, which is right for a chat
+  // but wrong for this list: a trip that has not started is not live. So Live needs
+  // "has actually started", and only borrows the 3-day tail at the end.
+  const stateOf = (tr) => tripStateNow({ start: tr.start, end: tr.end || tr.start });
+  const started = (tr) => tr.start && tr.start <= todayIso;
+  const live = confirmed.filter((tr) => started(tr) && stateOf(tr) !== "completed")
+    .sort((a, b) => ((a.end || a.start) > (b.end || b.start) ? 1 : -1));
+  const upcoming = confirmed.filter((tr) => tr.start && !started(tr))
+    .sort((a, b) => (a.start > b.start ? 1 : -1));
+  const past = confirmed.filter((tr) => tr.start && stateOf(tr) === "completed")
     .sort((a, b) => ((a.end || a.start) < (b.end || b.start) ? 1 : -1));
+
+  // Land on the tab with something in it, rather than an empty one.
+  const [view, setView] = useState(null);
+  const tab = view || (live.length ? "live" : upcoming.length ? "upcoming" : past.length ? "past" : "live");
+  const shown = tab === "live" ? live : tab === "upcoming" ? upcoming : past;
+
+  // Past is the year's record, so group it by month rather than one long list.
+  const byMonth = () => {
+    const g = [];
+    past.forEach((tr) => {
+      const d = new Date((tr.end || tr.start) + "T00:00");
+      const key = `${d.getFullYear()}-${d.getMonth()}`;
+      const label = d.toLocaleDateString("en-GB", { month: "long", year: "numeric" });
+      const last = g[g.length - 1];
+      if (last && last.key === key) last.list.push(tr); else g.push({ key, label, list: [tr] });
+    });
+    return g;
+  };
 
   const open = mine.find((tr) => tr.id === openId);
   if (open) return <TripHub user={user} meId={meId} trip={open} actions={actions} onMessage={onMessage} onBack={() => setOpenId(null)} />;
@@ -4356,14 +4599,64 @@ function TripsTab({ user, trips, actions, onMessage }) {
 
   return (
     <div className="px-5 py-4">
+      {user.kind === "operator" && (
+        <button onClick={() => setNewTrip(true)}
+          className="tap w-full h-12 rounded-2xl flex items-center justify-center gap-2 text-[15px] font-semibold mb-4"
+          style={{ background: C.pine, color: "#fff" }}>
+          <Plus size={18} strokeWidth={2.4} /> New trip
+        </button>
+      )}
+      {newTrip && <NewTripSheet user={user} onClose={() => setNewTrip(false)} onDone={() => actions.fetchTrips && actions.fetchTrips()} />}
+
       {mine.length === 0 ? (
-        <Empty Icon={MapIcon} title="No trips yet" body="When a job request is accepted, the trip and its group chat appear here." />
+        <Empty Icon={MapIcon} title="No trips yet" body="Create one above, or accept a job request and the trip appears here." />
       ) : (
         <>
+          {/* Signing is an action, not a category. It stays above the tabs so it
+              can never be hidden behind one. */}
           <Section label="Awaiting your signature" list={awaiting} tone="sign" />
-          <Section label="Live now" list={live} tone="live" />
-          <Section label="Upcoming" list={upcoming} />
-          <Section label="Completed" list={completed} tone="done" />
+
+          <div className="mb-4">
+            <Segmented value={tab} onChange={setView}
+              options={[["live", `Live (${live.length})`], ["upcoming", `Upcoming (${upcoming.length})`], ["past", `Past (${past.length})`]]} />
+          </div>
+
+          {tab === "past" ? (
+            past.length === 0 ? (
+              <div className="rounded-2xl px-4 py-8 text-center" style={{ background: C.card, border: `1px dashed ${C.line}` }}>
+                <div className="text-[14.5px] font-semibold" style={{ color: C.ink }}>No finished trips yet</div>
+                <p className="text-[12.5px] mt-1 leading-snug" style={{ color: C.muted }}>
+                  A trip moves here 3 days after it ends, and stays for good.
+                </p>
+              </div>
+            ) : byMonth().map((g) => (
+              <div key={g.key} className="mb-5">
+                <SectionLabel trailing={`${g.list.length}`}>{g.label}</SectionLabel>
+                <div className="space-y-3">
+                  {g.list.map((tr) => (
+                    <TripCard key={tr.id} trip={tr} onOpen={() => setOpenId(tr.id)} tone="done"
+                      tally={tr.operatorId === mineId ? sigTally(tr) : null} />
+                  ))}
+                </div>
+              </div>
+            ))
+          ) : shown.length === 0 ? (
+            <div className="rounded-2xl px-4 py-8 text-center" style={{ background: C.card, border: `1px dashed ${C.line}` }}>
+              <div className="text-[14.5px] font-semibold" style={{ color: C.ink }}>
+                {tab === "live" ? "Nothing running right now" : "Nothing booked ahead"}
+              </div>
+              <p className="text-[12.5px] mt-1 leading-snug" style={{ color: C.muted }}>
+                {tab === "live" ? "A trip appears here on its start day and stays for 3 days after it ends." : "Confirmed trips with a future start date appear here."}
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {shown.map((tr) => (
+                <TripCard key={tr.id} trip={tr} onOpen={() => setOpenId(tr.id)} tone={tab === "live" ? "live" : undefined}
+                  tally={tr.operatorId === mineId ? sigTally(tr) : null} />
+              ))}
+            </div>
+          )}
         </>
       )}
     </div>
