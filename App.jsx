@@ -53,7 +53,7 @@ const sysMsg = (text) => ({ id: uid(), senderId: null, kind: "system", body: tex
 /* ── Cloud (Supabase) ── posts are global when configured; everything falls back to local demo mode when not. */
 const CLOUD = Boolean(supabase);
 const DEMO_MODE = false;   // set true only for local demos without a database
-const BUILD = "BUILD 34 — 26 Aug";   // bump every deploy; shown at the top of the welcome screen
+const BUILD = "BUILD 37 — 27 Aug";   // bump every deploy; shown at the top of the welcome screen
 
 /* ---- Install state ---- */
 // 43 characters of randomness — not guessable
@@ -1573,6 +1573,12 @@ function Shell({ user, posts, jobs, trips, listings, actions, engagement, dm, di
   const [firstRun, setFirstRun] = useState(() => {
     try { return CLOUD && !localStorage.getItem("bth_seen_intro_" + (user.talentId || user.id)); } catch (e) { return false; }
   });
+  // "Show me around again" from settings, wherever in the tree it is tapped
+  useEffect(() => {
+    const replay = () => setFirstRun(true);
+    window.addEventListener("bth-replay-tour", replay);
+    return () => window.removeEventListener("bth-replay-tour", replay);
+  }, []);
   const [installEvent, setInstallEvent] = useState(null);
   const [installed, setInstalled] = useState(isStandalone());
 
@@ -9165,13 +9171,12 @@ function Tutorial({ user, nav, setTab, onDone }) {
   // steps point at real tabs; tabIndex tells the highlight which nav item to ring
   const steps = talent
     ? [
-        { kind: "intro", title: `Welcome, ${first}`, body: "You're one of the first on the hub. Two minutes and you'll know your way around." },
-        { kind: "tab", tab: "post", title: "Your Feed", body: "Share photos from your trips, pinned to where you took them. Every approved post builds your portfolio." },
-        { kind: "tab", tab: "jobs", title: "Jobs", body: "Operators post work here. Apply to anything matching your skills — including short-notice jobs when someone drops out." },
-        { kind: "tab", tab: "trips", title: "Trips", body: "Once you're hired, the trip appears here with its itinerary and meeting point." },
-        { kind: "tab", tab: "chats", title: "Messages", body: "Crew chat for each trip, plus direct messages with operators and other guides." },
-        { kind: "tab", tab: "profile", title: "Your Profile", body: "Set your availability, add specialities and languages. This is what operators see before booking you." },
-        { kind: "top", title: "Search & alerts", body: "Search anyone by name, and tap the bell for jobs, messages and follows." },
+        { kind: "intro", title: `Welcome, ${first}`, body: "You are one of the first here. One minute and you will know your way around." },
+        { kind: "tab", tab: "post", title: "Feed", body: "Photos from your trips, pinned to the place you took them. This is how operators see the work you have actually done." },
+        { kind: "tab", tab: "trips", title: "Trips", body: "Jobs you can apply for, and every trip you are hired on. Live trips, upcoming ones, and a record of the past." },
+        { kind: "tab", tab: "chats", title: "Messages", body: "Direct messages with operators. The crew chat for a trip lives inside the trip itself." },
+        { kind: "tab", tab: "profile", title: "Your profile", body: "Reviews, skills, free days and your record, each on its own tab. Mark the days you are busy so operators stop calling you on the wrong dates." },
+        { kind: "top", title: "Alerts", body: "Tap the bell for job offers, trip reminders and licence warnings. We also send these to your phone." },
         { kind: "outro", title: "One last thing", body: user.licenseStatus === "submitted"
             ? "Your licence is with our review team. Everything works meanwhile — your Verified badge appears once it clears."
             : "Add your licence from your profile to get the Verified badge. Operators prioritise verified guides and drivers." },
@@ -9180,9 +9185,9 @@ function Tutorial({ user, nav, setTab, onDone }) {
     ? [
         { kind: "intro", title: `Welcome, ${first}`, body: "You're one of the first businesses on the hub. A quick tour of your new page." },
         { kind: "tab", tab: "post", title: "Your Feed", body: "Post your rooms, products and offers — every guide and operator on the hub sees this feed." },
-        { kind: "tab", tab: "bookings", title: "Bookings", body: "Your live calendar. Tap days to block them, and confirm operator requests right here." },
+        { kind: "tab", tab: "bookings", title: "Bookings", body: "Your live calendar. Tap a day to close it, confirm requests, or send back a price. Operators see the same calendar before they ask." },
         { kind: "tab", tab: "discover", title: "Discover", body: "Browse verified guides, drivers and fellow businesses across Bhutan." },
-        { kind: "tab", tab: "chats", title: "Messages", body: "Tour operators message you here to plan stays. The guide on the trip can reach you too." },
+        { kind: "tab", tab: "chats", title: "Messages", body: "Tour operators message you here to plan stays, and send booking requests. The guide bringing a group can reach you too." },
         { kind: "tab", tab: "profile", title: "Your Page", body: "Photos, what you offer, and your location — this is what passing tours see." },
         { kind: "top", title: "Search & alerts", body: "Search anyone by name, and tap the bell for messages and follows." },
         { kind: "outro", title: "One last thing", body: user.licenseStatus === "submitted"
@@ -9190,14 +9195,15 @@ function Tutorial({ user, nav, setTab, onDone }) {
             : "Add your trade licence from your profile to get the Verified badge. Tours trust verified businesses." },
       ]
     : [
-        { kind: "intro", title: `Welcome, ${first}`, body: "You're one of the first operators here. Quick tour so you can start booking." },
-        { kind: "tab", tab: "discover", title: "Discover", body: "Every verified guide and driver, filtered by speciality, language and who's available right now." },
-        { kind: "tab", tab: "requests", title: "Jobs", body: "Post a job and let qualified people apply, or send a request directly to someone you want." },
-        { kind: "tab", tab: "trips", title: "Trips", body: "Every confirmed booking becomes a trip — crew, itinerary and meeting point in one place." },
-        { kind: "tab", tab: "chats", title: "Messages", body: "A chat channel per trip, plus direct messages with any guide or driver." },
-        { kind: "tab", tab: "feed", title: "Feed", body: "Recent posts from guides and drivers — a good way to spot people worth booking." },
-        { kind: "top", title: "Search & alerts", body: "Search people by name, and tap the bell when someone applies to your job." },
-        { kind: "outro", title: "You're set", body: "Post your first job and see who applies. Tell us what's missing — we're still building." },
+        { kind: "intro", title: `Welcome, ${first}`, body: "One minute and you can build your first trip." },
+        { kind: "tab", tab: "post", title: "Feed", body: "What guides, drivers and hotels are posting. A good way to spot people worth booking." },
+        { kind: "tab", tab: "trips", title: "Trips", body: "Tap New trip to set the dates, notes and allergies, then pick your crew. Live, Upcoming and Past keep the year in order." },
+        { kind: "tab", tab: "discover", title: "Find", body: "Every verified guide and driver. Filter by language, speciality, home town and who is free right now." },
+        { kind: "tab", tab: "hotels", title: "Hotels", body: "Pick your dates on a hotel calendar and send a request. Prices come back as a card you accept or decline." },
+        { kind: "tab", tab: "action", title: "Action", body: "Your messages, and enquiries you are still pricing. Keep a trip here before it is real, and turn it into one when the guest says yes." },
+        { kind: "rule", title: "One trip at a time", body: "A guide or driver can never be on two trips that overlap. If someone is already booked, you will see why and you cannot pick them. That is enforced for everyone, so your crew turns up." },
+        { kind: "top", title: "Alerts", body: "Tap the bell when someone applies, a hotel replies, or a guest leaves a review for you to confirm." },
+        { kind: "outro", title: "You are set", body: "Build your first trip, or post a job and see who applies. Tell us what is missing — we are still building." },
       ];
 
   const step = steps[i];
@@ -9215,26 +9221,30 @@ function Tutorial({ user, nav, setTab, onDone }) {
 
   return createPortal((
     <div className="fixed inset-0" style={{ zIndex: 250 }}>
-      {/* dim everything */}
-      <div className="absolute inset-0" style={{ background: "rgba(8,10,8,.72)" }} onClick={next} />
+      {/* Dimmed, but NOT tappable-to-advance: a stray tap used to skip a step
+          without the person realising what they had missed. */}
+      <div className="absolute inset-0" style={{ background: "rgba(8,10,8,.72)" }} />
 
-      {/* ring around the tab being explained */}
-      {navIndex >= 0 && (
-        <div className="absolute" style={{ left: highlightLeft, width: highlightWidth, bottom: 0, height: 62, pointerEvents: "none" }}>
-          <div className="absolute inset-1 rounded-2xl" style={{ border: `2.5px solid ${C.gold}`, boxShadow: `0 0 0 4px ${C.gold}33`, background: "rgba(255,255,255,.10)" }} />
+      {/* Everything that points at the app must sit in the same centred column
+          the app itself uses, or the rings land beside the nav on a wide screen. */}
+      <div className="absolute inset-0 flex justify-center pointer-events-none">
+        <div className="w-full max-w-md relative">
+          {navIndex >= 0 && (
+            <div className="absolute" style={{ left: highlightLeft, width: highlightWidth, bottom: 0, height: 62 }}>
+              <div className="absolute inset-1 rounded-2xl" style={{ border: `2.5px solid ${C.gold}`, boxShadow: `0 0 0 4px ${C.gold}33`, background: "rgba(255,255,255,.10)" }} />
+            </div>
+          )}
+          {step.kind === "top" && (
+            <div className="absolute left-2 right-2 rounded-2xl" style={{ top: 4, height: 52, border: `2.5px solid ${C.gold}`, boxShadow: `0 0 0 4px ${C.gold}33` }} />
+          )}
         </div>
-      )}
+      </div>
 
-      {/* ring around the top bar */}
-      {step.kind === "top" && (
-        <div className="absolute left-2 right-2 rounded-2xl" style={{ top: 4, height: 52, border: `2.5px solid ${C.gold}`, boxShadow: `0 0 0 4px ${C.gold}33`, pointerEvents: "none" }} />
-      )}
-
-      {/* card */}
-      <div className="absolute left-0 right-0 px-5" style={{ bottom: navIndex >= 0 ? 86 : "auto", top: step.kind === "top" ? 70 : "auto",
-        ...(step.kind === "intro" || step.kind === "outro" ? { top: "50%", transform: "translateY(-50%)" } : {}) }}>
+      {/* card, in the same column */}
+      <div className="absolute left-0 right-0 mx-auto px-5" style={{ maxWidth: 448, bottom: navIndex >= 0 ? 86 : "auto", top: step.kind === "top" ? 70 : "auto",
+        ...(["intro", "outro", "rule"].includes(step.kind) ? { top: "50%", transform: "translateY(-50%)" } : {}) }}>
         <div className="rounded-2xl p-5" style={{ background: C.card, boxShadow: "0 20px 40px rgba(0,0,0,.35)" }}>
-          {(step.kind === "intro" || step.kind === "outro") && (
+          {["intro", "outro", "rule"].includes(step.kind) && (
             <div className="w-12 h-12 rounded-2xl flex items-center justify-center mb-3" style={{ background: C.pine }}>
               <Compass size={22} color={C.goldSoft} strokeWidth={1.8} />
             </div>
@@ -10192,6 +10202,7 @@ function PrivacyPanel({ talent }) {
       {fb && <FeedbackSheet user={{ talentId: talent.id, kind: talent.role }} onClose={() => setFb(false)} />}
       {[
         ...(["guide", "driver"].includes(talent.role) ? [["Past trip reviews", () => setLegacyOpen(true)]] : []),
+        ["Show me around the app", () => { try { window.dispatchEvent(new Event("bth-replay-tour")); } catch (e) {} }],
         ["Send feedback about the app", () => setFb(true)],
         ["Privacy policy", () => setOpen("privacy")],
         ["Terms of use", () => setOpen("terms")],
@@ -11721,9 +11732,9 @@ The link works once and expires in 14 days.`;
           <div className="rounded-xl p-3.5 flex gap-2.5 mt-4" style={{ background: C.bg, border: `1px solid ${C.line}` }}>
             <ShieldCheck size={16} color={C.gold} className="shrink-0 mt-0.5" />
             <p className="text-[12px] leading-snug" style={{ color: C.muted }}>
-              Guides and drivers cannot request reviews of themselves — only the operator running the trip,
-              or an admin, can. Every request is recorded against the trip, so a rating can always be traced
-              back to real work.
+              {isTalentIssuer
+                ? "You are asking for a review of your own work, and only your own. The guest writes it, and the operator who ran this trip confirms it before it appears on your profile."
+                : "Every request is recorded against the trip, so a rating can always be traced back to real work."}
             </p>
           </div>
         </div>
