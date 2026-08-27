@@ -53,7 +53,7 @@ const sysMsg = (text) => ({ id: uid(), senderId: null, kind: "system", body: tex
 /* ── Cloud (Supabase) ── posts are global when configured; everything falls back to local demo mode when not. */
 const CLOUD = Boolean(supabase);
 const DEMO_MODE = false;   // set true only for local demos without a database
-const BUILD = "BUILD 37 — 27 Aug";   // bump every deploy; shown at the top of the welcome screen
+const BUILD = "BUILD 40 — 27 Aug";   // bump every deploy; shown at the top of the welcome screen
 
 /* ---- Install state ---- */
 // 43 characters of randomness — not guessable
@@ -401,6 +401,23 @@ function useAutoUpdate() {
 }
 
 /* ---- A tour operator with the link. No account, no sign-in, one decision. ---- */
+/* Module scope on purpose. Declared inside a component this became a new
+   component type on every render, so React destroyed the children it wraps
+   and anyone typing lost the field. */
+function VerifyShell({ children }) {
+  return (
+    <div className="min-h-screen flex flex-col" style={{ background: C.bg }}>
+      <div className="px-6 pt-6 pb-4 flex items-center gap-2.5">
+        <div className="w-8 h-8 rounded-xl flex items-center justify-center" style={{ background: C.pine }}>
+          <Compass size={16} color={C.goldSoft} strokeWidth={2.1} />
+        </div>
+        <div className="text-[13.5px] font-semibold" style={{ color: C.pine }}>Bhutan Tourism Hub</div>
+      </div>
+      <div className="flex-1 px-6 pb-10">{children}</div>
+    </div>
+  );
+}
+
 function VerifyReview({ token }) {
   const [row, setRow] = useState(undefined);   // undefined=loading  null=bad link
   const [who, setWho] = useState("");
@@ -429,33 +446,22 @@ function VerifyReview({ token }) {
     setDone(d);
   };
 
-  const Shell = ({ children }) => (
-    <div className="min-h-screen flex flex-col" style={{ background: C.bg }}>
-      <div className="px-6 pt-6 pb-4 flex items-center gap-2.5">
-        <div className="w-8 h-8 rounded-xl flex items-center justify-center" style={{ background: C.pine }}>
-          <Compass size={16} color={C.goldSoft} strokeWidth={2.1} />
-        </div>
-        <div className="text-[13.5px] font-semibold" style={{ color: C.pine }}>Bhutan Tourism Hub</div>
-      </div>
-      <div className="flex-1 px-6 pb-10">{children}</div>
-    </div>
-  );
 
-  if (row === undefined) return <Shell><p className="text-[14px] mt-8" style={{ color: C.muted }}>Opening the review…</p></Shell>;
+  if (row === undefined) return <VerifyShell><p className="text-[14px] mt-8" style={{ color: C.muted }}>Opening the review…</p></VerifyShell>;
 
   if (row === null) return (
-    <Shell>
+    <VerifyShell>
       <div className="rounded-2xl p-5 mt-6" style={{ background: C.card, border: `1px solid ${C.line}` }}>
         <div className="text-[16px] font-semibold" style={{ color: C.ink }}>This link is not working</div>
         <p className="text-[14px] mt-2 leading-relaxed" style={{ color: C.muted }}>
           It may have been withdrawn, or the link was cut short when it was sent. Ask the guide to send it again.
         </p>
       </div>
-    </Shell>
+    </VerifyShell>
   );
 
   if (done) return (
-    <Shell>
+    <VerifyShell>
       <div className="rounded-2xl p-5 mt-6 text-center" style={{ background: C.card, border: `1.5px solid ${done === "verified" ? C.pine : C.line}` }}>
         <div className="w-14 h-14 rounded-2xl mx-auto flex items-center justify-center"
           style={{ background: done === "verified" ? C.pineSoft : C.bg }}>
@@ -486,11 +492,11 @@ function VerifyReview({ token }) {
           <p className="text-center text-[12px] mt-2.5" style={{ color: C.pine, opacity: .75 }}>Free for licensed tour operators.</p>
         </div>
       )}
-    </Shell>
+    </VerifyShell>
   );
 
   return (
-    <Shell>
+    <VerifyShell>
       <div className="inline-flex items-center gap-2 rounded-full px-3 py-1.5 mb-3" style={{ background: C.goldSoft }}>
         <Clock size={13} color={C.gold} />
         <span className="text-[11.5px] font-bold tracking-[.08em] uppercase" style={{ color: C.gold }}>Waiting for you</span>
@@ -555,7 +561,7 @@ function VerifyReview({ token }) {
         You do not need an account. Please say no if anything is wrong — that honesty is what keeps
         every review on the hub worth reading.
       </p>
-    </Shell>
+    </VerifyShell>
   );
 }
 
@@ -10362,6 +10368,22 @@ const RATIOS = [
   { id: "16 / 9", label: "Landscape", w: 16,   h: 9,    hint: "16:9" },
 ];
 
+/* Module scope: inside EnhanceEditor this was a new component type on every
+   render, so the range input was rebuilt mid-drag and the slider jumped. */
+function EnhanceSlider({ label, min, max, step, value, onChange, mid }) {
+  return (
+    <div className="mb-2.5">
+      <div className="flex items-center justify-between mb-1">
+        <span className="text-[12px] font-medium text-white" style={{ opacity: .85 }}>{label}</span>
+        <button onClick={() => onChange(mid)} className="tap text-[10.5px]" style={{ color: "rgba(255,255,255,.5)" }}>reset</button>
+      </div>
+      <input type="range" min={min} max={max} step={step} value={value}
+        onChange={(e) => onChange(parseFloat(e.target.value))}
+        className="w-full" style={{ accentColor: C.gold }} />
+    </div>
+  );
+}
+
 function EnhanceEditor({ slides, onDone, onClose }) {
   const [i, setI] = useState(0);
   const [params, setParams] = useState(() => slides.map(() => ({ preset: "none", bright: 1, contrast: 1, sat: 1, warmth: 0, auto: false })));
@@ -10383,18 +10405,6 @@ function EnhanceEditor({ slides, onDone, onClose }) {
     setBusy(false);
     onDone(out);
   };
-
-  const Slider = ({ label, min, max, step, value, onChange, mid }) => (
-    <div className="mb-2.5">
-      <div className="flex items-center justify-between mb-1">
-        <span className="text-[12px] font-medium text-white" style={{ opacity: .85 }}>{label}</span>
-        <button onClick={() => onChange(mid)} className="tap text-[10.5px]" style={{ color: "rgba(255,255,255,.5)" }}>reset</button>
-      </div>
-      <input type="range" min={min} max={max} step={step} value={value}
-        onChange={(e) => onChange(parseFloat(e.target.value))}
-        className="w-full" style={{ accentColor: C.gold }} />
-    </div>
-  );
 
   return createPortal((
     <div className="fixed inset-0 flex flex-col" style={{ background: "#0b0d0b", zIndex: 248, height: "100dvh" }}>
@@ -10429,10 +10439,10 @@ function EnhanceEditor({ slides, onDone, onClose }) {
             </button>
           ))}
         </div>
-        <Slider label="Brightness" min={0.7} max={1.3} step={0.01} value={cur.bright} mid={1} onChange={(v) => setCur({ bright: v })} />
-        <Slider label="Contrast" min={0.7} max={1.4} step={0.01} value={cur.contrast} mid={1} onChange={(v) => setCur({ contrast: v })} />
-        <Slider label="Colour" min={0} max={1.8} step={0.01} value={cur.sat} mid={1} onChange={(v) => setCur({ sat: v })} />
-        <Slider label="Warmth" min={-1} max={1} step={0.01} value={cur.warmth} mid={0} onChange={(v) => setCur({ warmth: v })} />
+        <EnhanceSlider label="Brightness" min={0.7} max={1.3} step={0.01} value={cur.bright} mid={1} onChange={(v) => setCur({ bright: v })} />
+        <EnhanceSlider label="Contrast" min={0.7} max={1.4} step={0.01} value={cur.contrast} mid={1} onChange={(v) => setCur({ contrast: v })} />
+        <EnhanceSlider label="Colour" min={0} max={1.8} step={0.01} value={cur.sat} mid={1} onChange={(v) => setCur({ sat: v })} />
+        <EnhanceSlider label="Warmth" min={-1} max={1} step={0.01} value={cur.warmth} mid={0} onChange={(v) => setCur({ warmth: v })} />
         {many && (
           <button onClick={copyAll} className="tap w-full h-9 rounded-lg text-[12.5px] font-semibold mt-1" style={{ background: "rgba(255,255,255,.1)", color: "#fff" }}>
             Apply this look to all {slides.length} photos
@@ -11275,6 +11285,44 @@ function CropEditor({ slides, initialRatio, onDone, onClose }) {
 /* ========================================================================== */
 /*  GUEST REVIEW — opened from a one-time link. No account, no sign-in.       */
 /* ========================================================================== */
+/* Defined at module scope on purpose. Declared inside GuestReview it became a
+   NEW component type on every keystroke, so React tore down and rebuilt this
+   subtree each time and the guest lost the field they were typing in. */
+function GuestStars({ value, onChange, size = 36 }) {
+  return (
+    <div className="flex justify-center gap-1.5">
+      {[1, 2, 3, 4, 5].map((n) => (
+        <button key={n} onClick={() => onChange(n)} className="tap" aria-label={`${n} out of 5`}>
+          <Star size={size} strokeWidth={1.4}
+            color={n <= value ? C.gold : C.line}
+            fill={n <= value ? C.gold : "transparent"}
+            style={{ transition: "transform .12s", transform: n === value ? "scale(1.08)" : "none" }} />
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/* Module scope on purpose. Declared inside a component this became a new
+   component type on every render, so React destroyed the children it wraps
+   and anyone typing lost the field. */
+function GuestShell({ children }) {
+  return (
+    <div className="flex-1 overflow-y-auto hidescroll px-6 py-8" style={{ scrollbarWidth: "none" }}>
+      <div className="flex items-center gap-2.5 mb-7">
+        <div className="w-10 h-10 rounded-xl flex items-center justify-center" style={{ background: C.pine }}>
+          <Compass size={20} color={C.goldSoft} strokeWidth={1.9} />
+        </div>
+        <div>
+          <div className="text-[16px] font-semibold leading-none" style={{ color: C.ink }}>Bhutan Tourism Hub</div>
+          <div className="text-[10px] font-semibold tracking-[.14em] uppercase mt-1" style={{ color: C.gold }}>Verified guest review</div>
+        </div>
+      </div>
+      {children}
+    </div>
+  );
+}
+
 function GuestReview({ token }) {
   const [state, setState] = useState("loading");   // loading | form | done | invalid | used | expired
   const [info, setInfo] = useState(null);          // { mode, trip_id, trip_label, guest_name, members[] }
@@ -11334,23 +11382,9 @@ function GuestReview({ token }) {
     setState("done");
   };
 
-  const Shell = ({ children }) => (
-    <div className="flex-1 overflow-y-auto hidescroll px-6 py-8" style={{ scrollbarWidth: "none" }}>
-      <div className="flex items-center gap-2.5 mb-7">
-        <div className="w-10 h-10 rounded-xl flex items-center justify-center" style={{ background: C.pine }}>
-          <Compass size={20} color={C.goldSoft} strokeWidth={1.9} />
-        </div>
-        <div>
-          <div className="text-[16px] font-semibold leading-none" style={{ color: C.ink }}>Bhutan Tourism Hub</div>
-          <div className="text-[10px] font-semibold tracking-[.14em] uppercase mt-1" style={{ color: C.gold }}>Verified guest review</div>
-        </div>
-      </div>
-      {children}
-    </div>
-  );
 
   const Message = ({ Icon, title, body: b, tone }) => (
-    <Shell>
+    <GuestShell>
       <div className="rounded-2xl p-6 text-center" style={{ background: C.card, border: `1px solid ${C.line}` }}>
         <div className="w-14 h-14 rounded-2xl flex items-center justify-center mx-auto mb-3"
           style={{ background: tone === "good" ? C.pineSoft : C.goldSoft }}>
@@ -11359,13 +11393,13 @@ function GuestReview({ token }) {
         <div className="text-[17px] font-semibold" style={{ color: C.ink }}>{title}</div>
         <p className="text-[13.5px] leading-relaxed mt-2" style={{ color: C.muted }}>{b}</p>
       </div>
-    </Shell>
+    </GuestShell>
   );
 
   if (state === "loading") return (
-    <Shell><div className="flex items-center justify-center gap-2 py-16 text-[14px]" style={{ color: C.muted }}>
+    <GuestShell><div className="flex items-center justify-center gap-2 py-16 text-[14px]" style={{ color: C.muted }}>
       <Loader2 size={18} className="animate-spin" /> Opening your review…
-    </div></Shell>
+    </div></GuestShell>
   );
 
   if (state === "invalid") return <Message Icon={ShieldAlert} title="This link isn't valid"
@@ -11377,21 +11411,8 @@ function GuestReview({ token }) {
   if (state === "expired") return <Message Icon={Clock} title="This link has expired"
     body="Review links stay open for 14 days. Ask your tour operator to send a new one and we'll be glad to hear from you." />;
 
-  const Stars = ({ value, onChange, size = 36 }) => (
-    <div className="flex justify-center gap-1.5">
-      {[1, 2, 3, 4, 5].map((n) => (
-        <button key={n} onClick={() => onChange(n)} className="tap" aria-label={`${n} out of 5`}>
-          <Star size={size} strokeWidth={1.4}
-            color={n <= value ? C.gold : C.line}
-            fill={n <= value ? C.gold : "transparent"}
-            style={{ transition: "transform .12s", transform: n === value ? "scale(1.08)" : "none" }} />
-        </button>
-      ))}
-    </div>
-  );
-
   if (state === "done") return (
-    <Shell>
+    <GuestShell>
       <div className="text-center mb-6 fade">
         <div className="w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-3" style={{ background: C.pineSoft }}>
           <Check size={30} color={C.pine} strokeWidth={2.5} />
@@ -11432,11 +11453,11 @@ function GuestReview({ token }) {
           Your words now guide the next traveller. Kadrinche la.
         </p>
       </div>
-    </Shell>
+    </GuestShell>
   );
 
   return (
-    <Shell>
+    <GuestShell>
       <div className="text-center mb-6">
         <div className="text-[19px] font-semibold tracking-[-0.01em]" style={{ color: C.ink }}>
           {info?.guest_name ? `${String(info.guest_name).split(" ")[0]}, how` : "How"} was your journey?
@@ -11463,7 +11484,7 @@ function GuestReview({ token }) {
               <div className="text-[12.5px]" style={{ color: C.muted }}>Your {m.role === "driver" ? "driver" : "guide"} on this trip</div>
             </div>
           </div>
-          <Stars value={ratings[m.id] || 0} onChange={(n) => { setRatings((r) => ({ ...r, [m.id]: n })); setErr(null); }} />
+          <GuestStars value={ratings[m.id] || 0} onChange={(n) => { setRatings((r) => ({ ...r, [m.id]: n })); setErr(null); }} />
           <div className="text-center text-[13px] font-semibold mt-2" style={{ color: (ratings[m.id] || 0) ? C.gold : "transparent" }}>
             {[null, "Poor", "Fair", "Good", "Great", "Excellent"][ratings[m.id] || 0] || " "}
           </div>
@@ -11491,7 +11512,7 @@ function GuestReview({ token }) {
       <p className="text-[11.5px] text-center mt-3" style={{ color: C.muted }}>
         No account needed. Published instantly to their public profile on bhutantourismhub.com.
       </p>
-    </Shell>
+    </GuestShell>
   );
 }
 
