@@ -53,7 +53,7 @@ const sysMsg = (text) => ({ id: uid(), senderId: null, kind: "system", body: tex
 /* ── Cloud (Supabase) ── posts are global when configured; everything falls back to local demo mode when not. */
 const CLOUD = Boolean(supabase);
 const DEMO_MODE = false;   // set true only for local demos without a database
-const BUILD = "BUILD 40 — 27 Aug";   // bump every deploy; shown at the top of the welcome screen
+const BUILD = "BUILD 41 — 27 Aug";   // bump every deploy; shown at the top of the welcome screen
 
 /* ---- Install state ---- */
 // 43 characters of randomness — not guessable
@@ -4345,7 +4345,8 @@ function NewTripSheet({ user, onClose, onDone }) {
   const [err, setErr] = useState(null);
   const [checking, setChecking] = useState(false);
 
-  const people = useMemo(() => allProfiles().map(profileToTalent)
+  // allProfiles() already returns talents. Mapping again blanked every name to "Member".
+  const people = useMemo(() => allProfiles()
     .filter((p) => ["guide", "driver"].includes(p.role)), []);
 
   // Who is already committed across these dates. Re-checked whenever dates move.
@@ -9371,7 +9372,9 @@ function scoreOne(p, spec, rawWords) {
 
   for (const L of spec.langs) if (langNames(p).some((n) => n.toLowerCase() === L.toLowerCase())) { score += 3; why.push(L); }
   for (const t of [...spec.specs, ...spec.drives, ...spec.biz]) if (tags.some((x) => x.toLowerCase() === t.toLowerCase())) { score += 3; why.push(t); }
-  if (spec.vehicles.length && p.vehicle && spec.vehicles.some((v) => v.toLowerCase() === String(p.vehicle).toLowerCase())) { score += 3; why.push(p.vehicle); }
+  // A named vehicle is a hard requirement (you need the seats), so it outweighs
+  // a category merely inferred from words like "east".
+  if (spec.vehicles.length && p.vehicle && spec.vehicles.some((v) => v.toLowerCase() === String(p.vehicle).toLowerCase())) { score += 5; why.push(p.vehicle); }
   for (const t of spec.towns) if (String(p.base || "").toLowerCase().includes(t.toLowerCase())) { score += 2; why.push(t); }
   if (spec.free && p.availability === "open") { score += 2; why.push("Free now"); }
   if (spec.verified && p.verified) { score += 2; why.push("Verified"); }
@@ -9386,6 +9389,34 @@ function scoreOne(p, spec, rawWords) {
 
 const STOP = new Set(["the","a","an","and","or","for","with","who","that","need","want","looking","find","me","my","is","are","can","speak","speaks","speaking","someone","person","please","in","on","at","to","of","i","we","us","good","best","guide","guides","driver","drivers","hotel","hotels"]);
 
+
+/* How much can an operator actually rely on this person, from evidence only.
+   Confidence-weighted on purpose: one 5-star review must not outrank a guide
+   with years of verified work. Returns 0..10. */
+function qualityScore(p) {
+  let q = 0;
+  if (p.verified) q += 2;
+  if (String(p.licenseStatus || "") === "verified") q += 1;
+
+  const n = p.ratingCount || 0;
+  const r = p.rating || 0;
+  if (n > 0) q += (r / 5) * 3 * Math.min(1, n / 4);   // needs ~4 reviews for full weight
+
+  q += Math.min(2, (p.trips || 0) * 0.4);
+  q += Math.min(2, (p.years || 0) * 0.12);
+  return Math.round(q * 10) / 10;
+}
+
+/* What that score is actually built on, so nobody has to take it on faith. */
+function qualityReasons(p) {
+  const out = [];
+  if (p.verified) out.push("licence verified");
+  if ((p.ratingCount || 0) > 0) out.push(`${p.rating} from ${p.ratingCount} review${p.ratingCount === 1 ? "" : "s"}`);
+  if ((p.trips || 0) > 0) out.push(`${p.trips} trip${p.trips === 1 ? "" : "s"} here`);
+  if ((p.years || 0) > 0) out.push(`${p.years} yrs licensed`);
+  return out;
+}
+
 function smartMatch(raw, people) {
   const spec = readQuery(raw);
   const rawWords = String(raw || "").toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter((w) => w && !STOP.has(w));
@@ -9399,9 +9430,16 @@ function smartMatch(raw, people) {
   if (spec.verified) pool = pool.filter((p) => p.verified);
   if (spec.minYears > 0) pool = pool.filter((p) => (p.years || 0) >= spec.minYears);
 
-  const scored = pool.map((p) => ({ p, ...scoreOne(p, spec, rawWords) }))
+  const scored = pool.map((p) => ({ p, ...scoreOne(p, spec, rawWords), quality: qualityScore(p), why2: qualityReasons(p) }))
     .filter((r) => (anySignal || rawWords.length) ? r.score > 0 : true)
-    .sort((a, b) => b.score - a.score || (b.p.years || 0) - (a.p.years || 0));
+    // match first, then who an operator can most rely on
+    .sort((a, b) => b.score - a.score || b.quality - a.quality || (b.p.years || 0) - (a.p.years || 0));
+
+  // Only call something the best candidate when it is genuinely ahead.
+  if (scored.length > 1) {
+    const a = scored[0], b = scored[1];
+    a.best = (a.score > b.score) || (a.score === b.score && a.quality >= b.quality + 1);
+  }
 
   const hints = [];
   if (scored.length === 0) {
@@ -9415,11 +9453,11 @@ function smartMatch(raw, people) {
   return { spec, results: scored, hints: hints.slice(0, 2) };
 }
 
-
 function SmartSearchSheet({ onClose, onOpenProfile }) {
   const [q, setQ] = useState("");
   const [ran, setRan] = useState(false);
-  const people = useMemo(() => allProfiles().map(profileToTalent)
+  // allProfiles() already returns talents. Mapping again blanked every name to "Member".
+  const people = useMemo(() => allProfiles()
     .filter((p) => ["guide", "driver", "business"].includes(p.role)), []);
   const out = useMemo(() => (ran && q.trim() ? smartMatch(q, people) : null), [ran, q, people]);
 
@@ -9480,6 +9518,13 @@ function SmartSearchSheet({ onClose, onOpenProfile }) {
               {out.results.length > 0 && <div className="text-[11.5px]" style={{ color: C.muted }}>best first</div>}
             </div>
 
+            {out.results.length > 0 && (
+              <p className="text-[11.5px] leading-snug mb-3" style={{ color: C.muted }}>
+                Ordered by how well they match, then by what we can actually show you —
+                licence, reviews and trips completed here. Early days, so that evidence is still thin.
+              </p>
+            )}
+
             {out.hints.length > 0 && (
               <div className="rounded-xl px-3.5 py-2.5 mb-3" style={{ background: C.goldSoft }}>
                 {out.hints.map((h) => (
@@ -9488,20 +9533,29 @@ function SmartSearchSheet({ onClose, onOpenProfile }) {
               </div>
             )}
 
-            {out.results.map(({ p, why }) => (
+            {out.results.map(({ p, why, why2, best }) => (
               <button key={p.id} onClick={() => { onClose(); onOpenProfile(p.id); }}
                 className="tap w-full text-left rounded-2xl p-3.5 mb-2.5 flex items-start gap-3"
-                style={{ background: C.card, border: `1px solid ${C.line}` }}>
+                style={{ background: C.card, border: `${best ? 1.5 : 1}px solid ${best ? C.gold : C.line}` }}>
                 <div className="w-11 h-11 rounded-xl flex items-center justify-center text-[14px] font-semibold shrink-0"
                   style={{ background: C.pineDeep, color: C.goldSoft }}>{p.initials}</div>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-1.5">
                     <span className="text-[15px] font-semibold truncate" style={{ color: C.ink }}>{p.name}</span>
-                    {p.verified && <BadgeCheck size={14} color={C.pine} className="shrink-0" />}
+                    {p.verified
+                      ? <BadgeCheck size={14} color={C.pine} className="shrink-0" />
+                      : <span className="text-[10.5px] font-semibold shrink-0" style={{ color: C.maroon }}>not verified</span>}
+                    {best && (
+                      <span className="text-[10px] font-bold rounded-full px-2 py-0.5 shrink-0 ml-auto"
+                        style={{ background: C.gold, color: "#fff" }}>BEST MATCH</span>
+                    )}
                   </div>
                   <div className="text-[12.5px]" style={{ color: C.muted }}>
-                    {roleLabel(p.role)}{p.base ? ` · ${p.base}` : ""}{p.years ? ` · ${p.years} yrs` : ""}
+                    {roleLabel(p.role)}{p.base ? ` · ${p.base}` : ""}
                   </div>
+                  {why2 && why2.length > 0 && (
+                    <div className="text-[11.5px] mt-0.5" style={{ color: C.pine }}>{why2.join(" · ")}</div>
+                  )}
                   {why.length > 0 && (
                     <div className="flex flex-wrap gap-1 mt-1.5">
                       {why.map((w) => (
@@ -9510,6 +9564,7 @@ function SmartSearchSheet({ onClose, onOpenProfile }) {
                       ))}
                     </div>
                   )}
+                  <div className="text-[11.5px] font-semibold mt-1.5" style={{ color: C.pine }}>View full profile ›</div>
                 </div>
               </button>
             ))}
