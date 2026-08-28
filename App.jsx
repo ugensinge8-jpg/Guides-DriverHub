@@ -53,7 +53,7 @@ const sysMsg = (text) => ({ id: uid(), senderId: null, kind: "system", body: tex
 /* ── Cloud (Supabase) ── posts are global when configured; everything falls back to local demo mode when not. */
 const CLOUD = Boolean(supabase);
 const DEMO_MODE = false;   // set true only for local demos without a database
-const BUILD = "BUILD 42 — 27 Aug";   // bump every deploy; shown at the top of the welcome screen
+const BUILD = "BUILD 43 — 27 Aug";   // bump every deploy; shown at the top of the welcome screen
 
 /* ---- Install state ---- */
 // 43 characters of randomness — not guessable
@@ -1005,6 +1005,9 @@ export default function App() {
       }),
       itinerary: (IT || []).filter((i) => i.trip_id === tr.id).map((i) => ({ day: i.day_no, title: i.title, detail: i.detail || null })),
       specialNotes: tr.special_notes || null,
+      guestName: tr.guest_name || null,
+      guestCountry: tr.guest_country || null,
+      partySize: tr.party_size || null,
       allergies: tr.allergies || null,
       chat: {
         state: tr.chat_state || "active",
@@ -4336,8 +4339,15 @@ function WorkHub({ user, jobs, listings, posts, trips, actions, eng, onOpenProfi
 }
 
 /* ---- Build a trip: dates, details, and crew who are provably free. ---- */
-function NewTripSheet({ user, onClose, onDone }) {
-  const [f, setF] = useState({ title: "", start: "", end: "", meeting: "", notes: "", allergies: "" });
+function NewTripSheet({ user, onClose, onDone, fromEnquiry }) {
+  // Carried straight over from the enquiry, so nothing is retyped and the guest
+  // is not lost the moment the trip is created.
+  const e = fromEnquiry || null;
+  const [f, setF] = useState({
+    title: e ? `${e.guest_name || "Trip"}${e.party_size ? ` · ${e.party_size} guests` : ""}` : "",
+    start: e?.start_date || "", end: e?.end_date || "",
+    meeting: "", notes: e?.note || "", allergies: "",
+  });
   const [crew, setCrew] = useState([]);            // [{id,name,role}]
   const [busy, setBusy] = useState({});            // user_id -> {title, starts, ends}
   const [q, setQ] = useState("");
@@ -4396,6 +4406,10 @@ function NewTripSheet({ user, onClose, onDone }) {
       special_notes: f.notes.trim() || null,
       allergies: f.allergies.trim() || null,
       chat_state: "scheduled",
+      guest_name: e?.guest_name || null,
+      guest_country: e?.guest_country || null,
+      party_size: e?.party_size || null,
+      enquiry_id: e?.id || null,
     }).select("id").single();
 
     if (tErr || !trip) { setSaving(false); setErr("Could not create the trip. Try once more."); return; }
@@ -4411,6 +4425,9 @@ function NewTripSheet({ user, onClose, onDone }) {
       });
       if (error) failed.push({ name: c.name, why: String(error.message || "").replace(/^.*DOUBLE_BOOKED:\s*/, "") });
     }
+
+    // Close the loop: the enquiry now points at the trip it became.
+    if (e?.id) await supabase.from("enquiries").update({ trip_id: trip.id, status: "won" }).eq("id", e.id);
 
     setSaving(false);
     if (failed.length) {
@@ -4430,6 +4447,18 @@ function NewTripSheet({ user, onClose, onDone }) {
           <p className="text-[12.5px] mt-1 leading-snug" style={{ color: C.muted }}>
             Set the dates first. Nobody already booked can be added to them.
           </p>
+
+          {e && (
+            <div className="rounded-xl px-3.5 py-2.5 mt-3 flex items-start gap-2.5" style={{ background: C.pineSoft }}>
+              <Check size={15} color={C.pine} className="shrink-0 mt-0.5" />
+              <div className="text-[12.5px] leading-snug" style={{ color: C.pine }}>
+                Filled in from your enquiry for <b>{e.guest_name}</b>
+                {e.guest_country ? `, ${e.guest_country}` : ""}
+                {e.party_size ? ` · ${e.party_size} guest${e.party_size === 1 ? "" : "s"}` : ""}.
+                The guest stays on the trip.
+              </div>
+            </div>
+          )}
 
           <div className="mt-4">
             <BLabel>Trip name</BLabel>
@@ -5295,6 +5324,23 @@ function TripHub({ user, meId, trip, actions, onMessage, onBack }) {
             <button onClick={() => setEditDetail(true)} className="tap text-[12.5px] font-semibold mt-2.5" style={{ color: C.pine }}>Edit</button>
           ) : null}
         </div>
+        {trip.guestName && (
+          <div className="rounded-2xl p-3.5 mb-4 flex items-center gap-3" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+            <div className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0" style={{ background: C.goldSoft }}>
+              <Users size={17} color={C.gold} />
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="text-[11px] font-semibold tracking-[.1em] uppercase" style={{ color: C.gold }}>Guest</div>
+              <div className="text-[14.5px] font-semibold truncate" style={{ color: C.ink }}>
+                {trip.guestName}{trip.guestCountry ? `, ${trip.guestCountry}` : ""}
+              </div>
+              {trip.partySize ? (
+                <div className="text-[12px]" style={{ color: C.muted }}>{trip.partySize} guest{trip.partySize === 1 ? "" : "s"}</div>
+              ) : null}
+            </div>
+          </div>
+        )}
+
         <SectionLabel trailing={["active", "wrapping"].includes(tripStateNow(trip)) ? `closes in ${tripDaysLeft(trip)}d` : undefined}>Crew chat</SectionLabel>
         {tripStateNow(trip) === "scheduled" ? (
           <div className="rounded-xl px-4 py-3.5 flex items-center gap-3" style={{ background: C.card, border: `1px solid ${C.line}` }}>
@@ -9857,6 +9903,7 @@ const ENQ_STATUS = {
 function EnquiriesBoard({ user }) {
   const me = user.talentId;
   const [rows, setRows] = useState(null);
+  const [building, setBuilding] = useState(null);   // the enquiry being turned into a trip
   const [adding, setAdding] = useState(false);
   const [showLost, setShowLost] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -9951,11 +9998,17 @@ function EnquiriesBoard({ user }) {
                 style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.muted }}>Went quiet</button>
             </div>
 
-            {r.status === "won" && (
-              <p className="text-[11.5px] mt-2.5 leading-snug" style={{ color: C.pine }}>
-                Now hire the crew from Find, and the trip appears under Trips.
+            {r.status === "won" && (r.trip_id ? (
+              <p className="text-[11.5px] mt-2.5 leading-snug flex items-center gap-1.5" style={{ color: C.pine }}>
+                <Check size={13} /> Trip created. It is under Trips.
               </p>
-            )}
+            ) : (
+              <button onClick={() => setBuilding(r)}
+                className="tap w-full h-11 rounded-xl flex items-center justify-center gap-2 text-[14px] font-semibold mt-3"
+                style={{ background: C.pine, color: "#fff" }}>
+                <ArrowRight size={16} /> Turn this into a trip
+              </button>
+            ))}
           </div>
         );
       })}
@@ -10009,6 +10062,12 @@ function EnquiriesBoard({ user }) {
           style={{ background: C.card, border: `1.5px dashed ${C.line}`, color: C.pine }}>
           <Plus size={17} /> New enquiry
         </button>
+      )}
+
+      {building && (
+        <NewTripSheet user={user} fromEnquiry={building}
+          onClose={() => setBuilding(null)}
+          onDone={() => { setBuilding(null); load(); }} />
       )}
 
       {lost.length > 0 && (
