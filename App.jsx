@@ -53,7 +53,7 @@ const sysMsg = (text) => ({ id: uid(), senderId: null, kind: "system", body: tex
 /* ── Cloud (Supabase) ── posts are global when configured; everything falls back to local demo mode when not. */
 const CLOUD = Boolean(supabase);
 const DEMO_MODE = false;   // set true only for local demos without a database
-const BUILD = "BUILD 41 — 27 Aug";   // bump every deploy; shown at the top of the welcome screen
+const BUILD = "BUILD 42 — 27 Aug";   // bump every deploy; shown at the top of the welcome screen
 
 /* ---- Install state ---- */
 // 43 characters of randomness — not guessable
@@ -1278,22 +1278,22 @@ const ROLE_PITCH = {
     lede: "No more calling ten people to find one free guide. Search, see who is free, and book them.",
     cta: "Sign up as an operator",
     points: [
+      { Icon: Briefcase, title: "Every enquiry and trip in one place",
+        body: "Keep a guest enquiry here while you are still pricing it. When they say yes it becomes a trip, and it stays on your record for the year." },
+      { Icon: Lock, title: "Nobody can be double booked",
+        body: "A guide or driver can never be on two trips that overlap. Anyone already busy cannot be picked, and it shows you why. Your crew turns up." },
+      { Icon: MessageSquare, title: "A chat for each trip",
+        body: "Every trip gets its own channel with the crew in it. No more hunting through WhatsApp for the group from last Tuesday." },
+      { Icon: UserPlus, title: "Bring your own guides and drivers",
+        body: "Invite the people you already work with. Once they join, you put them straight onto the trip." },
       { Icon: Search, title: "Search for the right person",
         body: "By language, skill, guide class, home town, and who is free. Not just who is saved in your phone." },
-      { Icon: CalendarDays, title: "See free days before you ask",
-        body: "Every guide and driver marks their busy days. You see the free ones on their page." },
       { Icon: BadgeCheck, title: "Licences are already checked",
         body: "We check the class, the number and the date. Expired ones drop off on their own." },
-      { Icon: Briefcase, title: "Put up one job. Get applicants.",
-        body: "Or hire a guide and a driver together for the same trip, in one post." },
-      { Icon: MapPin, title: "All your trips on one calendar",
-        body: "Colour lines across the month. Your crew and the meeting point sit on each trip." },
       { Icon: ShieldCheck, title: "Everyone signs before the trip",
         body: "The crew sign the tour commitment. If someone does not turn up, it goes on their record." },
-      { Icon: Users, title: "Your crew book",
-        body: "Everyone you hired before, with their score and who is free. Open one and book again." },
-      { Icon: Star, title: "Guests can review your crew",
-        body: "Send the guest a link after the trip. Your company name goes on the review." },
+      { Icon: Star, title: "Guests review your crew",
+        body: "The guide asks the guest on the last day. You confirm it before it appears, so your name stands behind it." },
     ],
   },
   business: {
