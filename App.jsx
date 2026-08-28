@@ -53,7 +53,7 @@ const sysMsg = (text) => ({ id: uid(), senderId: null, kind: "system", body: tex
 /* ── Cloud (Supabase) ── posts are global when configured; everything falls back to local demo mode when not. */
 const CLOUD = Boolean(supabase);
 const DEMO_MODE = false;   // set true only for local demos without a database
-const BUILD = "BUILD 43 — 27 Aug";   // bump every deploy; shown at the top of the welcome screen
+const BUILD = "BUILD 44 — 28 Aug";   // bump every deploy; shown at the top of the welcome screen
 
 /* ---- Install state ---- */
 // 43 characters of randomness — not guessable
@@ -7143,6 +7143,68 @@ function OCta({ children, onClick, disabled, busy }) {
   );
 }
 
+/* Catch a mistyped email domain before the code is sent to nowhere.
+   Sonam typed "gamil.com" and lost his account: the address was valid, the
+   domain simply does not exist. Format checks cannot catch that. */
+const COMMON_DOMAINS = [
+  "gmail.com", "yahoo.com", "hotmail.com", "outlook.com", "icloud.com",
+  "live.com", "protonmail.com", "proton.me", "aol.com", "msn.com",
+  "yahoo.co.in", "rediffmail.com", "ymail.com",
+  "druknet.bt", "gov.bt", "edu.bt",           // Bhutan
+];
+
+/* Damerau-Levenshtein: counts a swap of two adjacent letters as ONE edit.
+   Plain Levenshtein scores "gamil" vs "gmail" as 2 and misses the single most
+   common typing mistake there is. */
+function editDistance(a, b) {
+  const m = a.length, n = b.length;
+  const d = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+  for (let i = 0; i <= m; i++) d[i][0] = i;
+  for (let j = 0; j <= n; j++) d[0][j] = j;
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + cost);
+      if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) {
+        d[i][j] = Math.min(d[i][j], d[i - 2][j - 2] + 1);   // transposition
+      }
+    }
+  }
+  return d[m][n];
+}
+
+/* Returns a corrected address to suggest, or null if it looks fine. */
+function suggestEmail(raw) {
+  const v = String(raw || "").trim().toLowerCase();
+  const at = v.lastIndexOf("@");
+  if (at < 1 || at === v.length - 1) return null;
+  const local = v.slice(0, at);
+  let domain = v.slice(at + 1);
+
+  if (!domain.includes(".")) return null;      // too broken to guess
+  if (COMMON_DOMAINS.includes(domain)) return null;   // already fine
+
+  // a near miss on a common domain: gamil.com, gmial.com, hotmial.com
+  let best = null, bestD = 99;
+  for (const d of COMMON_DOMAINS) {
+    const dist = editDistance(domain, d);
+    if (dist < bestD) { bestD = dist; best = d; }
+  }
+  // allow 1 edit on short domains, 2 on longer ones
+  const limit = best && best.length > 9 ? 2 : 1;
+  if (best && bestD > 0 && bestD <= limit) return `${local}@${best}`;
+
+  // common TLD slips that are not near any known domain
+  const tldFix = { ".con": ".com", ".cmo": ".com", ".ocm": ".com", ".comm": ".com", ".co": ".com" };
+  for (const [bad, good] of Object.entries(tldFix)) {
+    if (domain.endsWith(bad) && !COMMON_DOMAINS.includes(domain)) {
+      const fixed = domain.slice(0, -bad.length) + good;
+      if (COMMON_DOMAINS.includes(fixed)) return `${local}@${fixed}`;
+    }
+  }
+  return null;
+}
+
 function Onboard({ mode: initialMode, session, presetRole, onBack, onDone }) {
   const [mode, setMode] = useState(initialMode);
   const signin = mode === "signin";
@@ -7161,6 +7223,7 @@ function Onboard({ mode: initialMode, session, presetRole, onBack, onDone }) {
   const [tags, setTags] = useState([]);
   const [vehicle, setVehicle] = useState(null);
   const [email, setEmail] = useState(session?.user?.email || (typeof localStorage !== "undefined" ? localStorage.getItem("bth_email") || "" : ""));
+  const emailFix = useMemo(() => suggestEmail(email), [email]);
   const [remember, setRemember] = useState(true);
   const [code, setCode] = useState("");
   const [pw, setPw] = useState("");
@@ -7502,6 +7565,16 @@ function Onboard({ mode: initialMode, session, presetRole, onBack, onDone }) {
               className="w-full pl-11 pr-4 rounded-2xl text-[16px]" style={{ height: 52, background: C.card, border: `1px solid ${C.line}`, color: C.ink }} />
           </div>
           {err && <p className="text-[13px] mb-3" style={{ color: C.maroon }}>{err}</p>}
+          {emailFix && (
+            <button onClick={() => setEmail(emailFix)}
+              className="tap w-full rounded-xl px-3.5 py-2.5 mt-2 flex items-start gap-2 text-left"
+              style={{ background: C.goldSoft, border: `1px solid ${C.gold}` }}>
+              <AlertTriangle size={15} color={C.gold} className="shrink-0 mt-0.5" />
+              <span className="text-[13px] leading-snug" style={{ color: "#7a5a1e" }}>
+                Did you mean <b>{emailFix}</b>? Tap to use it.
+              </span>
+            </button>
+          )}
           <OCta disabled={!/\S+@\S+\.\S+/.test(email)} busy={busy} onClick={sendCode}>Send code</OCta>
         </div>
       )}
