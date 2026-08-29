@@ -33,6 +33,9 @@ const profileToTalent = (p) => ({
   id: p.id, role: p.role, name: (p.role === "business" && p.company_name) || p.full_name || "Member", base: p.base || "",
   handle: p.handle || null,
   taUrl: p.tripadvisor_url || null, gUrl: p.google_reviews_url || null,
+  rateLow: p.rate_low != null ? Number(p.rate_low) : null,
+  rateHigh: p.rate_high != null ? Number(p.rate_high) : null,
+  rateNote: p.rate_note || null,
   initials: initialsOf((p.role === "business" && p.company_name) || p.full_name || "?"),
   years: licenseExperienceYears(p.license_no) ?? 0,
   trips: 0, rating: p.guest_rating ?? null, ratingCount: p.guest_review_count || 0,
@@ -53,7 +56,7 @@ const sysMsg = (text) => ({ id: uid(), senderId: null, kind: "system", body: tex
 /* ── Cloud (Supabase) ── posts are global when configured; everything falls back to local demo mode when not. */
 const CLOUD = Boolean(supabase);
 const DEMO_MODE = false;   // set true only for local demos without a database
-const BUILD = "BUILD 52 — 28 Aug";   // bump every deploy; shown at the top of the welcome screen
+const BUILD = "BUILD 57 — 28 Aug";   // bump every deploy; shown at the top of the welcome screen
 
 /* ---- Install state ---- */
 // 43 characters of randomness — not guessable
@@ -1811,10 +1814,18 @@ function Shell({ user, posts, jobs, trips, listings, actions, engagement, dm, di
   return (
     <>
       <PortalBar user={user} />
+
+      <div className="flex-1 flex min-h-0">
+        <SideNav nav={nav} tab={tab}
+          setTab={(t) => { setOverlay(null); setSharedPost(null); setTab(t); }}
+          badges={{ jobs: jobsBadge, review: pendingModCount, chats: unreadDm, bookings: pendingBookings }} />
+
+        <div className="flex-1 flex flex-col min-h-0">
       <TopBar onLogout={onLogout} alerts={alertItems.length} onOpenAlerts={() => setAlertsOpen(true)}
         onSearch={(term) => { setOverlay(null); setTab(["operator", "business"].includes(user.kind) ? "discover" : "post"); setSearchTerm(term); }} />
 
       <div className="flex-1 overflow-y-auto hidescroll" style={{ scrollbarWidth: "none" }}>
+        <div className="w-full lg:max-w-3xl lg:mx-auto">
         <VerifyBanner user={user} />
         {overlay ? (
           overlay.type === "profile" ? (
@@ -1844,7 +1855,8 @@ function Shell({ user, posts, jobs, trips, listings, actions, engagement, dm, di
               ? <OperatorDesk user={user} trips={trips} listings={listings} jobs={jobs} actions={actions} onOpenProfile={openProfile} onNavigate={setTab} />
               : <TalentProfile talent={talentById(user.talentId)} posts={posts} trips={trips} eng={eng} self onSetAvailability={actions.setAvailability} onOpenProfile={openProfile} onProfileSaved={actions.reloadDirectory} onBack={null} />)}
             {tab === "discover" && <Discover onOpen={openProfile} initialQuery={searchTerm} dirTick={dirTick} viewerKind={user.kind} />}
-            {tab === "action" && <ActionTab user={user} unread={unreadDm} onOpenMessages={() => setTab("chats")} />}
+            {tab === "action" && <ActionTab user={user} unread={unreadDm} onOpenMessages={() => setTab("chats")}
+              onOpenTrip={(id) => { PENDING_TRIP_ID = id; setTab("trips"); }} onGoTab={(t) => setTab(t)} />}
             {tab === "hotels" && <HotelsTab user={user} onOpenProfile={openProfile} />}
             {tab === "bookings" && <BusinessBookings user={user} />}
             {tab === "feed" && <Feed posts={posts} eng={eng} admin={user.kind === "admin"} onDelete={actions.deletePost} onOpenProfile={openProfile} following={myFollowing} />}
@@ -1908,9 +1920,14 @@ function Shell({ user, posts, jobs, trips, listings, actions, engagement, dm, di
           onOpenJobs={() => { setAlertsOpen(false); setTab(user.kind === "operator" ? "requests" : "jobs"); }} />
       )}
 
-      <BottomNav nav={nav} tab={tab}
-        setTab={(t) => { setOverlay(null); setSharedPost(null); setTab(t); }}
-        badges={{ jobs: jobsBadge, review: pendingModCount, chats: unreadDm, bookings: pendingBookings }} />
+      <div className="lg:hidden">
+        <BottomNav nav={nav} tab={tab}
+          setTab={(t) => { setOverlay(null); setSharedPost(null); setTab(t); }}
+          badges={{ jobs: jobsBadge, review: pendingModCount, chats: unreadDm, bookings: pendingBookings }} />
+      </div>
+        </div>
+        </div>
+      </div>
     </>
   );
 }
@@ -1959,6 +1976,68 @@ function TopBar({ onLogout, onSearch, alerts, onOpenAlerts }) {
         style={{ border: `1px solid ${C.line}`, background: C.card }} aria-label="Sign out">
         <LogOut size={15} color={C.muted} />
       </button>
+    </div>
+  );
+}
+
+/* On a desktop the bottom bar wastes the whole left of the screen and puts the
+   controls furthest from the eye. Same nav, same state, laid out sideways.
+   Every class here is lg: prefixed, so phones render exactly as before. */
+/* Is there room for two panes? Defaults to false so the very first paint is the
+   phone layout: if anything goes wrong we fail to the layout that always works.
+   Matches Tailwind's lg breakpoint exactly, so JS and CSS can never disagree. */
+/* Set by the dashboard just before switching to Trips, read once by TripsTab
+   when it mounts, then cleared. A baton, not shared state. */
+let PENDING_TRIP_ID = null;
+
+function useIsDesktop() {
+  const [wide, setWide] = useState(false);
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.matchMedia) return;
+    const mq = window.matchMedia("(min-width: 1024px)");
+    const apply = () => setWide(mq.matches);
+    apply();
+    if (mq.addEventListener) { mq.addEventListener("change", apply); return () => mq.removeEventListener("change", apply); }
+    mq.addListener(apply); return () => mq.removeListener(apply);   // older Safari
+  }, []);
+  return wide;
+}
+
+function SideNav({ nav, tab, setTab, badges }) {
+  return (
+    <div className="hidden lg:flex flex-col shrink-0"
+      style={{ width: 232, background: C.card, borderRight: `1px solid ${C.line}` }}>
+      <div className="px-5 pt-6 pb-5 flex items-center gap-2.5">
+        <div className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0" style={{ background: C.pine }}>
+          <Compass size={18} color={C.goldSoft} strokeWidth={2.1} />
+        </div>
+        <div>
+          <div className="text-[14px] font-semibold leading-tight" style={{ color: C.ink }}>Bhutan</div>
+          <div className="text-[14px] font-semibold leading-tight" style={{ color: C.ink }}>Tourism Hub</div>
+        </div>
+      </div>
+
+      <div className="flex-1 px-3">
+        {nav.map((n) => {
+          const on = tab === n.id;
+          const badge = badges[n.id] || 0;
+          return (
+            <button key={n.id} onClick={() => setTab(n.id)}
+              className="tap w-full rounded-xl px-3 py-2.5 mb-1 flex items-center gap-3 relative"
+              style={{ background: on ? C.pineSoft : "transparent" }}>
+              <n.Icon size={19} color={on ? C.pine : C.muted} strokeWidth={on ? 2.3 : 2} />
+              <span className="flex-1 text-left text-[14.5px] font-semibold"
+                style={{ color: on ? C.pine : C.ink }}>{n.label}</span>
+              {badge > 0 && (
+                <span className="min-w-[19px] h-[19px] px-1 rounded-full flex items-center justify-center text-[10.5px] font-bold text-white"
+                  style={{ background: C.maroon }}>{badge > 9 ? "9+" : badge}</span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="px-5 py-4 text-[10.5px]" style={{ color: C.line }}>{BUILD}</div>
     </div>
   );
 }
@@ -3169,6 +3248,8 @@ function TalentProfile({ talent, posts, trips = [], canRequest, viewer, self, co
           ] : null}
           cv={
             <>
+              {t.role === "business" && <StayPhotos profileId={t.id} canEdit={self} />}
+              {t.role === "business" && <StayRates talent={t} canEdit={self} onSaved={onProfileSaved} />}
               {t.role === "business" && <BusinessAvailability business={t} viewer={viewer} trips={trips} />}
 
               {t.pitch && <div className="mt-5 pl-4" style={{ borderLeft: `3px solid ${C.gold}` }}><p className="text-[15px] leading-relaxed" style={{ color: C.ink }}>{t.pitch}</p></div>}
@@ -3322,6 +3403,140 @@ function CrewAvatars({ members, size = 26 }) {
           <span className="font-semibold" style={{ color: C.goldSoft, fontSize: size * 0.34 }}>{m.initials}</span>
         </div>
       ))}
+    </div>
+  );
+}
+
+/* ---- Operator dashboard. Desktop only: everything waiting on you, in one
+        place, with the button to deal with it right there. The phone keeps the
+        simpler stacked view, which is right for a small screen. ---- */
+function DashCount({ n, label }) {
+  return (
+    <div className="rounded-2xl px-4 py-3" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+      <div className="text-[24px] font-semibold leading-none" style={{ color: C.ink }}>{n}</div>
+      <div className="text-[11.5px] mt-1.5" style={{ color: C.muted }}>{label}</div>
+    </div>
+  );
+}
+
+function DashItem({ tone = "gold", title, sub, action, onAction }) {
+  const maroon = tone === "maroon";
+  return (
+    <div className="rounded-xl px-3.5 py-2.5 mb-2 flex items-center gap-3"
+      style={{ background: maroon ? C.maroonSoft : C.goldSoft }}>
+      <div className="flex-1 min-w-0">
+        <div className="text-[13.5px] font-semibold truncate" style={{ color: maroon ? C.maroon : "#7a5a1e" }}>{title}</div>
+        {sub && <div className="text-[11.5px] truncate" style={{ color: maroon ? C.maroon : "#7a5a1e", opacity: .85 }}>{sub}</div>}
+      </div>
+      {action && (
+        <button onClick={onAction} className="tap text-[12px] font-semibold rounded-full px-3 py-1.5 shrink-0"
+          style={{ background: maroon ? C.maroon : C.pine, color: "#fff" }}>{action}</button>
+      )}
+    </div>
+  );
+}
+
+function DashSection({ icon: Ic, title, count, children }) {
+  if (!count) return null;
+  return (
+    <div className="mb-5">
+      <div className="flex items-center gap-2 mb-2">
+        <Ic size={15} color={C.gold} />
+        <span className="text-[11.5px] font-semibold tracking-[.12em] uppercase" style={{ color: C.gold }}>{title}</span>
+        <span className="text-[11px] font-bold rounded-full px-2 py-0.5" style={{ background: C.gold, color: "#fff" }}>{count}</span>
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function OperatorDashboard({ user, onOpenTrip, onGoTab }) {
+  const [d, setD] = useState(null);
+  const [err, setErr] = useState(null);
+
+  const load = async () => {
+    const { data, error } = await supabase.rpc("operator_dashboard");
+    if (error) { setErr("Could not load your dashboard."); setD({}); return; }
+    setD(data || {});
+  };
+  useEffect(() => { if (CLOUD) load(); else setD({}); }, []);
+
+  if (d === null) return <p className="text-[13px] px-5 py-4" style={{ color: C.muted }}>Loading2026</p>;
+
+  const quotes = d.quotes || [], unsigned = d.unsigned || [], reviews = d.reviews || [];
+  const tograde = d.tograde || [], stale = d.stale || [], counts = d.counts || {};
+  const waiting = quotes.length + unsigned.length + reviews.length + tograde.length + stale.length;
+  const fmtd = (x) => { try { return new Date(x + "T00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short" }); } catch (e) { return x; } };
+
+  return (
+    <div className="px-5 py-5">
+      <h1 className="text-[22px] font-semibold tracking-[-0.01em]" style={{ color: C.ink }}>
+        {(() => { const h = new Date().getHours(); return h < 12 ? "Good morning" : h < 17 ? "Good afternoon" : "Good evening"; })()}, {String(user.name || "").split(" ")[0]}
+      </h1>
+      <p className="text-[13px] mt-1" style={{ color: C.muted }}>
+        {waiting === 0
+          ? "Nothing is waiting on you. Everything is up to date."
+          : `${waiting} thing${waiting === 1 ? "" : "s"} waiting on you.`}
+      </p>
+
+      <div className="grid grid-cols-4 gap-2.5 mt-4 mb-6">
+        <DashCount n={counts.live ?? 0} label="running now" />
+        <DashCount n={counts.upcoming ?? 0} label="upcoming" />
+        <DashCount n={counts.enquiries ?? 0} label="open enquiries" />
+        <DashCount n={counts.crew ?? 0} label="crew worked with" />
+      </div>
+
+      {err && <p className="text-[13px] mb-3" style={{ color: C.maroon }}>{err}</p>}
+
+      {waiting === 0 && !err && (
+        <div className="rounded-2xl px-5 py-8 text-center" style={{ background: C.pineSoft }}>
+          <Check size={26} color={C.pine} className="mx-auto" />
+          <div className="text-[15px] font-semibold mt-2" style={{ color: C.pine }}>All clear</div>
+          <p className="text-[12.5px] mt-1" style={{ color: C.pine, opacity: .85 }}>
+            No prices to answer, no crew unsigned, no reviews or grades outstanding.
+          </p>
+        </div>
+      )}
+
+      <DashSection icon={Wallet} title="Prices to answer" count={quotes.length}>
+        {quotes.map((q) => (
+          <DashItem key={q.id} title={`${q.hotel} — Nu ${Number(q.amount || 0).toLocaleString("en-IN")}`}
+            sub={`${fmtd(q.start)} to ${fmtd(q.end)}`}
+            action="Open Hotels" onAction={() => onGoTab("hotels")} />
+        ))}
+      </DashSection>
+
+      <DashSection icon={ShieldCheck} title="Crew who have not signed" count={unsigned.length}>
+        {unsigned.map((u, i) => (
+          <DashItem key={`${u.trip_id}${i}`} title={`${u.name} — ${u.trip}`}
+            sub={`starts ${fmtd(u.start)}`}
+            action="Open trip" onAction={() => onOpenTrip(u.trip_id)} />
+        ))}
+      </DashSection>
+
+      <DashSection icon={Star} title="Reviews to confirm" count={reviews.length}>
+        {reviews.map((r) => (
+          <DashItem key={r.id} title={`${"2605".repeat(r.rating || 0)} for ${r.who || "your crew"}`}
+            sub={`${r.guest || "Guest"} · ${r.trip}`}
+            action="Confirm" onAction={() => onOpenTrip(r.trip_id)} />
+        ))}
+      </DashSection>
+
+      <DashSection icon={Users} title="Crew to grade" count={tograde.length}>
+        {tograde.map((t) => (
+          <DashItem key={t.trip_id} title={t.trip}
+            sub={`ended ${fmtd(t.ended)} · ${t.left} still to grade`}
+            action="Grade" onAction={() => onOpenTrip(t.trip_id)} />
+        ))}
+      </DashSection>
+
+      <DashSection icon={Clock} title="Enquiries gone quiet" count={stale.length}>
+        {stale.map((e) => (
+          <DashItem key={e.id} tone="maroon" title={e.guest}
+            sub={`nothing since ${fmtd(e.since)}`}
+            action="Open" onAction={() => onGoTab("action")} />
+        ))}
+      </DashSection>
     </div>
   );
 }
@@ -4829,6 +5044,12 @@ function NewTripSheet({ user, onClose, onDone, fromEnquiry }) {
 function TripsTab({ user, trips, actions, onMessage }) {
   const [openId, setOpenId] = useState(null);
   const [newTrip, setNewTrip] = useState(false);
+  const desktop = useIsDesktop();
+  // Pick up a trip the dashboard asked for, once, then clear the baton so a
+  // later visit to this tab does not reopen it.
+  useEffect(() => {
+    if (PENDING_TRIP_ID) { setOpenId(PENDING_TRIP_ID); PENDING_TRIP_ID = null; }
+  }, []);
   const meId = user.talentId || user.id;
   const mineId = user.talentId || user.id;
   const mine = trips.filter((tr) => (tr.members || []).some((m) => m.id === mineId) || (tr.operatorId && tr.operatorId === mineId));
@@ -4885,7 +5106,15 @@ function TripsTab({ user, trips, actions, onMessage }) {
   };
 
   const open = mine.find((tr) => tr.id === openId);
-  if (open) return <TripHub user={user} meId={meId} trip={open} actions={actions} onMessage={onMessage} onBack={() => setOpenId(null)} />;
+
+  // RISK 2: a selected trip can vanish (cancelled, or filtered out by the tab).
+  // Clear the selection rather than handing undefined to TripHub.
+  useEffect(() => { if (openId && !open) setOpenId(null); }, [openId, open]);
+
+  // PHONE: exactly the path it takes today. The detail replaces the list.
+  if (open && !desktop) {
+    return <TripHub user={user} meId={meId} trip={open} actions={actions} onMessage={onMessage} onBack={() => setOpenId(null)} />;
+  }
 
   const Section = ({ label, list, tone }) => list.length === 0 ? null : (
     <div className="mb-5">
@@ -4899,7 +5128,8 @@ function TripsTab({ user, trips, actions, onMessage }) {
     </div>
   );
 
-  return (
+  // DESKTOP: list on the left, the trip on the right, neither losing the other.
+  const listPane = (
     <div className="px-5 py-4">
       {user.kind === "operator" && (
         <button onClick={() => setNewTrip(true)}
@@ -4967,6 +5197,41 @@ function TripsTab({ user, trips, actions, onMessage }) {
           )}
         </>
       )}
+    </div>
+  );
+
+  // Phone falls straight through with the list, exactly as before.
+  if (!desktop) return listPane;
+
+  return (
+    <div className="flex min-h-0" style={{ height: "100%" }}>
+      {/* RISK 4: each pane owns its own scroll. min-h-0 lets a flex child
+          actually shrink; without it the page grows instead of scrolling. */}
+      <div className="overflow-y-auto hidescroll min-h-0 shrink-0"
+        style={{ width: 400, borderRight: `1px solid ${C.line}`, scrollbarWidth: "none" }}>
+        {listPane}
+      </div>
+
+      <div className="flex-1 overflow-y-auto hidescroll min-h-0" style={{ scrollbarWidth: "none" }}>
+        {open ? (
+          /* RISK 1: key forces a full remount so none of TripHub's 17 states
+             carry over from the trip you were just looking at. */
+          <TripHub key={open.id} user={user} meId={meId} trip={open} actions={actions}
+            onMessage={onMessage} onBack={() => setOpenId(null)} />
+        ) : (
+          <div className="h-full flex items-center justify-center px-8">
+            <div className="text-center" style={{ maxWidth: 320 }}>
+              <div className="w-14 h-14 rounded-2xl mx-auto flex items-center justify-center" style={{ background: C.pineSoft }}>
+                <MapIcon size={24} color={C.pine} />
+              </div>
+              <div className="text-[15px] font-semibold mt-3" style={{ color: C.ink }}>Pick a trip</div>
+              <p className="text-[13px] mt-1.5 leading-snug" style={{ color: C.muted }}>
+                Choose one on the left to see its crew, chat, itinerary and stays without losing your list.
+              </p>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -5291,7 +5556,7 @@ function TripStays({ trip, isOperator }) {
                 <div className="text-[14.5px] font-semibold truncate" style={{ color: C.ink }}>{b.business_name || "Hotel"}</div>
                 <div className="text-[12.5px]" style={{ color: C.muted }}>
                   {fmtRange(b.start_date, b.end_date)} · {nights} night{nights === 1 ? "" : "s"}
-                  {b.guests ? ` · ${b.guests} guest${b.guests === 1 ? "" : "s"}` : ""}
+                  {b.rooms ? ` · ${b.rooms} room${b.rooms === 1 ? "" : "s"}` : ""}{b.guests ? ` · ${b.guests} guest${b.guests === 1 ? "" : "s"}` : ""}
                 </div>
                 {b.quote_amount != null && (
                   <div className="text-[13px] font-semibold mt-1" style={{ color: C.ink }}>Nu {Number(b.quote_amount).toLocaleString("en-IN")}</div>
@@ -7434,9 +7699,188 @@ function BusinessBookings({ user }) {
 }
 
 /* On a business profile: live availability + the operator booking form */
+/* ---- What a stay actually looks like, and roughly what it costs. ---- */
+function StayPhotos({ profileId, canEdit }) {
+  const [rows, setRows] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const [big, setBig] = useState(null);
+  const fileRef = useRef(null);
+
+  const load = async () => {
+    const { data } = await supabase.from("business_photos").select("*")
+      .eq("profile_id", profileId).order("sort").order("created_at");
+    setRows(data || []);
+  };
+  useEffect(() => { if (CLOUD) load(); else setRows([]); }, [profileId]);
+
+  const add = async (file) => {
+    if (!file || busy) return;
+    setBusy(true); setErr(null);
+    try {
+      const reader = new FileReader();
+      const dataUri = await new Promise((res, rej) => {
+        reader.onload = () => res(reader.result);
+        reader.onerror = () => rej(new Error("read failed"));
+        reader.readAsDataURL(file);
+      });
+      const small = await shrinkImage(dataUri, 1400, 0.82);
+      const blob = dataUriToBlob(small);
+      const path = `stay/${profileId}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.jpg`;
+      const { error: upErr } = await supabase.storage.from("post-media").upload(path, blob, { contentType: "image/jpeg" });
+      if (upErr) throw upErr;
+      const url = supabase.storage.from("post-media").getPublicUrl(path).data.publicUrl;
+      const { error } = await supabase.from("business_photos").insert({
+        profile_id: profileId, path: url, sort: (rows || []).length,
+      });
+      if (error) throw error;
+      load();
+    } catch (e) {
+      setErr("That photo did not upload. Try a smaller one, or check your connection.");
+    }
+    setBusy(false);
+  };
+
+  const remove = async (id) => {
+    await supabase.from("business_photos").delete().eq("id", id);
+    load();
+  };
+
+  if (rows === null) return null;
+  if (rows.length === 0 && !canEdit) return null;
+
+  return (
+    <div className="mt-6">
+      <SectionLabel trailing={rows.length ? `${rows.length}` : undefined}>Rooms and the place</SectionLabel>
+
+      {rows.length > 0 && (
+        <div className="flex gap-2 overflow-x-auto hidescroll pb-1" style={{ scrollbarWidth: "none" }}>
+          {rows.map((p) => (
+            <div key={p.id} className="relative shrink-0">
+              <button onClick={() => setBig(p.path)} className="tap block rounded-xl overflow-hidden"
+                style={{ width: 168, height: 118, background: C.lineSoft }}>
+                <img src={p.path} alt="" loading="lazy"
+                  style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+              </button>
+              {canEdit && (
+                <button onClick={() => remove(p.id)}
+                  className="tap absolute top-1.5 right-1.5 w-7 h-7 rounded-full flex items-center justify-center"
+                  style={{ background: "rgba(8,10,8,.6)" }} aria-label="Remove photo">
+                  <X size={14} color="#fff" />
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {canEdit && (
+        <>
+          <input ref={fileRef} type="file" accept="image/*" className="hidden"
+            onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; add(f); }} />
+          <button onClick={() => fileRef.current?.click()} disabled={busy}
+            className="tap w-full h-11 rounded-xl flex items-center justify-center gap-2 text-[13.5px] font-semibold mt-2"
+            style={{ background: C.card, border: `1.5px dashed ${C.line}`, color: C.pine }}>
+            <Camera size={16} /> {busy ? "Uploading…" : rows.length ? "Add another photo" : "Add your first room photo"}
+          </button>
+          {err && <p className="text-[12.5px] mt-2" style={{ color: C.maroon }}>{err}</p>}
+          {rows.length === 0 && (
+            <p className="text-[11.5px] mt-1.5 leading-snug" style={{ color: C.muted }}>
+              Operators choose stops from these. A room, the view, the dining room — three or four is plenty.
+            </p>
+          )}
+        </>
+      )}
+
+      {big && createPortal((
+        <div className="fixed inset-0 flex items-center justify-center" style={{ background: "rgba(8,10,8,.92)", zIndex: 260 }}
+          onClick={() => setBig(null)}>
+          <img src={big} alt="" style={{ maxWidth: "96%", maxHeight: "86%", objectFit: "contain" }} />
+        </div>
+      ), document.body)}
+    </div>
+  );
+}
+
+function StayRates({ talent, canEdit, onSaved }) {
+  const [editing, setEditing] = useState(false);
+  const [lo, setLo] = useState(talent.rateLow != null ? String(talent.rateLow) : "");
+  const [hi, setHi] = useState(talent.rateHigh != null ? String(talent.rateHigh) : "");
+  const [note, setNote] = useState(talent.rateNote || "");
+  const [busy, setBusy] = useState(false);
+
+  const save = async () => {
+    setBusy(true);
+    await supabase.from("profiles").update({
+      rate_low: lo ? Number(lo) : null,
+      rate_high: hi ? Number(hi) : null,
+      rate_note: note.trim() || null,
+    }).eq("id", talent.id);
+    setBusy(false); setEditing(false);
+    onSaved && onSaved();
+  };
+
+  const has = talent.rateLow != null || talent.rateHigh != null;
+  if (!has && !canEdit) return null;
+
+  return (
+    <div className="mt-5">
+      <SectionLabel>Indicative rate</SectionLabel>
+      {editing ? (
+        <div className="rounded-2xl p-3.5" style={{ background: C.card, border: `1.5px solid ${C.gold}` }}>
+          <div className="flex gap-2">
+            <div className="flex-1">
+              <BLabel>From (Nu)</BLabel>
+              <input value={lo} onChange={(e) => setLo(e.target.value.replace(/[^0-9]/g, ""))} inputMode="numeric"
+                className="w-full h-11 px-3 rounded-xl text-[15px]" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
+            </div>
+            <div className="flex-1">
+              <BLabel>To (Nu)</BLabel>
+              <input value={hi} onChange={(e) => setHi(e.target.value.replace(/[^0-9]/g, ""))} inputMode="numeric"
+                className="w-full h-11 px-3 rounded-xl text-[15px]" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
+            </div>
+          </div>
+          <BLabel>What it depends on</BLabel>
+          <input value={note} onChange={(e) => setNote(e.target.value)} maxLength={70}
+            placeholder="per room per night, low to high season"
+            className="w-full h-11 px-3 rounded-xl text-[14px]" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
+          <button onClick={save} disabled={busy} className="tap w-full h-11 rounded-xl text-[14px] font-semibold mt-3"
+            style={{ background: C.pine, color: "#fff" }}>{busy ? "Saving…" : "Save"}</button>
+          <button onClick={() => setEditing(false)} className="tap w-full text-[13px] font-semibold mt-2" style={{ color: C.muted }}>Cancel</button>
+        </div>
+      ) : (
+        <div className="rounded-2xl p-3.5" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+          {has ? (
+            <>
+              <div className="text-[18px] font-semibold" style={{ color: C.ink }}>
+                Nu {Number(talent.rateLow || 0).toLocaleString("en-IN")}
+                {talent.rateHigh ? ` – ${Number(talent.rateHigh).toLocaleString("en-IN")}` : ""}
+              </div>
+              <div className="text-[12.5px] mt-0.5" style={{ color: C.muted }}>
+                {talent.rateNote || "per room per night"}
+              </div>
+            </>
+          ) : (
+            <p className="text-[13px]" style={{ color: C.muted }}>No rate shown yet.</p>
+          )}
+          <p className="text-[11.5px] mt-2 leading-snug" style={{ color: C.muted }}>
+            A guide, not a quote. Send the dates and the hotel replies with a real price.
+          </p>
+          {canEdit && (
+            <button onClick={() => setEditing(true)} className="tap text-[12.5px] font-semibold mt-2" style={{ color: C.pine }}>
+              {has ? "Change it" : "Add an indicative rate"}
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function BusinessAvailability({ business, viewer, trips }) {
   // Which trip is this stay for? Optional: rooms can be held before a trip exists.
   const [forTrip, setForTrip] = useState("");
+  const [rooms, setRooms] = useState("");
   const myTrips = (trips || []).filter((t) => t.operatorId === viewer?.talentId
     && tripStateNow(t) !== "completed");
   const tripById = (id) => myTrips.find((t) => t.id === id) || null;
@@ -7491,12 +7935,13 @@ function BusinessAvailability({ business, viewer, trips }) {
       business_id: business.id, operator_id: viewer.talentId,
       business_name: business.name, operator_name: viewer.name,
       start_date: start, end_date: end,
-      guests: guests ? Number(guests) : null, note: note.trim() || null, status: "requested",
+      guests: guests ? Number(guests) : null, rooms: rooms ? Number(rooms) : null,
+      note: note.trim() || null, status: "requested",
       trip_id: forTrip || null,
     });
     setBusy(false);
     if (error) { setMsg(error.message); return; }
-    setStart(""); setEnd(""); setGuests(""); setNote("");
+    setStart(""); setEnd(""); setGuests(""); setRooms(""); setNote("");
     setMsg("Request sent — you’ll get a notification when they respond.");
   };
   const cancelMine = async (id) => {
@@ -7516,9 +7961,21 @@ function BusinessAvailability({ business, viewer, trips }) {
             <div><BLabel>Check-in</BLabel><input type="date" value={start} onChange={(e) => setStart(e.target.value)} className="w-full h-12 px-3 rounded-xl text-[14px]" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} /></div>
             <div><BLabel>Check-out</BLabel><input type="date" value={end} onChange={(e) => setEnd(e.target.value)} className="w-full h-12 px-3 rounded-xl text-[14px]" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} /></div>
           </div>
-          <BLabel>Guests</BLabel>
-          <input value={guests} onChange={(e) => setGuests(e.target.value.replace(/[^0-9]/g, "").slice(0, 3))} inputMode="numeric" placeholder="How many people?"
-            className="w-full h-12 px-3.5 rounded-xl text-[15px] mb-3" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
+          <div className="flex gap-2">
+            <div className="flex-1">
+              <BLabel>Rooms</BLabel>
+              <input value={rooms} onChange={(e) => setRooms(e.target.value.replace(/[^0-9]/g, "").slice(0, 2))} inputMode="numeric" placeholder="2"
+                className="w-full h-12 px-3.5 rounded-xl text-[15px]" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
+            </div>
+            <div className="flex-1">
+              <BLabel>Guests</BLabel>
+              <input value={guests} onChange={(e) => setGuests(e.target.value.replace(/[^0-9]/g, "").slice(0, 3))} inputMode="numeric" placeholder="How many people?"
+                className="w-full h-12 px-3.5 rounded-xl text-[15px]" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
+            </div>
+          </div>
+          <p className="text-[11.5px] mt-1 mb-3 leading-snug" style={{ color: C.muted }}>
+            Four guests can be two twins or four singles. Saying the room count stops that guess.
+          </p>
           <BLabel>Note</BLabel>
           <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={2} maxLength={200} placeholder="Group details, arrival time, rooms needed…"
             className="w-full px-3.5 py-3 rounded-xl text-[15px] resize-none mb-3" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
@@ -10264,7 +10721,7 @@ function BookingCard({ bk, hotel, meId, onAct, busy }) {
             <div className="text-[15.5px] font-semibold truncate" style={{ color: C.ink }}>{hotel?.name || "Hotel"}</div>
             <div className="text-[12.5px] mt-0.5" style={{ color: C.muted }}>
               {fmtRange(bk.start_date, bk.end_date)} · {nights} night{nights === 1 ? "" : "s"}
-              {bk.guests ? ` · ${bk.guests} guest${bk.guests === 1 ? "" : "s"}` : ""}
+              {bk.rooms ? ` · ${bk.rooms} room${bk.rooms === 1 ? "" : "s"}` : ""}{bk.guests ? ` · ${bk.guests} guest${bk.guests === 1 ? "" : "s"}` : ""}
             </div>
           </div>
           <span className="text-[11px] font-semibold rounded-full px-2.5 py-1 shrink-0" style={{ background: t.bg, color: t.fg }}>{t.label}</span>
@@ -10497,6 +10954,7 @@ function EnquiriesBoard({ user }) {
         </div>
       )}
 
+      <div className="lg:grid lg:grid-cols-2 lg:gap-3">
       {live.map((r) => {
         const st = ENQ_STATUS[r.status] || ENQ_STATUS.open;
         return (
@@ -10546,6 +11004,8 @@ function EnquiriesBoard({ user }) {
           </div>
         );
       })}
+
+      </div>
 
       {adding ? (
         <div className="rounded-2xl p-4 mt-2" style={{ background: C.card, border: `1.5px solid ${C.gold}` }}>
@@ -10625,7 +11085,22 @@ function EnquiriesBoard({ user }) {
   );
 }
 
-function ActionTab({ user, unread, onOpenMessages }) {
+function ActionTab({ user, unread, onOpenMessages, onOpenTrip, onGoTab }) {
+  const desktop = useIsDesktop();
+
+  // Desktop gets the command centre. The phone keeps the simpler stacked view,
+  // which is the right shape for a small screen and is untouched.
+  if (desktop && user.kind === "operator") {
+    return (
+      <>
+        <OperatorDashboard user={user} onOpenTrip={onOpenTrip} onGoTab={onGoTab} />
+        <div className="px-5 pb-5">
+          <EnquiriesBoard user={user} />
+        </div>
+      </>
+    );
+  }
+
   return (
     <div className="px-5 py-4">
       <button onClick={onOpenMessages} className="tap w-full rounded-2xl p-3.5 mb-5 flex items-center gap-3 text-left"
