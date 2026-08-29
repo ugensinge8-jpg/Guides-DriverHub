@@ -53,7 +53,7 @@ const sysMsg = (text) => ({ id: uid(), senderId: null, kind: "system", body: tex
 /* ── Cloud (Supabase) ── posts are global when configured; everything falls back to local demo mode when not. */
 const CLOUD = Boolean(supabase);
 const DEMO_MODE = false;   // set true only for local demos without a database
-const BUILD = "BUILD 44 — 28 Aug";   // bump every deploy; shown at the top of the welcome screen
+const BUILD = "BUILD 45 — 28 Aug";   // bump every deploy; shown at the top of the welcome screen
 
 /* ---- Install state ---- */
 // 43 characters of randomness — not guessable
@@ -5133,6 +5133,13 @@ function TripHub({ user, meId, trip, actions, onMessage, onBack }) {
     loadAccountability();
   };
   const tripDone = ["active", "wrapping", "completed"].includes(state);
+
+  // Grading was buried inside the Contacts panel inside the chat, so it never
+  // happened. Once a trip is over the operator must see it, at the top.
+  const tripOver = ["wrapping", "completed"].includes(state);
+  const crewToGrade = (trip.members || []).filter((m) => m.roleInTrip !== "operator");
+  const gradeOf = (pid) => (tripMarks.find((k) => k.profile_id === pid && k.kind === "grade") || {}).grade || 0;
+  const ungraded = crewToGrade.filter((m) => !gradeOf(m.id));
   // The guest is standing in front of you. That is the moment, and only that day.
   const todayIso = (() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; })();
   const isLastDay = todayIso === trip.end;
@@ -5324,6 +5331,55 @@ function TripHub({ user, meId, trip, actions, onMessage, onBack }) {
             <button onClick={() => setEditDetail(true)} className="tap text-[12.5px] font-semibold mt-2.5" style={{ color: C.pine }}>Edit</button>
           ) : null}
         </div>
+        {isTripOperator && tripOver && crewToGrade.length > 0 && ungraded.length > 0 && (
+          <div className="rounded-2xl p-4 mb-4" style={{ background: C.goldSoft, border: `1.5px solid ${C.gold}` }}>
+            <div className="flex items-start gap-2.5">
+              <Star size={17} color={C.gold} fill={C.gold} className="shrink-0 mt-0.5" />
+              <div className="flex-1 min-w-0">
+                <div className="text-[15px] font-semibold" style={{ color: "#7a5a1e" }}>
+                  Grade your crew
+                </div>
+                <p className="text-[12.5px] leading-snug mt-0.5" style={{ color: "#7a5a1e", opacity: .9 }}>
+                  This trip is finished. Your grade is the only record of how they actually worked, and it follows
+                  them through their career. {ungraded.length} of {crewToGrade.length} still to do.
+                </p>
+              </div>
+            </div>
+
+            {ungraded.map((m) => (
+              <div key={m.id} className="rounded-xl px-3.5 py-3 mt-2.5" style={{ background: C.card }}>
+                <div className="flex items-center gap-2.5 mb-2">
+                  <div className="w-8 h-8 rounded-lg flex items-center justify-center text-[11px] font-semibold shrink-0"
+                    style={{ background: C.pineDeep, color: C.goldSoft }}>{initialsOf(m.name || "?")}</div>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-[14px] font-semibold truncate" style={{ color: C.ink }}>{m.name}</div>
+                    <div className="text-[11.5px]" style={{ color: C.muted }}>{m.roleInTrip === "driver" ? "Driver" : "Guide"}</div>
+                  </div>
+                </div>
+                <div className="flex justify-center gap-2">
+                  {[1, 2, 3, 4, 5].map((g) => (
+                    <button key={g} onClick={() => setGrade(m.id, g)} className="tap p-1" aria-label={`Grade ${g} of 5`}>
+                      <Star size={26} color={C.line} strokeWidth={1.5} />
+                    </button>
+                  ))}
+                </div>
+                <p className="text-[11px] text-center mt-1.5" style={{ color: C.muted }}>
+                  1 = would not hire again · 5 = would hire tomorrow
+                </p>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {isTripOperator && tripOver && crewToGrade.length > 0 && ungraded.length === 0 && (
+          <div className="rounded-xl px-4 py-2.5 mb-4 flex items-center gap-2.5" style={{ background: C.pineSoft }}>
+            <Check size={15} color={C.pine} className="shrink-0" />
+            <span className="text-[12.5px]" style={{ color: C.pine }}>
+              All {crewToGrade.length} crew graded. Thank you — it is what makes the next operator able to trust them.
+            </span>
+          </div>
+        )}
+
         {trip.guestName && (
           <div className="rounded-2xl p-3.5 mb-4 flex items-center gap-3" style={{ background: C.card, border: `1px solid ${C.line}` }}>
             <div className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0" style={{ background: C.goldSoft }}>
