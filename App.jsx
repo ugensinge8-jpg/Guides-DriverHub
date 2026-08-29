@@ -53,7 +53,7 @@ const sysMsg = (text) => ({ id: uid(), senderId: null, kind: "system", body: tex
 /* ── Cloud (Supabase) ── posts are global when configured; everything falls back to local demo mode when not. */
 const CLOUD = Boolean(supabase);
 const DEMO_MODE = false;   // set true only for local demos without a database
-const BUILD = "BUILD 48 — 28 Aug";   // bump every deploy; shown at the top of the welcome screen
+const BUILD = "BUILD 49 — 28 Aug";   // bump every deploy; shown at the top of the welcome screen
 
 /* ---- Install state ---- */
 // 43 characters of randomness — not guessable
@@ -2970,7 +2970,6 @@ function TalentProfile({ talent, posts, canRequest, viewer, self, contactOnly, e
   const licSectionRef = useRef(null);
   const [portfolioJump, setPortfolioJump] = useState(0);
   const [editOpen, setEditOpen] = useState(false);
-  const [askOperator, setAskOperator] = useState(false);
   return (
     <div className="pb-6">
       <div className="relative">
@@ -3111,7 +3110,7 @@ function TalentProfile({ talent, posts, canRequest, viewer, self, contactOnly, e
           sections={["guide", "driver"].includes(t.role) ? [
             { label: "Reviews", Icon: Star, node: (
               <>
-                <GuestReviews talentId={t.id} isAdmin={eng?.isAdmin} isSelf={self} onAskOperator={() => setAskOperator(true)} />
+                <GuestReviews talentId={t.id} isAdmin={eng?.isAdmin} isSelf={self} />
                 <ReviewLinks t={t} />
                 <LegacyVerified talentId={t.id} isAdmin={eng?.isAdmin} />
               </>
@@ -3224,7 +3223,6 @@ function TalentProfile({ talent, posts, canRequest, viewer, self, contactOnly, e
         <StoryViewer stories={myStories} author={t} canDelete={self} onDelete={eng?.deleteStory} onClose={() => setViewStories(false)} />
       )}
       {addStory && <AddStory onClose={() => setAddStory(false)} onAdd={eng?.addStory} />}
-      {askOperator && <OperatorInvite user={{ name: t.name, talentId: t.id, id: t.id, kind: t.role }} trip={null} onClose={() => setAskOperator(false)} />}
 
       {editOpen && <EditProfileSheet talent={t} onClose={() => setEditOpen(false)} onSaved={onProfileSaved} />}
       {credsOpen && <CredentialsPage talent={t} self={self} onClose={() => setCredsOpen(false)} />}
@@ -3341,7 +3339,6 @@ function OperatorDesk({ user, trips, listings, jobs, actions, onOpenProfile, onN
   const myJobs = (jobs || []).filter((j) => j.operatorId === me);
 
   const [rv, setRv] = useState({ reviews: [], tokens: [] });
-  const [inviteTrip, setInviteTrip] = useState(null);
   const [editOpen, setEditOpen] = useState(false);
   const loadRv = async () => {
     const ids = myTrips.map((x) => x.id);
@@ -3423,9 +3420,9 @@ function OperatorDesk({ user, trips, listings, jobs, actions, onOpenProfile, onN
             Awaiting · resend
           </button>
         ) : (
-          <button onClick={() => setInviteTrip(x)} className="tap text-[12px] font-semibold rounded-full px-3 py-1.5 shrink-0" style={{ background: C.pine, color: "#fff" }}>
-            Send invite
-          </button>
+          <span className="text-[11.5px] shrink-0 text-right" style={{ color: C.muted, maxWidth: 150 }}>
+            The crew asks the guest on the last day
+          </span>
         )}
       </div>
     );
@@ -3584,7 +3581,6 @@ function OperatorDesk({ user, trips, listings, jobs, actions, onOpenProfile, onN
         </div>
       )}
 
-      {inviteTrip && <ReviewInvite user={user} trip={inviteTrip} onClose={() => { setInviteTrip(null); loadRv(); }} />}
       {editOpen && <EditProfileSheet talent={t} onClose={() => setEditOpen(false)} onSaved={actions.reloadDirectory} />}
     </div>
   );
@@ -12279,7 +12275,7 @@ The link works once and expires in 14 days.`;
 /* ========================================================================== */
 /*  GUEST REVIEWS on a profile — with visible provenance                      */
 /* ========================================================================== */
-function GuestReviews({ talentId, isAdmin, isSelf, onAskOperator, onCount }) {
+function GuestReviews({ talentId, isAdmin, isSelf, onCount }) {
   const [rows, setRows] = useState(null);
   const [busyId, setBusyId] = useState(null);
   const [issuers, setIssuers] = useState({});
@@ -12332,17 +12328,11 @@ function GuestReviews({ talentId, isAdmin, isSelf, onAskOperator, onCount }) {
           <Star size={22} color={C.gold} />
         </div>
         <div className="text-[15px] font-semibold" style={{ color: C.ink }}>No guest reviews yet</div>
-        <p className="text-[13px] leading-snug mt-1.5 mb-3" style={{ color: C.muted }}>
+        <p className="text-[13px] leading-snug mt-1.5" style={{ color: C.muted }}>
           {isSelf
-            ? "Reviews are sent by the tour operator who ran your trip. Ask them after your next trip ends."
-            : "Guest reviews appear here once an operator invites guests to review this person."}
+            ? "On the last day of a trip, open it and ask your guest yourself. The operator who ran that trip confirms it, then it appears here."
+            : "Guest reviews appear here after a trip: the guide asks the guest, and the operator who ran it confirms."}
         </p>
-        {isSelf && onAskOperator && (
-          <button onClick={onAskOperator} className="tap h-10 px-4 rounded-xl text-[13.5px] font-semibold inline-flex items-center gap-1.5"
-            style={{ background: C.pine, color: "#fff" }}>
-            <Send size={14} /> Ask your operator
-          </button>
-        )}
       </div>
     );
   }
@@ -12463,124 +12453,3 @@ function GuestReviews({ talentId, isAdmin, isSelf, onAskOperator, onCount }) {
 /*  they invite the operator who ran the trip. That operator joins to issue   */
 /*  the review, and becomes a user of the platform in the process.            */
 /* ========================================================================== */
-function OperatorInvite({ user, trip, onClose }) {
-  const [company, setCompany] = useState(trip?.operator || "");
-  const [opPhone, setOpPhone] = useState("");
-  const [copied, setCopied] = useState(false);
-  const [note, setNote] = useState(null);
-
-  const first = String(user.name || "").split(" ")[0] || "your guide";
-  const joinLink = `${window.location.origin}/?invited_by=${encodeURIComponent(user.talentId || user.id)}`;
-
-  // Deliberately short. WhatsApp truncates long pre-filled messages on some phones,
-  // and the link is placed on its own line so it is detected and previewed properly.
-  const message =
-`Kuzu Zangpo la${company ? ` ${company}` : ""},
-
-There's a new platform in Bhutan — Bhutan Tourism Hub — where licensed guides and drivers keep a verified professional record, and where guest reviews are stored permanently against real trips.
-
-What makes it different: a guide cannot write or request their own reviews. Only the tour operator who ran the trip can invite a guest to review. That's what keeps the ratings honest.
-
-${trip ? `Would you send our guests from "${trip.title}" a review link? ` : "Would you send my guests a review link after our trips? "}It takes a minute, and it builds a record that actually means something.
-
-Free to join:
-${joinLink}
-
-Kadrinchhey la,
-${user.name || ""}`;
-
-  const copy = async () => {
-    try { await navigator.clipboard.writeText(message); setCopied(true); setTimeout(() => setCopied(false), 2400); }
-    catch (e) { setNote("Couldn't copy — press and hold the message to copy it."); }
-  };
-
-  const shareWhatsApp = () => {
-    const digits = String(opPhone || "").replace(/[^\d]/g, "");
-    const withCode = digits.length === 8 ? `975${digits}` : digits;   // bare Bhutanese mobile
-    const text = encodeURIComponent(message);
-    const url = withCode.length >= 8
-      ? `https://wa.me/${withCode}?text=${text}`
-      : `https://wa.me/?text=${text}`;
-    window.open(url, "_blank", "noopener");
-  };
-
-  const shareNative = async () => {
-    try {
-      if (navigator.share) await navigator.share({ title: "Bhutan Tourism Hub", text: message });
-      else copy();
-    } catch (e) {}
-  };
-
-  const shareEmail = () => {
-    const subject = encodeURIComponent("Bhutan Tourism Hub — guest reviews for our trips");
-    window.location.href = `mailto:?subject=${subject}&body=${encodeURIComponent(message)}`;
-  };
-
-  return createPortal((
-    <div className="fixed inset-0 flex items-end" style={{ background: "rgba(8,10,8,.55)", zIndex: 230 }} onClick={onClose}>
-      <div className="w-full rounded-t-3xl flex flex-col safe-bottom" style={{ background: C.card, maxHeight: "90dvh" }} onClick={(e) => e.stopPropagation()}>
-        <div className="p-5 pb-3 shrink-0">
-          <div className="w-10 h-1 rounded-full mx-auto mb-4" style={{ background: C.line }} />
-          <div className="text-[17px] font-semibold" style={{ color: C.ink }}>Ask your operator for reviews</div>
-          <p className="text-[13px] mt-1 leading-snug" style={{ color: C.muted }}>
-            Guides can't request their own reviews — that's what makes the ratings worth something.
-            Invite the operator who ran the trip and they can send your guests a review link.
-          </p>
-        </div>
-
-        <div className="flex-1 overflow-y-auto hidescroll px-5 pb-5" style={{ scrollbarWidth: "none" }}>
-          <div className="text-[12.5px] font-medium mb-1.5" style={{ color: C.ink }}>Operator or agency name</div>
-          <input value={company} onChange={(e) => setCompany(e.target.value)} maxLength={60}
-            placeholder="e.g. Druk Journeys"
-            className="w-full h-11 px-3.5 rounded-xl text-[14px] mb-3.5" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
-
-          <div className="text-[12.5px] font-medium mb-1.5" style={{ color: C.ink }}>Their WhatsApp number <span style={{ color: C.muted }}>· optional</span></div>
-          <input value={opPhone} onChange={(e) => setOpPhone(e.target.value)} inputMode="tel"
-            placeholder="17 12 34 56 — or with country code"
-            className="w-full h-11 px-3.5 rounded-xl text-[14px] mb-1.5" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
-          <p className="text-[11.5px] mb-4" style={{ color: C.muted }}>
-            Add it and WhatsApp opens straight to their chat. A Bhutanese 8-digit number works on its own.
-          </p>
-
-          <div className="text-[11.5px] font-semibold tracking-[.12em] uppercase mb-2" style={{ color: C.gold }}>Message</div>
-          <div className="rounded-xl p-3.5 mb-3 text-[12.5px] leading-relaxed whitespace-pre-wrap"
-            style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink, maxHeight: 240, overflowY: "auto" }}>
-            {message}
-          </div>
-
-          {note && <p className="text-[12.5px] mb-2" style={{ color: C.maroon }}>{note}</p>}
-
-          <div className="space-y-2">
-            <button onClick={shareWhatsApp}
-              className="tap w-full h-12 rounded-xl text-[15px] font-semibold inline-flex items-center justify-center gap-2"
-              style={{ background: "#25D366", color: "#fff" }}>
-              <MessageCircle size={17} /> Send on WhatsApp
-            </button>
-            <div className="flex gap-2">
-              <button onClick={shareEmail} className="tap flex-1 h-11 rounded-xl text-[13.5px] font-semibold inline-flex items-center justify-center gap-1.5"
-                style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }}>
-                <Mail size={15} /> Email
-              </button>
-              <button onClick={shareNative} className="tap flex-1 h-11 rounded-xl text-[13.5px] font-semibold inline-flex items-center justify-center gap-1.5"
-                style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }}>
-                <Share2 size={15} /> Share
-              </button>
-              <button onClick={copy} className="tap flex-1 h-11 rounded-xl text-[13.5px] font-semibold"
-                style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }}>
-                {copied ? "Copied" : "Copy"}
-              </button>
-            </div>
-          </div>
-
-          <div className="rounded-xl p-3.5 flex gap-2.5 mt-4" style={{ background: C.goldSoft }}>
-            <Star size={16} color={C.gold} className="shrink-0 mt-0.5" />
-            <p className="text-[12px] leading-snug" style={{ color: "#7a5a1e" }}>
-              <b>Tip:</b> ask on the last day of the trip, while the guests are still with you.
-              A review written the same week is far more specific — and far more useful to the next operator reading it.
-            </p>
-          </div>
-        </div>
-      </div>
-    </div>
-  ), document.body);
-}
