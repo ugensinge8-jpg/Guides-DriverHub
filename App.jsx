@@ -53,7 +53,7 @@ const sysMsg = (text) => ({ id: uid(), senderId: null, kind: "system", body: tex
 /* ── Cloud (Supabase) ── posts are global when configured; everything falls back to local demo mode when not. */
 const CLOUD = Boolean(supabase);
 const DEMO_MODE = false;   // set true only for local demos without a database
-const BUILD = "BUILD 45 — 28 Aug";   // bump every deploy; shown at the top of the welcome screen
+const BUILD = "BUILD 47 — 28 Aug";   // bump every deploy; shown at the top of the welcome screen
 
 /* ---- Install state ---- */
 // 43 characters of randomness — not guessable
@@ -418,6 +418,122 @@ function VerifyShell({ children }) {
   );
 }
 
+/* ---- Someone invited to a trip, arriving before they have an account. ---- */
+function TripInvitePage({ token, session, onSignedUp }) {
+  const [inv, setInv] = useState(undefined);
+  const [claiming, setClaiming] = useState(false);
+  const [msg, setMsg] = useState(null);
+  const [done, setDone] = useState(false);
+
+  useEffect(() => {
+    (async () => {
+      const { data, error } = await supabase.rpc("trip_invite_peek", { t: token });
+      const r = Array.isArray(data) ? data[0] : data;
+      setInv(error || !r ? null : r);
+    })();
+  }, [token]);
+
+  // Once they have an account, put them on the trip.
+  const claim = async () => {
+    setClaiming(true); setMsg(null);
+    const { data, error } = await supabase.rpc("claim_trip_invite", { t: token });
+    setClaiming(false);
+    if (error) { setMsg("Could not join the trip. Check your connection and try again."); return; }
+    const r = String(data || "");
+    if (r === "ok" || r === "already_yours") { setDone(true); return; }
+    if (r.startsWith("double_booked:")) {
+      setMsg(`You are already on "${r.split(":").slice(1).join(":")}" across these dates. A guide or driver can only be on one trip at a time. Tell the operator so they can sort it out.`);
+      return;
+    }
+    setMsg(r === "taken" ? "Someone else has already used this invitation."
+         : r === "cancelled" ? "This invitation was withdrawn."
+         : r === "missing" ? "This invitation link is not valid."
+         : "Could not join the trip.");
+  };
+
+  useEffect(() => { if (session && inv && inv.status === "sent" && !done) claim(); }, [session, inv]);
+
+  if (inv === undefined) return <VerifyShell><p className="text-[14px] mt-8" style={{ color: C.muted }}>Opening the invitation…</p></VerifyShell>;
+
+  if (inv === null) return (
+    <VerifyShell>
+      <div className="rounded-2xl p-5 mt-6" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+        <div className="text-[16px] font-semibold" style={{ color: C.ink }}>This invitation is not working</div>
+        <p className="text-[14px] mt-2 leading-relaxed" style={{ color: C.muted }}>
+          It may have been withdrawn, or the link was cut short when it was sent. Ask the operator to send it again.
+        </p>
+      </div>
+    </VerifyShell>
+  );
+
+  if (done) return (
+    <VerifyShell>
+      <div className="rounded-2xl p-5 mt-6 text-center" style={{ background: C.card, border: `1.5px solid ${C.pine}` }}>
+        <div className="w-14 h-14 rounded-2xl mx-auto flex items-center justify-center" style={{ background: C.pineSoft }}>
+          <Check size={26} color={C.pine} strokeWidth={2.6} />
+        </div>
+        <div className="text-[18px] font-semibold mt-3" style={{ color: C.ink }}>You are on the trip</div>
+        <p className="text-[14px] mt-2 leading-relaxed" style={{ color: C.muted }}>
+          {inv.trip_title} is now in your Trips, with the crew chat and the meeting point.
+        </p>
+        <a href="/" className="tap w-full rounded-2xl flex items-center justify-center gap-2 text-[15.5px] font-semibold mt-5"
+          style={{ height: 52, background: C.pine, color: "#fff", textDecoration: "none" }}>
+          Open the app <ArrowRight size={18} strokeWidth={2.4} />
+        </a>
+      </div>
+    </VerifyShell>
+  );
+
+  return (
+    <VerifyShell>
+      <div className="inline-flex items-center gap-2 rounded-full px-3 py-1.5 mb-3" style={{ background: C.goldSoft }}>
+        <UserPlus size={13} color={C.gold} />
+        <span className="text-[11.5px] font-bold tracking-[.08em] uppercase" style={{ color: C.gold }}>Invitation</span>
+      </div>
+
+      <h1 className="text-[24px] leading-tight font-semibold" style={{ color: C.ink }}>
+        {inv.operator_name} wants you on a trip
+      </h1>
+      <p className="text-[14px] mt-2 leading-relaxed" style={{ color: C.muted }}>
+        Hello {inv.invited_name}. You have been invited as the {inv.role === "driver" ? "driver" : "guide"}.
+      </p>
+
+      <div className="rounded-2xl p-4 mt-5" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+        <div className="text-[16px] font-semibold" style={{ color: C.ink }}>{inv.trip_title}</div>
+        <div className="text-[13px] mt-1" style={{ color: C.muted }}>
+          {fmtRange(inv.starts, inv.ends)}
+        </div>
+        {inv.meeting_point && (
+          <div className="text-[13px] mt-1.5 flex items-center gap-1.5" style={{ color: C.muted }}>
+            <MapPin size={13} color={C.gold} /> {inv.meeting_point}
+          </div>
+        )}
+      </div>
+
+      {msg && <p className="text-[13px] mt-4 leading-snug" style={{ color: C.maroon }}>{msg}</p>}
+
+      {session ? (
+        <button onClick={claim} disabled={claiming}
+          className="tap w-full rounded-2xl flex items-center justify-center gap-2 text-[16px] font-semibold mt-5"
+          style={{ height: 54, background: C.pine, color: "#fff" }}>
+          {claiming ? "Joining…" : "Join this trip"}
+        </button>
+      ) : (
+        <>
+          <a href={`/?invite=${token}&signup=1`}
+            className="tap w-full rounded-2xl flex items-center justify-center gap-2 text-[16px] font-semibold mt-5"
+            style={{ height: 54, background: C.pine, color: "#fff", textDecoration: "none" }}>
+            Create my account <ArrowRight size={18} strokeWidth={2.4} />
+          </a>
+          <p className="text-[12.5px] mt-3 leading-snug text-center" style={{ color: C.muted }}>
+            Takes two minutes. Once you are in, this trip is already waiting for you — you do not have to find it.
+          </p>
+        </>
+      )}
+    </VerifyShell>
+  );
+}
+
 function VerifyReview({ token }) {
   const [row, setRow] = useState(undefined);   // undefined=loading  null=bad link
   const [who, setWho] = useState("");
@@ -575,6 +691,11 @@ export default function App() {
   // A tour operator arriving on a verify link never signs in either.
   const verifyToken = useMemo(() => {
     try { return new URLSearchParams(window.location.search).get("verify"); }
+    catch (e) { return null; }
+  }, []);
+  // Someone invited onto a trip, who may not have an account yet.
+  const inviteToken = useMemo(() => {
+    try { return new URLSearchParams(window.location.search).get("invite"); }
     catch (e) { return null; }
   }, []);
   const realUserRef = useRef(null);   // current signed-in id — set below, used by every action
@@ -1173,6 +1294,7 @@ export default function App() {
   };
 
   if (verifyToken) return <VerifyReview token={verifyToken} />;
+  if (inviteToken && !session) return <TripInvitePage token={inviteToken} session={session} />;
   if (reviewToken) {
     return (
       <ErrorBoundary>
@@ -4354,6 +4476,9 @@ function NewTripSheet({ user, onClose, onDone, fromEnquiry }) {
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState(null);
   const [checking, setChecking] = useState(false);
+  const [inviting, setInviting] = useState(false);
+  const [inv, setInv] = useState({ name: "", phone: "", role: "guide" });
+  const [pendingInvites, setPendingInvites] = useState([]);   // queued until the trip exists
 
   // allProfiles() already returns talents. Mapping again blanked every name to "Member".
   const people = useMemo(() => allProfiles()
@@ -4392,6 +4517,20 @@ function NewTripSheet({ user, onClose, onDone, fromEnquiry }) {
 
   const fmt = (d) => { try { return new Date(d + "T00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short" }); } catch (e) { return d; } };
 
+  const sendInvite = () => {
+    if (!inv.name.trim() || !inv.phone.trim()) return;
+    setPendingInvites((L) => [...L, { ...inv, name: inv.name.trim(), phone: inv.phone.trim() }]);
+    setInv({ name: "", phone: "", role: "guide" });
+    setInviting(false);
+    setErr(null);
+  };
+
+  const waLink = (phone, text) => {
+    const d = String(phone || "").replace(/[^0-9]/g, "");
+    const wa = d.length === 8 ? "975" + d : d;
+    return `https://wa.me/${wa}?text=${encodeURIComponent(text)}`;
+  };
+
   const save = async () => {
     if (saving) return;
     if (!f.title.trim()) { setErr("Give the trip a name."); return; }
@@ -4424,6 +4563,24 @@ function NewTripSheet({ user, onClose, onDone, fromEnquiry }) {
         trip_id: trip.id, user_id: c.id, display_name: c.name, role_in_trip: c.role,
       });
       if (error) failed.push({ name: c.name, why: String(error.message || "").replace(/^.*DOUBLE_BOOKED:\s*/, "") });
+    }
+
+    // Invitations can only be written once the trip has an id.
+    for (const q of pendingInvites) {
+      const { data: row } = await supabase.from("trip_invites").insert({
+        trip_id: trip.id, operator_id: user.talentId,
+        name: q.name, phone: q.phone, role: q.role,
+      }).select("token").single();
+      if (row?.token) {
+        const link = `${window.location.origin}/?invite=${row.token}`;
+        const text =
+          `Kuzuzangpo la ${q.name}.\n\n` +
+          `This is ${user.name}. I would like you as the ${q.role} on "${f.title.trim()}", ` +
+          `${f.start}${f.end && f.end !== f.start ? " to " + f.end : ""}.\n\n` +
+          `Open this to accept. If you are not on Bhutan Tourism Hub yet you can join in two minutes, ` +
+          `and the trip will already be waiting for you:\n${link}`;
+        try { window.open(waLink(q.phone, text), "_blank", "noopener"); } catch (er) {}
+      }
     }
 
     // Close the loop: the enquiry now points at the trip it became.
@@ -4506,6 +4663,21 @@ function NewTripSheet({ user, onClose, onDone, fromEnquiry }) {
           <div className="mt-5">
             <SectionLabel trailing={crew.length ? `${crew.length} picked` : undefined}>Crew</SectionLabel>
 
+            {pendingInvites.map((q, i) => (
+              <div key={`inv${i}`} className="rounded-xl px-3.5 py-2.5 mb-2 flex items-center gap-2.5"
+                style={{ background: C.goldSoft, border: `1px solid ${C.gold}` }}>
+                <UserPlus size={16} color={C.gold} className="shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <div className="text-[14px] font-semibold truncate" style={{ color: "#7a5a1e" }}>{q.name}</div>
+                  <div className="text-[11.5px]" style={{ color: "#7a5a1e", opacity: .85 }}>
+                    {q.role === "driver" ? "Driver" : "Guide"} · will be invited on WhatsApp
+                  </div>
+                </div>
+                <button onClick={() => setPendingInvites((L) => L.filter((_, k) => k !== i))}
+                  className="tap text-[12px] font-semibold shrink-0" style={{ color: C.maroon }}>Remove</button>
+              </div>
+            ))}
+
             {crew.map((c) => (
               <div key={c.id} className="rounded-xl px-3.5 py-2.5 mb-2 flex items-center gap-2.5" style={{ background: C.pineSoft }}>
                 <div className="w-8 h-8 rounded-lg flex items-center justify-center text-[11px] font-semibold shrink-0"
@@ -4519,6 +4691,35 @@ function NewTripSheet({ user, onClose, onDone, fromEnquiry }) {
               </div>
             ))}
 
+            {inviting ? (
+              <div className="rounded-2xl p-3.5 mb-2" style={{ background: C.card, border: `1.5px solid ${C.gold}` }}>
+                <BLabel>Their name</BLabel>
+                <input value={inv.name} onChange={(e) => setInv({ ...inv, name: e.target.value })} maxLength={60}
+                  placeholder="Dorji Wangdi"
+                  className="w-full h-11 px-3 rounded-xl text-[15px] mb-2.5" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
+                <BLabel>WhatsApp number</BLabel>
+                <input value={inv.phone} onChange={(e) => setInv({ ...inv, phone: e.target.value.replace(/[^0-9+]/g, "") })}
+                  maxLength={15} inputMode="tel" placeholder="17123456"
+                  className="w-full h-11 px-3 rounded-xl text-[15px] mb-2.5" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
+                <div className="flex gap-1.5 mb-3">
+                  {[["guide", "Guide"], ["driver", "Driver"]].map(([id, lbl]) => (
+                    <button key={id} onClick={() => setInv({ ...inv, role: id })}
+                      className="tap flex-1 h-10 rounded-xl text-[13.5px] font-semibold"
+                      style={{ background: inv.role === id ? C.pine : C.bg, color: inv.role === id ? "#fff" : C.ink, border: `1px solid ${inv.role === id ? C.pine : C.line}` }}>{lbl}</button>
+                  ))}
+                </div>
+                <button onClick={sendInvite} disabled={!inv.name.trim() || !inv.phone.trim()}
+                  className="tap w-full h-11 rounded-xl text-[14px] font-semibold"
+                  style={{ background: inv.name.trim() && inv.phone.trim() ? C.gold : C.line, color: inv.name.trim() && inv.phone.trim() ? "#fff" : C.muted }}>
+                  Save and send the invitation
+                </button>
+                <button onClick={() => setInviting(false)} className="tap w-full text-[13px] font-semibold mt-2" style={{ color: C.muted }}>Cancel</button>
+                <p className="text-[11.5px] mt-2.5 leading-snug" style={{ color: C.muted }}>
+                  The trip is created first, then you send them the link. When they join they land straight on this trip.
+                </p>
+              </div>
+            ) : null}
+
             {!f.start ? (
               <p className="text-[12.5px] leading-snug" style={{ color: C.muted }}>Set the start date to see who is free.</p>
             ) : (
@@ -4527,6 +4728,16 @@ function NewTripSheet({ user, onClose, onDone, fromEnquiry }) {
                   placeholder={checking ? "Checking who is free…" : "Search a guide or driver"}
                   className="w-full h-11 px-3.5 rounded-xl text-[14.5px] mb-2"
                   style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }} />
+                {!inviting && (
+                  <button onClick={() => setInviting(true)}
+                    className="tap w-full rounded-xl px-3.5 py-2.5 mb-2 flex items-center gap-2.5 text-left"
+                    style={{ background: C.card, border: `1.5px dashed ${C.gold}` }}>
+                    <UserPlus size={16} color={C.gold} className="shrink-0" />
+                    <span className="flex-1 text-[13.5px] font-semibold" style={{ color: "#7a5a1e" }}>
+                      Not on the app yet? Invite them
+                    </span>
+                  </button>
+                )}
                 <div style={{ maxHeight: 240, overflowY: "auto" }} className="hidescroll">
                   {shown.length === 0 && <p className="text-[12.5px]" style={{ color: C.muted }}>Nobody matches that.</p>}
                   {shown.map((p) => {
@@ -4707,13 +4918,18 @@ function TripsTab({ user, trips, actions, onMessage }) {
 
 function TripCard({ trip, onOpen, tone, needsSign, tally }) {
   const msgs = (trip.chat?.messages || []).filter((m) => m.kind !== "system");
+  // Work it out from the dates rather than trusting a prop, so a finished trip
+  // reads as finished wherever it appears, not only inside the Past tab.
+  const st = tripStateNow(trip);
+  const past = st === "completed" || tone === "done";
   const border = tone === "sign" ? `1.5px solid ${C.gold}` : tone === "live" ? `1.5px solid ${C.pine}` : `1px solid ${C.line}`;
   return (
     <button onClick={onOpen} className="tap w-full text-left rounded-2xl p-4"
-      style={{ background: C.card, border, opacity: tone === "done" ? 0.82 : 1 }}>
+      style={{ background: past ? C.bg : C.card, border: past ? `1px solid ${C.lineSoft}` : border,
+               opacity: past ? 0.66 : 1 }}>
       <div className="flex items-start justify-between gap-3">
-        <div className="text-[15px] font-semibold leading-snug" style={{ color: C.ink }}>{trip.title}</div>
-        <TripStateBadge state={tripStateNow(trip)} />
+        <div className="text-[15px] font-semibold leading-snug" style={{ color: past ? C.muted : C.ink }}>{trip.title}</div>
+        <TripStateBadge state={st} />
       </div>
       <div className="flex items-center gap-1 text-[12.5px] mt-1" style={{ color: C.muted }}><CalendarCheck size={12} /> {fmtDate(trip.start)} – {fmtDate(trip.end)}</div>
       <div className="flex items-center justify-between mt-3">
