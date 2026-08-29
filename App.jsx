@@ -56,7 +56,7 @@ const sysMsg = (text) => ({ id: uid(), senderId: null, kind: "system", body: tex
 /* ── Cloud (Supabase) ── posts are global when configured; everything falls back to local demo mode when not. */
 const CLOUD = Boolean(supabase);
 const DEMO_MODE = false;   // set true only for local demos without a database
-const BUILD = "BUILD 57 — 28 Aug";   // bump every deploy; shown at the top of the welcome screen
+const BUILD = "BUILD 58 — 29 Aug";   // bump every deploy; shown at the top of the welcome screen
 
 /* ---- Install state ---- */
 // 43 characters of randomness — not guessable
@@ -1816,16 +1816,12 @@ function Shell({ user, posts, jobs, trips, listings, actions, engagement, dm, di
       <PortalBar user={user} />
 
       <div className="flex-1 flex min-h-0">
-        <SideNav nav={nav} tab={tab}
-          setTab={(t) => { setOverlay(null); setSharedPost(null); setTab(t); }}
-          badges={{ jobs: jobsBadge, review: pendingModCount, chats: unreadDm, bookings: pendingBookings }} />
-
         <div className="flex-1 flex flex-col min-h-0">
       <TopBar onLogout={onLogout} alerts={alertItems.length} onOpenAlerts={() => setAlertsOpen(true)}
         onSearch={(term) => { setOverlay(null); setTab(["operator", "business"].includes(user.kind) ? "discover" : "post"); setSearchTerm(term); }} />
 
       <div className="flex-1 overflow-y-auto hidescroll" style={{ scrollbarWidth: "none" }}>
-        <div className="w-full lg:max-w-3xl lg:mx-auto">
+        <div className="w-full lg:max-w-5xl xl:max-w-6xl lg:mx-auto lg:px-2">
         <VerifyBanner user={user} />
         {overlay ? (
           overlay.type === "profile" ? (
@@ -1920,11 +1916,9 @@ function Shell({ user, posts, jobs, trips, listings, actions, engagement, dm, di
           onOpenJobs={() => { setAlertsOpen(false); setTab(user.kind === "operator" ? "requests" : "jobs"); }} />
       )}
 
-      <div className="lg:hidden">
-        <BottomNav nav={nav} tab={tab}
-          setTab={(t) => { setOverlay(null); setSharedPost(null); setTab(t); }}
-          badges={{ jobs: jobsBadge, review: pendingModCount, chats: unreadDm, bookings: pendingBookings }} />
-      </div>
+      <BottomNav nav={nav} tab={tab}
+        setTab={(t) => { setOverlay(null); setSharedPost(null); setTab(t); }}
+        badges={{ jobs: jobsBadge, review: pendingModCount, chats: unreadDm, bookings: pendingBookings }} />
         </div>
         </div>
       </div>
@@ -2003,48 +1997,10 @@ function useIsDesktop() {
   return wide;
 }
 
-function SideNav({ nav, tab, setTab, badges }) {
-  return (
-    <div className="hidden lg:flex flex-col shrink-0"
-      style={{ width: 232, background: C.card, borderRight: `1px solid ${C.line}` }}>
-      <div className="px-5 pt-6 pb-5 flex items-center gap-2.5">
-        <div className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0" style={{ background: C.pine }}>
-          <Compass size={18} color={C.goldSoft} strokeWidth={2.1} />
-        </div>
-        <div>
-          <div className="text-[14px] font-semibold leading-tight" style={{ color: C.ink }}>Bhutan</div>
-          <div className="text-[14px] font-semibold leading-tight" style={{ color: C.ink }}>Tourism Hub</div>
-        </div>
-      </div>
-
-      <div className="flex-1 px-3">
-        {nav.map((n) => {
-          const on = tab === n.id;
-          const badge = badges[n.id] || 0;
-          return (
-            <button key={n.id} onClick={() => setTab(n.id)}
-              className="tap w-full rounded-xl px-3 py-2.5 mb-1 flex items-center gap-3 relative"
-              style={{ background: on ? C.pineSoft : "transparent" }}>
-              <n.Icon size={19} color={on ? C.pine : C.muted} strokeWidth={on ? 2.3 : 2} />
-              <span className="flex-1 text-left text-[14.5px] font-semibold"
-                style={{ color: on ? C.pine : C.ink }}>{n.label}</span>
-              {badge > 0 && (
-                <span className="min-w-[19px] h-[19px] px-1 rounded-full flex items-center justify-center text-[10.5px] font-bold text-white"
-                  style={{ background: C.maroon }}>{badge > 9 ? "9+" : badge}</span>
-              )}
-            </button>
-          );
-        })}
-      </div>
-
-      <div className="px-5 py-4 text-[10.5px]" style={{ color: C.line }}>{BUILD}</div>
-    </div>
-  );
-}
-
 function BottomNav({ nav, tab, setTab, badges }) {
   return (
-    <div className="shrink-0 flex safe-bottom" style={{ background: C.card, borderTop: `1px solid ${C.line}`, position: "sticky", bottom: 0, zIndex: 240 }}>
+    <div className="shrink-0 safe-bottom" style={{ background: C.card, borderTop: `1px solid ${C.line}`, position: "sticky", bottom: 0, zIndex: 240 }}>
+      <div className="flex w-full lg:max-w-2xl lg:mx-auto">
       {nav.map((n) => {
         const on = tab === n.id;
         const badge = badges[n.id] || 0;
@@ -2060,6 +2016,7 @@ function BottomNav({ nav, tab, setTab, badges }) {
           </button>
         );
       })}
+      </div>
     </div>
   );
 }
@@ -2300,7 +2257,7 @@ function PostTab({ user, posts, onAdd, eng, onOpenProfile }) {
       {visible.length === 0 ? (
         <Empty Icon={Inbox} title="Nothing here yet" body="Approved highlights from every guide and driver appear here — share the first one." />
       ) : (
-        <div className="space-y-3.5">
+        <div className="space-y-3.5 lg:max-w-2xl lg:mx-auto">
           {visible.map((p) => {
             const author = talentById(p.talentId);
             const mine = p.talentId === me;
@@ -2750,7 +2707,7 @@ function Discover({ onOpen, initialQuery, dirTick, viewerKind }) {
       {list.length === 0 ? (
         <Empty Icon={Search} title="No matches" body={isBiz ? "Try another place type, or clear the filters." : "Try a different language or clear the filters."} />
       ) : (
-        <div className="space-y-3">{list.map((t) => <TalentCard key={t.id} t={t} onOpen={() => onOpen(t.id)} />)}</div>
+        <div className="space-y-3 lg:space-y-0 lg:grid lg:grid-cols-2 xl:grid-cols-3 lg:gap-3">{list.map((t) => <TalentCard key={t.id} t={t} onOpen={() => onOpen(t.id)} />)}</div>
       )}
     </div>
   );
@@ -2846,7 +2803,7 @@ function Feed({ posts, eng, admin, onDelete, onOpenProfile, following }) {
       {live.length === 0 ? (
         <Empty Icon={Inbox} title="No highlights yet" body="Approved posts from guides and drivers appear here." />
       ) : (
-        <div className="space-y-3.5">
+        <div className="space-y-3.5 lg:max-w-2xl lg:mx-auto">
           {live.map((p) => {
             const t = talentById(p.talentId);
             return (
@@ -8659,7 +8616,7 @@ function ChatsTab({ user, me, dm, trips, posts, dirTick, onOpenPost, openWith, o
   if (find) return <PickContact me={me} dirTick={dirTick} onPick={(id) => { setFind(false); setWithId(id); }} onBack={() => setFind(false)} />;
 
   return (
-    <div className="px-5 py-4">
+    <div className="px-5 py-4 lg:max-w-2xl lg:mx-auto">
       {/* Trip chats now live inside each trip. This tab is people, not trips. */}
       {myTrips.some((tr) => ["active", "wrapping"].includes(tripStateNow(tr))) && (
         <div className="rounded-xl px-4 py-3 mb-5 flex items-center gap-3" style={{ background: C.pineSoft }}>
@@ -10860,6 +10817,7 @@ function HotelsTab({ user, onOpenProfile }) {
       <div className="mt-7">
         <SectionLabel trailing={`${hotels.length}`}>Places you can book</SectionLabel>
         {hotels.length === 0 && <p className="text-[13px]" style={{ color: C.muted }}>No hotels have joined yet.</p>}
+        <div className="lg:grid lg:grid-cols-2 lg:gap-2.5">
         {hotels.map((h) => (
           <button key={h.id} onClick={() => onOpenProfile(h.id)}
             className="tap w-full rounded-2xl p-3.5 mb-2 flex items-center gap-3 text-left"
@@ -10874,6 +10832,7 @@ function HotelsTab({ user, onOpenProfile }) {
             <ChevronLeft size={16} color={C.muted} style={{ transform: "rotate(180deg)" }} className="shrink-0" />
           </button>
         ))}
+        </div>
         <p className="text-[11.5px] mt-2 leading-snug" style={{ color: C.muted }}>
           Open a place to see its calendar, pick your dates and send a request.
         </p>
