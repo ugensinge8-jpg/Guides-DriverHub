@@ -53,7 +53,7 @@ const sysMsg = (text) => ({ id: uid(), senderId: null, kind: "system", body: tex
 /* ── Cloud (Supabase) ── posts are global when configured; everything falls back to local demo mode when not. */
 const CLOUD = Boolean(supabase);
 const DEMO_MODE = false;   // set true only for local demos without a database
-const BUILD = "BUILD 49 — 28 Aug";   // bump every deploy; shown at the top of the welcome screen
+const BUILD = "BUILD 50 — 28 Aug";   // bump every deploy; shown at the top of the welcome screen
 
 /* ---- Install state ---- */
 // 43 characters of randomness — not guessable
@@ -4908,6 +4908,12 @@ function TripsTab({ user, trips, actions, onMessage }) {
           <Plus size={18} strokeWidth={2.4} /> New trip
         </button>
       )}
+      {user.kind === "operator" && !newTrip && (
+        <p className="text-[11.5px] leading-snug mb-4 -mt-2 px-1" style={{ color: C.muted }}>
+          A booking you already have. Set the dates, then pick or invite the crew.
+          Still only an enquiry? Keep it in <b>Action</b> until the guest says yes.
+        </p>
+      )}
       {newTrip && <NewTripSheet user={user} onClose={() => setNewTrip(false)} onDone={() => actions.fetchTrips && actions.fetchTrips()} />}
 
       {mine.length === 0 ? (
@@ -6020,6 +6026,10 @@ function OperatorListings({ listings, onPost, onManage }) {
       <button onClick={onPost} className="tap w-full h-12 rounded-xl text-[14.5px] font-semibold inline-flex items-center justify-center gap-2 mb-4" style={{ background: C.pine, color: "#fff", boxShadow: `0 6px 16px ${C.pine}33` }}>
         <span className="text-[18px] leading-none">+</span> Post a job
       </button>
+      <p className="text-[11.5px] leading-snug mt-2 mb-3 px-1" style={{ color: C.muted }}>
+        Use this when you need someone and do not mind who. Any qualified guide or driver can apply.
+        If you already know who you want, add them to the trip directly from <b>Trips</b>.
+      </p>
       {listings.length === 0 ? (
         <Empty Icon={Briefcase} title="No open jobs" body="Post a job and any qualified guide or driver can apply." />
       ) : (
@@ -10345,7 +10355,8 @@ function EnquiriesBoard({ user }) {
     <div>
       <SectionLabel trailing={rows ? `${live.length}` : undefined}>Enquiries</SectionLabel>
       <p className="text-[12.5px] leading-snug mb-3" style={{ color: C.muted }}>
-        A guest wrote to you but nothing is booked yet. Keep it here. Nobody else can see it.
+        A guest wrote to you but nothing is booked yet. No crew, no dates fixed, nobody else can see it.
+        When the guest says yes, turn it into a trip and pick your crew then.
       </p>
 
       {rows === null && <p className="text-[13px]" style={{ color: C.muted }}>Loading…</p>}
