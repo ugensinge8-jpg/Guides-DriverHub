@@ -53,7 +53,7 @@ const sysMsg = (text) => ({ id: uid(), senderId: null, kind: "system", body: tex
 /* ── Cloud (Supabase) ── posts are global when configured; everything falls back to local demo mode when not. */
 const CLOUD = Boolean(supabase);
 const DEMO_MODE = false;   // set true only for local demos without a database
-const BUILD = "BUILD 50 — 28 Aug";   // bump every deploy; shown at the top of the welcome screen
+const BUILD = "BUILD 52 — 28 Aug";   // bump every deploy; shown at the top of the welcome screen
 
 /* ---- Install state ---- */
 // 43 characters of randomness — not guessable
@@ -419,7 +419,7 @@ function VerifyShell({ children }) {
 }
 
 /* ---- Someone invited to a trip, arriving before they have an account. ---- */
-function TripInvitePage({ token, session, onSignedUp }) {
+function TripInvitePage({ token, session }) {
   const [inv, setInv] = useState(undefined);
   const [claiming, setClaiming] = useState(false);
   const [msg, setMsg] = useState(null);
@@ -1532,7 +1532,7 @@ function RolePitch({ role, onCreate, onSignin, onBack }) {
   );
 }
 
-function Login({ onPick, session, myProfile, onAuthed, onBusy }) {
+function Login({ session, onAuthed, onBusy }) {
   const [authView, setAuthView] = useState(null);
   const [pitchRole, setPitchRole] = useState(null);
   useEffect(() => { onBusy && onBusy(!!authView); return () => onBusy && onBusy(false); }, [authView]);
@@ -1811,14 +1811,14 @@ function Shell({ user, posts, jobs, trips, listings, actions, engagement, dm, di
   return (
     <>
       <PortalBar user={user} />
-      <TopBar user={user} onLogout={onLogout} alerts={alertItems.length} onOpenAlerts={() => setAlertsOpen(true)}
+      <TopBar onLogout={onLogout} alerts={alertItems.length} onOpenAlerts={() => setAlertsOpen(true)}
         onSearch={(term) => { setOverlay(null); setTab(["operator", "business"].includes(user.kind) ? "discover" : "post"); setSearchTerm(term); }} />
 
       <div className="flex-1 overflow-y-auto hidescroll" style={{ scrollbarWidth: "none" }}>
         <VerifyBanner user={user} />
         {overlay ? (
           overlay.type === "profile" ? (
-            <TalentProfile talent={talentById(overlay.talentId)} posts={posts} eng={eng}
+            <TalentProfile talent={talentById(overlay.talentId)} posts={posts} trips={trips} eng={eng}
               onOpenProfile={openProfile}
               onMessage={(id) => { setOverlay(null); setTab("chats"); setDmWith(id); }}
               onProfileSaved={actions.reloadDirectory}
@@ -1839,10 +1839,10 @@ function Shell({ user, posts, jobs, trips, listings, actions, engagement, dm, di
                 onOpenProfile={openProfile} onMessage={(id) => { setTab("chats"); setDmWith(id); }}
                 initialDial={tab === "trips" ? "trips" : "hiring"} />
             )}
-            {tab === "chats" && <ChatsTab user={user} me={actorId} dm={dm} trips={trips} actions={actions} posts={posts} dirTick={dirTick} onOpenPost={setSharedPost} openWith={dmWith} onOpened={() => setDmWith(null)} onOpenProfile={openProfile} />}
+            {tab === "chats" && <ChatsTab user={user} me={actorId} dm={dm} trips={trips} posts={posts} dirTick={dirTick} onOpenPost={setSharedPost} openWith={dmWith} onOpened={() => setDmWith(null)} onOpenProfile={openProfile} />}
             {tab === "profile" && (user.kind === "operator"
               ? <OperatorDesk user={user} trips={trips} listings={listings} jobs={jobs} actions={actions} onOpenProfile={openProfile} onNavigate={setTab} />
-              : <TalentProfile talent={talentById(user.talentId)} posts={posts} eng={eng} self onSetAvailability={actions.setAvailability} onOpenProfile={openProfile} onProfileSaved={actions.reloadDirectory} onBack={null} />)}
+              : <TalentProfile talent={talentById(user.talentId)} posts={posts} trips={trips} eng={eng} self onSetAvailability={actions.setAvailability} onOpenProfile={openProfile} onProfileSaved={actions.reloadDirectory} onBack={null} />)}
             {tab === "discover" && <Discover onOpen={openProfile} initialQuery={searchTerm} dirTick={dirTick} viewerKind={user.kind} />}
             {tab === "action" && <ActionTab user={user} unread={unreadDm} onOpenMessages={() => setTab("chats")} />}
             {tab === "hotels" && <HotelsTab user={user} onOpenProfile={openProfile} />}
@@ -1928,7 +1928,7 @@ function PortalBar({ user }) {
   );
 }
 
-function TopBar({ user, onLogout, onSearch, alerts, onOpenAlerts }) {
+function TopBar({ onLogout, onSearch, alerts, onOpenAlerts }) {
   const [q, setQ] = useState("");
   const submit = () => { const t = q.trim(); if (t && onSearch) onSearch(t); };
 
@@ -2940,7 +2940,7 @@ function OpenDaysStrip({ profileId, self }) {
   );
 }
 
-function TalentProfile({ talent, posts, canRequest, viewer, self, contactOnly, eng, onRequest, onMessage, onSetAvailability, onOpenProfile, onProfileSaved, onBack }) {
+function TalentProfile({ talent, posts, trips = [], canRequest, viewer, self, contactOnly, eng, onRequest, onMessage, onSetAvailability, onOpenProfile, onProfileSaved, onBack }) {
   const t = talent;
   const live = posts.filter((p) => p.talentId === t.id && p.status === "approved").length;
   const located = posts.filter((p) => p.talentId === t.id && p.status === "approved" && p.location);
@@ -3169,7 +3169,7 @@ function TalentProfile({ talent, posts, canRequest, viewer, self, contactOnly, e
           ] : null}
           cv={
             <>
-              {t.role === "business" && <BusinessAvailability business={t} viewer={viewer} />}
+              {t.role === "business" && <BusinessAvailability business={t} viewer={viewer} trips={trips} />}
 
               {t.pitch && <div className="mt-5 pl-4" style={{ borderLeft: `3px solid ${C.gold}` }}><p className="text-[15px] leading-relaxed" style={{ color: C.ink }}>{t.pitch}</p></div>}
 
@@ -5234,6 +5234,84 @@ function WindowSeats({ trip, isOperator }) {
 }
 
 /* ---------------- Trip detail: itinerary, notes, allergies ---------------- */
+/* ---- Hotels booked for one trip. The trip is where you ask "where are they
+        sleeping"; the Hotels tab is where you ask "what is outstanding". ---- */
+function TripStays({ trip, isOperator }) {
+  const [rows, setRows] = useState(null);
+  const load = async () => {
+    const { data } = await supabase.from("business_bookings").select("*")
+      .eq("trip_id", trip.id).order("start_date");
+    setRows(data || []);
+  };
+  useEffect(() => { if (CLOUD) load(); else setRows([]); }, [trip.id]);
+
+  if (rows === null) return <p className="text-[13px]" style={{ color: C.muted }}>Loading…</p>;
+
+  if (rows.length === 0) {
+    return (
+      <TripEmpty
+        text={isOperator ? "No hotels booked for this trip yet." : "No stays recorded for this trip."}
+        canEdit={false} />
+    );
+  }
+
+  // Nights covered vs nights the trip actually runs: the one number that matters.
+  const live = rows.filter((b) => b.status !== "cancelled" && b.status !== "declined");
+  const nightsOf = (b) => Math.max(1, Math.round((new Date(b.end_date) - new Date(b.start_date)) / 86400000));
+  const covered = live.reduce((n, b) => n + nightsOf(b), 0);
+  const tripNights = trip.start && trip.end
+    ? Math.max(1, Math.round((new Date(trip.end) - new Date(trip.start)) / 86400000)) : null;
+  const gap = tripNights != null ? tripNights - covered : null;
+  const totalCost = live.reduce((n, b) => n + (Number(b.quote_amount) || 0), 0);
+
+  return (
+    <div>
+      <div className="rounded-2xl px-4 py-3 mb-3" style={{ background: gap > 0 ? C.goldSoft : C.pineSoft }}>
+        <div className="text-[13.5px] font-semibold" style={{ color: gap > 0 ? "#7a5a1e" : C.pine }}>
+          {covered} of {tripNights ?? covered} night{(tripNights ?? covered) === 1 ? "" : "s"} booked
+          {gap > 0 ? ` · ${gap} still to arrange` : gap === 0 ? " · fully covered" : ""}
+        </div>
+        {totalCost > 0 && (
+          <div className="text-[12px] mt-0.5" style={{ color: gap > 0 ? "#7a5a1e" : C.pine, opacity: .9 }}>
+            Nu {totalCost.toLocaleString("en-IN")} across {live.length} stay{live.length === 1 ? "" : "s"}
+          </div>
+        )}
+      </div>
+
+      {rows.map((b) => {
+        const t = BK_TONE[b.status] || BK_TONE.requested;
+        const nights = Math.max(1, Math.round((new Date(b.end_date) - new Date(b.start_date)) / 86400000));
+        return (
+          <div key={b.id} className="rounded-2xl p-3.5 mb-2.5" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+            <div className="flex items-start gap-2.5">
+              <div className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0" style={{ background: C.pineSoft }}>
+                <Store size={17} color={C.pine} />
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="text-[14.5px] font-semibold truncate" style={{ color: C.ink }}>{b.business_name || "Hotel"}</div>
+                <div className="text-[12.5px]" style={{ color: C.muted }}>
+                  {fmtRange(b.start_date, b.end_date)} · {nights} night{nights === 1 ? "" : "s"}
+                  {b.guests ? ` · ${b.guests} guest${b.guests === 1 ? "" : "s"}` : ""}
+                </div>
+                {b.quote_amount != null && (
+                  <div className="text-[13px] font-semibold mt-1" style={{ color: C.ink }}>Nu {Number(b.quote_amount).toLocaleString("en-IN")}</div>
+                )}
+              </div>
+              <span className="text-[11px] font-semibold rounded-full px-2.5 py-1 shrink-0" style={{ background: t.bg, color: t.fg }}>{t.label}</span>
+            </div>
+            {b.status === "cancelled" && b.cancel_reason && (
+              <p className="text-[12px] mt-2 leading-snug" style={{ color: C.maroon }}>{b.cancel_reason}</p>
+            )}
+          </div>
+        );
+      })}
+      <p className="text-[11.5px] mt-1 leading-snug" style={{ color: C.muted }}>
+        Book a hotel from the <b>Hotels</b> tab and choose this trip, and it appears here.
+      </p>
+    </div>
+  );
+}
+
 function TripEmpty({ text, canEdit, onEdit }) {
   return (
     <div className="rounded-2xl px-4 py-5 text-center" style={{ background: C.card, border: `1px dashed ${C.line}` }}>
@@ -5562,9 +5640,9 @@ function TripHub({ user, meId, trip, actions, onMessage, onBack }) {
 
         {/* Itinerary | Special notes | Allergies — what the operator set for this trip */}
         <div className="flex gap-1.5 mb-3 overflow-x-auto hidescroll" style={{ scrollbarWidth: "none" }}>
-          {[["itinerary", "Itinerary"], ["seats", "Window seats"], ["notes", "Special notes"], ["allergies", "Allergies"]].map(([id, label]) => {
+          {[["itinerary", "Itinerary"], ["stays", "Stays"], ["seats", "Window seats"], ["notes", "Special notes"], ["allergies", "Allergies"]].map(([id, label]) => {
             const on = detailTab === id;
-            const filled = id === "itinerary" ? (trip.itinerary || []).length > 0 : id === "seats" ? false : id === "notes" ? !!trip.specialNotes : !!trip.allergies;
+            const filled = id === "itinerary" ? (trip.itinerary || []).length > 0 : id === "stays" || id === "seats" ? false : id === "notes" ? !!trip.specialNotes : !!trip.allergies;
             return (
               <button key={id} onClick={() => setDetailTab(id)}
                 className="tap rounded-full px-3.5 h-9 text-[13px] font-semibold shrink-0 inline-flex items-center gap-1.5"
@@ -5587,6 +5665,8 @@ function TripHub({ user, meId, trip, actions, onMessage, onBack }) {
               ))}
             </div>
           ) : <TripEmpty text="No itinerary yet." canEdit={isTripOperator} onEdit={() => setEditDetail(true)} />)}
+
+          {detailTab === "stays" && <TripStays trip={trip} isOperator={isTripOperator} />}
 
           {detailTab === "seats" && <WindowSeats trip={trip} isOperator={isTripOperator} />}
 
@@ -5768,7 +5848,7 @@ function TripHub({ user, meId, trip, actions, onMessage, onBack }) {
             </div>}
           </div>
           <div className="mt-2.5">
-            <Chat user={user} meId={meId} trip={trip} state={tripStateNow(trip)} actions={actions} />
+            <Chat meId={meId} trip={trip} state={tripStateNow(trip)} actions={actions} />
           </div>
           </>
         )}
@@ -5777,7 +5857,7 @@ function TripHub({ user, meId, trip, actions, onMessage, onBack }) {
   );
 }
 
-function Chat({ user, meId, trip, state, actions }) {
+function Chat({ meId, trip, state, actions }) {
   const [text, setText] = useState("");
   const [note, setNote] = useState(null);
   const inputRef = useRef();
@@ -7354,7 +7434,28 @@ function BusinessBookings({ user }) {
 }
 
 /* On a business profile: live availability + the operator booking form */
-function BusinessAvailability({ business, viewer }) {
+function BusinessAvailability({ business, viewer, trips }) {
+  // Which trip is this stay for? Optional: rooms can be held before a trip exists.
+  const [forTrip, setForTrip] = useState("");
+  const myTrips = (trips || []).filter((t) => t.operatorId === viewer?.talentId
+    && tripStateNow(t) !== "completed");
+  const tripById = (id) => myTrips.find((t) => t.id === id) || null;
+
+  // Picking the trip fills in its dates and party size. One action, not four,
+  // and the stay then matches the trip exactly instead of being retyped.
+  const pickTrip = (id) => {
+    setForTrip(id);
+    const t = tripById(id);
+    if (!t) return;
+    setStart(t.start || "");
+    setEnd(t.end || t.start || "");
+    if (t.partySize) setGuests(String(t.partySize));
+  };
+
+  // If the dates are then changed by hand, say so rather than silently mismatching.
+  const chosen = tripById(forTrip);
+  const outsideTrip = chosen && start && end &&
+    (start < chosen.start || end > (chosen.end || chosen.start));
   const now = new Date();
   const [ym, setYm] = useState([now.getFullYear(), now.getMonth()]);
   const [rows] = useBookings("business_id", business.id);
@@ -7391,6 +7492,7 @@ function BusinessAvailability({ business, viewer }) {
       business_name: business.name, operator_name: viewer.name,
       start_date: start, end_date: end,
       guests: guests ? Number(guests) : null, note: note.trim() || null, status: "requested",
+      trip_id: forTrip || null,
     });
     setBusy(false);
     if (error) { setMsg(error.message); return; }
@@ -7420,6 +7522,33 @@ function BusinessAvailability({ business, viewer }) {
           <BLabel>Note</BLabel>
           <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={2} maxLength={200} placeholder="Group details, arrival time, rooms needed…"
             className="w-full px-3.5 py-3 rounded-xl text-[15px] resize-none mb-3" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
+          {myTrips.length > 0 && (
+            <>
+              <BLabel>Which trip is this for?</BLabel>
+              <select value={forTrip} onChange={(e) => pickTrip(e.target.value)}
+                className="w-full h-12 px-3 rounded-xl text-[14.5px] mb-1"
+                style={{ background: C.bg, border: `1px solid ${C.line}`, color: forTrip ? C.ink : C.muted }}>
+                <option value="">Not for a trip yet</option>
+                {myTrips.map((t) => (
+                  <option key={t.id} value={t.id}>{t.title} · {fmtDate(t.start)}</option>
+                ))}
+              </select>
+              <p className="text-[11.5px] mb-2 leading-snug" style={{ color: C.muted }}>
+                {chosen
+                  ? `Dates filled in from ${chosen.title}. Change them if the guests arrive a night early or stay on.`
+                  : "Pick a trip and its dates fill in automatically. Leave it blank if the trip is not confirmed yet."}
+              </p>
+              {outsideTrip && (
+                <div className="rounded-xl px-3 py-2 mb-3 flex items-start gap-2" style={{ background: C.goldSoft, border: `1px solid ${C.gold}` }}>
+                  <AlertTriangle size={14} color={C.gold} className="shrink-0 mt-0.5" />
+                  <span className="text-[11.5px] leading-snug" style={{ color: "#7a5a1e" }}>
+                    These nights fall outside {chosen.title} ({fmtRange(chosen.start, chosen.end || chosen.start)}).
+                    That is fine if it is deliberate.
+                  </span>
+                </div>
+              )}
+            </>
+          )}
           {msg && <p className="text-[13px] mb-2.5" style={{ color: msg.startsWith("Request sent") ? C.pine : C.maroon }}>{msg}</p>}
           <button disabled={busy} onClick={request} className="tap w-full rounded-xl flex items-center justify-center gap-2 text-[15px] font-semibold"
             style={{ height: 50, background: C.pine, color: "#fff" }}>
@@ -8044,7 +8173,7 @@ function Onboard({ mode: initialMode, session, presetRole, onBack, onDone }) {
 }
 
 /* ===================== Messages · unified inbox (trips + DMs) ==================== */
-function ChatsTab({ user, me, dm, trips, actions, posts, dirTick, onOpenPost, openWith, onOpened, onOpenProfile }) {
+function ChatsTab({ user, me, dm, trips, posts, dirTick, onOpenPost, openWith, onOpened, onOpenProfile }) {
   const [withId, setWithId] = useState(openWith || null);
   const [find, setFind] = useState(false);
   const msgs = dm?.dms || [];
