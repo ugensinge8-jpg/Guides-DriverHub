@@ -53,7 +53,7 @@ const sysMsg = (text) => ({ id: uid(), senderId: null, kind: "system", body: tex
 /* ── Cloud (Supabase) ── posts are global when configured; everything falls back to local demo mode when not. */
 const CLOUD = Boolean(supabase);
 const DEMO_MODE = false;   // set true only for local demos without a database
-const BUILD = "BUILD 47 — 28 Aug";   // bump every deploy; shown at the top of the welcome screen
+const BUILD = "BUILD 48 — 28 Aug";   // bump every deploy; shown at the top of the welcome screen
 
 /* ---- Install state ---- */
 // 43 characters of randomness — not guessable
@@ -4477,8 +4477,9 @@ function NewTripSheet({ user, onClose, onDone, fromEnquiry }) {
   const [err, setErr] = useState(null);
   const [checking, setChecking] = useState(false);
   const [inviting, setInviting] = useState(false);
-  const [inv, setInv] = useState({ name: "", phone: "", role: "guide" });
+  const [inv, setInv] = useState({ name: "", email: "", cc: "+975", phone: "", role: "guide" });
   const [pendingInvites, setPendingInvites] = useState([]);   // queued until the trip exists
+  const [inviteResult, setInviteResult] = useState(null);
 
   // allProfiles() already returns talents. Mapping again blanked every name to "Member".
   const people = useMemo(() => allProfiles()
@@ -4517,10 +4518,14 @@ function NewTripSheet({ user, onClose, onDone, fromEnquiry }) {
 
   const fmt = (d) => { try { return new Date(d + "T00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short" }); } catch (e) { return d; } };
 
+  const inviteReady = inv.name.trim() && /\S+@\S+\.\S+/.test(inv.email);
   const sendInvite = () => {
-    if (!inv.name.trim() || !inv.phone.trim()) return;
-    setPendingInvites((L) => [...L, { ...inv, name: inv.name.trim(), phone: inv.phone.trim() }]);
-    setInv({ name: "", phone: "", role: "guide" });
+    if (!inviteReady) return;
+    setPendingInvites((L) => [...L, {
+      ...inv, name: inv.name.trim(), email: inv.email.trim().toLowerCase(),
+      phone: inv.phone.trim() ? `${inv.cc}${inv.phone.replace(/[^0-9]/g, "")}` : null,
+    }]);
+    setInv({ name: "", email: "", cc: "+975", phone: "", role: "guide" });
     setInviting(false);
     setErr(null);
   };
@@ -4566,21 +4571,44 @@ function NewTripSheet({ user, onClose, onDone, fromEnquiry }) {
     }
 
     // Invitations can only be written once the trip has an id.
+    const sentBy = [];
     for (const q of pendingInvites) {
       const { data: row } = await supabase.from("trip_invites").insert({
         trip_id: trip.id, operator_id: user.talentId,
-        name: q.name, phone: q.phone, role: q.role,
+        name: q.name, email: q.email, phone: q.phone, role: q.role,
       }).select("token").single();
-      if (row?.token) {
-        const link = `${window.location.origin}/?invite=${row.token}`;
-        const text =
-          `Kuzuzangpo la ${q.name}.\n\n` +
-          `This is ${user.name}. I would like you as the ${q.role} on "${f.title.trim()}", ` +
-          `${f.start}${f.end && f.end !== f.start ? " to " + f.end : ""}.\n\n` +
-          `Open this to accept. If you are not on Bhutan Tourism Hub yet you can join in two minutes, ` +
-          `and the trip will already be waiting for you:\n${link}`;
-        try { window.open(waLink(q.phone, text), "_blank", "noopener"); } catch (er) {}
-      }
+      if (!row?.token) continue;
+
+      const link = `${window.location.origin}/?invite=${row.token}`;
+      const dates = f.end && f.end !== f.start ? `${fmtDate(f.start)} to ${fmtDate(f.end)}` : fmtDate(f.start);
+
+      // Email is the invitation. It is formal, it keeps a record, and it is the
+      // same address they will sign in with.
+      let emailed = false;
+      try {
+        const { data: res } = await supabase.functions.invoke("send-invite", {
+          body: { email: q.email, name: q.name, role: q.role, operator: user.name,
+                  tripTitle: f.title.trim(), dates, link },
+        });
+        emailed = !!(res && res.ok);
+      } catch (er) { emailed = false; }
+
+      sentBy.push({ name: q.name, emailed, phone: q.phone, link, dates });
+    }
+    // Anything email could not carry, offer on WhatsApp so nobody is left waiting.
+    const unsent = sentBy.filter((x) => !x.emailed && x.phone);
+    for (const u of unsent) {
+      const text =
+        `Kuzuzangpo la ${u.name}.\n\n` +
+        `This is ${user.name}. I would like you on "${f.title.trim()}", ${u.dates}.\n\n` +
+        `Open this to accept:\n${u.link}`;
+      try { window.open(waLink(u.phone, text), "_blank", "noopener"); } catch (er) {}
+    }
+    if (sentBy.length) {
+      const okCount = sentBy.filter((x) => x.emailed).length;
+      setInviteResult(okCount === sentBy.length
+        ? `Invitation${sentBy.length === 1 ? "" : "s"} emailed.`
+        : `${okCount} of ${sentBy.length} emailed. The rest opened in WhatsApp.`);
     }
 
     // Close the loop: the enquiry now points at the trip it became.
@@ -4670,7 +4698,7 @@ function NewTripSheet({ user, onClose, onDone, fromEnquiry }) {
                 <div className="flex-1 min-w-0">
                   <div className="text-[14px] font-semibold truncate" style={{ color: "#7a5a1e" }}>{q.name}</div>
                   <div className="text-[11.5px]" style={{ color: "#7a5a1e", opacity: .85 }}>
-                    {q.role === "driver" ? "Driver" : "Guide"} · will be invited on WhatsApp
+                    {q.role === "driver" ? "Driver" : "Guide"} · {q.email}
                   </div>
                 </div>
                 <button onClick={() => setPendingInvites((L) => L.filter((_, k) => k !== i))}
@@ -4697,10 +4725,34 @@ function NewTripSheet({ user, onClose, onDone, fromEnquiry }) {
                 <input value={inv.name} onChange={(e) => setInv({ ...inv, name: e.target.value })} maxLength={60}
                   placeholder="Dorji Wangdi"
                   className="w-full h-11 px-3 rounded-xl text-[15px] mb-2.5" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
+                <BLabel>Their email</BLabel>
+                <input value={inv.email} onChange={(e) => setInv({ ...inv, email: e.target.value.trim() })}
+                  maxLength={80} inputMode="email" autoCapitalize="none" placeholder="dorji@example.com"
+                  className="w-full h-11 px-3 rounded-xl text-[15px]" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
+                {suggestEmail(inv.email) && (
+                  <button onClick={() => setInv({ ...inv, email: suggestEmail(inv.email) })}
+                    className="tap w-full rounded-lg px-2.5 py-1.5 mt-1.5 text-left"
+                    style={{ background: C.goldSoft, border: `1px solid ${C.gold}` }}>
+                    <span className="text-[12px]" style={{ color: "#7a5a1e" }}>
+                      Did you mean <b>{suggestEmail(inv.email)}</b>? Tap to use it.
+                    </span>
+                  </button>
+                )}
+                <p className="text-[11.5px] mt-1 mb-2.5" style={{ color: C.muted }}>
+                  The invitation is sent here. It is also how they sign in.
+                </p>
+
                 <BLabel>WhatsApp number</BLabel>
-                <input value={inv.phone} onChange={(e) => setInv({ ...inv, phone: e.target.value.replace(/[^0-9+]/g, "") })}
-                  maxLength={15} inputMode="tel" placeholder="17123456"
-                  className="w-full h-11 px-3 rounded-xl text-[15px] mb-2.5" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
+                <div className="flex gap-2 mb-2.5">
+                  <select value={inv.cc} onChange={(e) => setInv({ ...inv, cc: e.target.value })}
+                    className="h-11 px-1.5 rounded-xl text-[13px]"
+                    style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink, width: 100 }}>
+                    {REVIEW_CCODES.map(([c, l]) => <option key={c} value={c}>{l}</option>)}
+                  </select>
+                  <input value={inv.phone} onChange={(e) => setInv({ ...inv, phone: e.target.value.replace(/[^0-9 ]/g, "").slice(0, 16) })}
+                    inputMode="tel" placeholder="17123456"
+                    className="flex-1 h-11 px-3 rounded-xl text-[15px]" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
+                </div>
                 <div className="flex gap-1.5 mb-3">
                   {[["guide", "Guide"], ["driver", "Driver"]].map(([id, lbl]) => (
                     <button key={id} onClick={() => setInv({ ...inv, role: id })}
@@ -4708,10 +4760,10 @@ function NewTripSheet({ user, onClose, onDone, fromEnquiry }) {
                       style={{ background: inv.role === id ? C.pine : C.bg, color: inv.role === id ? "#fff" : C.ink, border: `1px solid ${inv.role === id ? C.pine : C.line}` }}>{lbl}</button>
                   ))}
                 </div>
-                <button onClick={sendInvite} disabled={!inv.name.trim() || !inv.phone.trim()}
+                <button onClick={sendInvite} disabled={!inviteReady}
                   className="tap w-full h-11 rounded-xl text-[14px] font-semibold"
-                  style={{ background: inv.name.trim() && inv.phone.trim() ? C.gold : C.line, color: inv.name.trim() && inv.phone.trim() ? "#fff" : C.muted }}>
-                  Save and send the invitation
+                  style={{ background: inviteReady ? C.gold : C.line, color: inviteReady ? "#fff" : C.muted }}>
+                  Add this person
                 </button>
                 <button onClick={() => setInviting(false)} className="tap w-full text-[13px] font-semibold mt-2" style={{ color: C.muted }}>Cancel</button>
                 <p className="text-[11.5px] mt-2.5 leading-snug" style={{ color: C.muted }}>
@@ -4767,6 +4819,7 @@ function NewTripSheet({ user, onClose, onDone, fromEnquiry }) {
           </div>
 
           {err && <p className="text-[13px] mt-3 leading-snug" style={{ color: C.maroon }}>{err}</p>}
+          {inviteResult && <p className="text-[13px] mt-3 leading-snug" style={{ color: C.pine }}>{inviteResult}</p>}
 
           <button onClick={save} disabled={saving} className="tap w-full rounded-2xl text-[15.5px] font-semibold mt-5"
             style={{ height: 54, background: C.pine, color: "#fff" }}>{saving ? "Creating…" : "Create trip"}</button>
