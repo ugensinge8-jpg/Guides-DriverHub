@@ -56,7 +56,7 @@ const sysMsg = (text) => ({ id: uid(), senderId: null, kind: "system", body: tex
 /* ── Cloud (Supabase) ── posts are global when configured; everything falls back to local demo mode when not. */
 const CLOUD = Boolean(supabase);
 const DEMO_MODE = false;   // set true only for local demos without a database
-const BUILD = "BUILD 60 — 29 Aug";   // bump every deploy; shown at the top of the welcome screen
+const BUILD = "BUILD 61 — 29 Aug";   // bump every deploy; shown at the top of the welcome screen
 
 /* ---- Install state ---- */
 // 43 characters of randomness — not guessable
@@ -2082,16 +2082,43 @@ function TopBar({ onLogout, onSearch, alerts, onOpenAlerts }) {
    when it mounts, then cleared. A baton, not shared state. */
 let PENDING_TRIP_ID = null;
 
+/* 900px, not 1024px. Chrome's "Desktop site" on a phone reports a 980px
+   viewport: at a 1024px threshold that fell on the phone side, so the app kept
+   its 448px column and the browser shrank the lot into a narrow strip. */
+const WEB_MIN_WIDTH = 900;
+const VIEW_PREF_KEY = "bth_view_pref";      // "auto" | "app" | "web"
+
+function readViewPref() {
+  try { return localStorage.getItem(VIEW_PREF_KEY) || "auto"; } catch (e) { return "auto"; }
+}
+function writeViewPref(v) {
+  try { localStorage.setItem(VIEW_PREF_KEY, v); } catch (e) {}
+  try { window.dispatchEvent(new Event("bth-view-pref")); } catch (e) {}
+}
+
 function useIsDesktop() {
   const [wide, setWide] = useState(false);
+  const [pref, setPref] = useState("auto");
+
   useEffect(() => {
     if (typeof window === "undefined" || !window.matchMedia) return;
-    const mq = window.matchMedia("(min-width: 1024px)");
+    const mq = window.matchMedia(`(min-width: ${WEB_MIN_WIDTH}px)`);
     const apply = () => setWide(mq.matches);
     apply();
-    if (mq.addEventListener) { mq.addEventListener("change", apply); return () => mq.removeEventListener("change", apply); }
-    mq.addListener(apply); return () => mq.removeListener(apply);   // older Safari
+    setPref(readViewPref());
+    const onPref = () => setPref(readViewPref());
+    window.addEventListener("bth-view-pref", onPref);
+    if (mq.addEventListener) {
+      mq.addEventListener("change", apply);
+      return () => { mq.removeEventListener("change", apply); window.removeEventListener("bth-view-pref", onPref); };
+    }
+    mq.addListener(apply);
+    return () => { mq.removeListener(apply); window.removeEventListener("bth-view-pref", onPref); };
   }, []);
+
+  // An explicit choice always wins over the guess.
+  if (pref === "app") return false;
+  if (pref === "web") return true;
   return wide;
 }
 
@@ -11311,6 +11338,7 @@ function FeedbackSheet({ user, onClose }) {
 
 function PrivacyPanel({ talent }) {
   const [legacyOpen, setLegacyOpen] = useState(false);
+  const [viewPref, setViewPref] = useState(() => readViewPref());
   const [fb, setFb] = useState(false);
   const [open, setOpen] = useState(null);   // 'privacy' | 'terms' | 'data' | null
   const [busy, setBusy] = useState(false);
@@ -11381,6 +11409,25 @@ function PrivacyPanel({ talent }) {
       </div>
 
       {note && <div className="mx-4 mb-2 rounded-lg px-3 py-2 text-[12.5px]" style={{ background: C.pineSoft, color: C.pine }}>{note}</div>}
+
+      <div className="px-4 py-3.5" style={{ borderTop: `1px solid ${C.lineSoft}` }}>
+        <div className="text-[13.5px] font-semibold mb-1" style={{ color: C.ink }}>How this looks</div>
+        <p className="text-[12px] leading-snug mb-2.5" style={{ color: C.muted }}>
+          We work it out from your screen. If it picks wrong, set it yourself.
+        </p>
+        <div className="flex gap-1.5">
+          {[["auto", "Automatic"], ["app", "Phone app"], ["web", "Website"]].map(([v, label]) => {
+            const on = viewPref === v;
+            return (
+              <button key={v} onClick={() => { writeViewPref(v); setViewPref(v); }}
+                className="tap flex-1 h-10 rounded-xl text-[12.5px] font-semibold"
+                style={{ background: on ? C.pine : C.card, color: on ? "#fff" : C.ink, border: `1px solid ${on ? C.pine : C.line}` }}>
+                {label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
 
       {legacyOpen && <LegacyReviewsSheet talent={talent} onClose={() => setLegacyOpen(false)} />}
       {fb && <FeedbackSheet user={{ talentId: talent.id, kind: talent.role }} onClose={() => setFb(false)} />}
