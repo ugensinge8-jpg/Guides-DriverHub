@@ -56,7 +56,7 @@ const sysMsg = (text) => ({ id: uid(), senderId: null, kind: "system", body: tex
 /* ── Cloud (Supabase) ── posts are global when configured; everything falls back to local demo mode when not. */
 const CLOUD = Boolean(supabase);
 const DEMO_MODE = false;   // set true only for local demos without a database
-const BUILD = "BUILD 58 — 29 Aug";   // bump every deploy; shown at the top of the welcome screen
+const BUILD = "BUILD 60 — 29 Aug";   // bump every deploy; shown at the top of the welcome screen
 
 /* ---- Install state ---- */
 // 43 characters of randomness — not guessable
@@ -1335,7 +1335,7 @@ export default function App() {
         textarea::placeholder, input::placeholder{ color:${C.muted}; opacity:.7; }
       `}</style>
 
-      <div className="w-full max-w-md flex flex-col" style={{ height: "100dvh", color: C.ink }}>
+      <div className="w-full max-w-md lg:max-w-none flex flex-col" style={{ height: "100dvh", color: C.ink }}>
         {!user ? (
           <Login onPick={setAccountId} session={session} myProfile={myProfile} onAuthed={reloadMe} onBusy={setAuthBusy} />
         ) : (
@@ -1678,6 +1678,9 @@ const DEFAULT_TAB = { guide: "post", driver: "post", operator: "post", business:
 
 function Shell({ user, posts, jobs, trips, listings, actions, engagement, dm, dirTick, onLogout }) {
   const [tab, setTab] = useState(DEFAULT_TAB[user.kind]);
+  // Which experience: the website, or the app. Defaults to the app, so a phone
+  // and a first paint always get the layout that is known to work.
+  const desktop = useIsDesktop();
   const [overlay, setOverlay] = useState(null); // {type:'profile'|'request', talentId}
   const [dmWith, setDmWith] = useState(null);
   const [sharedPost, setSharedPost] = useState(null);
@@ -1813,15 +1816,25 @@ function Shell({ user, posts, jobs, trips, listings, actions, engagement, dm, di
 
   return (
     <>
-      <PortalBar user={user} />
+      {desktop ? (
+        <WebHeader user={user} nav={nav} tab={tab}
+          setTab={(t) => { setOverlay(null); setSharedPost(null); setTab(t); }}
+          badges={{ jobs: jobsBadge, review: pendingModCount, chats: unreadDm, bookings: pendingBookings }}
+          alerts={alertItems.length} onOpenAlerts={() => setAlertsOpen(true)} onLogout={onLogout}
+          onSearch={(term) => { setOverlay(null); setTab(["operator", "business"].includes(user.kind) ? "discover" : "post"); setSearchTerm(term); }} />
+      ) : (
+        <>
+          <PortalBar user={user} />
+          <TopBar onLogout={onLogout} alerts={alertItems.length} onOpenAlerts={() => setAlertsOpen(true)}
+            onSearch={(term) => { setOverlay(null); setTab(["operator", "business"].includes(user.kind) ? "discover" : "post"); setSearchTerm(term); }} />
+        </>
+      )}
 
       <div className="flex-1 flex min-h-0">
         <div className="flex-1 flex flex-col min-h-0">
-      <TopBar onLogout={onLogout} alerts={alertItems.length} onOpenAlerts={() => setAlertsOpen(true)}
-        onSearch={(term) => { setOverlay(null); setTab(["operator", "business"].includes(user.kind) ? "discover" : "post"); setSearchTerm(term); }} />
 
       <div className="flex-1 overflow-y-auto hidescroll" style={{ scrollbarWidth: "none" }}>
-        <div className="w-full lg:max-w-5xl xl:max-w-6xl lg:mx-auto lg:px-2">
+        <div className={desktop ? "w-full mx-auto px-6 py-2" : "w-full"} style={desktop ? { maxWidth: 1240 } : undefined}>
         <VerifyBanner user={user} />
         {overlay ? (
           overlay.type === "profile" ? (
@@ -1916,13 +1929,101 @@ function Shell({ user, posts, jobs, trips, listings, actions, engagement, dm, di
           onOpenJobs={() => { setAlertsOpen(false); setTab(user.kind === "operator" ? "requests" : "jobs"); }} />
       )}
 
-      <BottomNav nav={nav} tab={tab}
-        setTab={(t) => { setOverlay(null); setSharedPost(null); setTab(t); }}
-        badges={{ jobs: jobsBadge, review: pendingModCount, chats: unreadDm, bookings: pendingBookings }} />
+      {!desktop && (
+        <BottomNav nav={nav} tab={tab}
+          setTab={(t) => { setOverlay(null); setSharedPost(null); setTab(t); }}
+          badges={{ jobs: jobsBadge, review: pendingModCount, chats: unreadDm, bookings: pendingBookings }} />
+      )}
         </div>
         </div>
       </div>
     </>
+  );
+}
+
+/* ============ The website. Desktop only. ============
+   Not the phone app stretched: its own chrome, with navigation across the top
+   where a desktop user looks for it. The phone keeps PortalBar + TopBar +
+   BottomNav exactly as they are, untouched. */
+function WebHeader({ user, nav, tab, setTab, badges, alerts, onOpenAlerts, onSearch, onLogout }) {
+  const [q, setQ] = useState("");
+  const submit = () => { const t = q.trim(); if (t && onSearch) onSearch(t); };
+  const names = { guide: "Guide Portal", driver: "Driver Portal", operator: "Operator Portal", business: "Business Portal", admin: "Admin Portal" };
+  const h = new Date().getHours();
+  const greet = h < 12 ? "Good morning" : h < 17 ? "Good afternoon" : "Good evening";
+  const first = String(user.name || "").split(" ")[0] || "there";
+
+  return (
+    <div className="shrink-0 w-full">
+      {/* brand strip */}
+      <div className="w-full flex justify-center" style={{ background: C.pineDeep, height: 34 }}>
+        <div className="w-full flex items-center justify-between px-6" style={{ maxWidth: 1240 }}>
+          <span className="text-[10px] font-bold tracking-[.18em] uppercase" style={{ color: C.goldSoft }}>
+            {names[user.kind] || "Portal"}
+          </span>
+          <span className="text-[11.5px]" style={{ color: "rgba(255,255,255,.9)" }}>{greet}, {first}</span>
+        </div>
+      </div>
+
+      {/* masthead */}
+      <div className="w-full flex justify-center" style={{ background: C.card, borderBottom: `1px solid ${C.line}` }}>
+        <div className="w-full flex items-center gap-6 px-6" style={{ maxWidth: 1240, height: 64 }}>
+          <div className="flex items-center gap-2.5 shrink-0">
+            <div className="w-9 h-9 rounded-xl flex items-center justify-center" style={{ background: C.pine }}>
+              <Compass size={19} color={C.goldSoft} strokeWidth={2.1} />
+            </div>
+            <div className="text-[16px] font-semibold tracking-[-0.01em]" style={{ color: C.ink }}>Bhutan Tourism Hub</div>
+          </div>
+
+          <div className="flex-1" />
+
+          <div className="flex items-center gap-2 shrink-0" style={{ width: 290 }}>
+            <div className="flex-1 flex items-center gap-2 h-10 px-3.5 rounded-full"
+              style={{ background: C.bg, border: `1px solid ${C.line}` }}>
+              <Search size={15} color={C.muted} />
+              <input value={q} onChange={(e) => setQ(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") submit(); }}
+                placeholder="Search people"
+                className="flex-1 bg-transparent outline-none text-[13.5px]" style={{ color: C.ink }} />
+            </div>
+            <button onClick={onOpenAlerts} className="tap w-10 h-10 rounded-full flex items-center justify-center relative shrink-0"
+              style={{ background: C.bg, border: `1px solid ${C.line}` }} aria-label="Alerts">
+              <Bell size={17} color={C.ink} />
+              {alerts > 0 && (
+                <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full flex items-center justify-center text-[10px] font-bold text-white"
+                  style={{ background: C.maroon }}>{alerts > 9 ? "9+" : alerts}</span>
+              )}
+            </button>
+            <button onClick={onLogout} className="tap w-10 h-10 rounded-full flex items-center justify-center shrink-0"
+              style={{ background: C.bg, border: `1px solid ${C.line}` }} aria-label="Sign out">
+              <LogOut size={16} color={C.muted} />
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* navigation, where a desktop user looks for it */}
+      <div className="w-full flex justify-center" style={{ background: C.card, borderBottom: `1px solid ${C.line}` }}>
+        <div className="w-full flex items-stretch gap-1 px-6" style={{ maxWidth: 1240 }}>
+          {nav.map((n) => {
+            const on = tab === n.id;
+            const badge = badges[n.id] || 0;
+            return (
+              <button key={n.id} onClick={() => setTab(n.id)}
+                className="tap flex items-center gap-2 px-4 relative"
+                style={{ height: 46, borderBottom: `2.5px solid ${on ? C.gold : "transparent"}` }}>
+                <n.Icon size={16} color={on ? C.pine : C.muted} strokeWidth={on ? 2.3 : 2} />
+                <span className="text-[13.5px] font-semibold" style={{ color: on ? C.pine : C.muted }}>{n.label}</span>
+                {badge > 0 && (
+                  <span className="min-w-[17px] h-[17px] px-1 rounded-full flex items-center justify-center text-[10px] font-bold text-white"
+                    style={{ background: C.maroon }}>{badge > 9 ? "9+" : badge}</span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -1974,9 +2075,6 @@ function TopBar({ onLogout, onSearch, alerts, onOpenAlerts }) {
   );
 }
 
-/* On a desktop the bottom bar wastes the whole left of the screen and puts the
-   controls furthest from the eye. Same nav, same state, laid out sideways.
-   Every class here is lg: prefixed, so phones render exactly as before. */
 /* Is there room for two panes? Defaults to false so the very first paint is the
    phone layout: if anything goes wrong we fail to the layout that always works.
    Matches Tailwind's lg breakpoint exactly, so JS and CSS can never disagree. */
@@ -1999,8 +2097,7 @@ function useIsDesktop() {
 
 function BottomNav({ nav, tab, setTab, badges }) {
   return (
-    <div className="shrink-0 safe-bottom" style={{ background: C.card, borderTop: `1px solid ${C.line}`, position: "sticky", bottom: 0, zIndex: 240 }}>
-      <div className="flex w-full lg:max-w-2xl lg:mx-auto">
+    <div className="shrink-0 flex safe-bottom" style={{ background: C.card, borderTop: `1px solid ${C.line}`, position: "sticky", bottom: 0, zIndex: 240 }}>
       {nav.map((n) => {
         const on = tab === n.id;
         const badge = badges[n.id] || 0;
@@ -2016,7 +2113,6 @@ function BottomNav({ nav, tab, setTab, badges }) {
           </button>
         );
       })}
-      </div>
     </div>
   );
 }
