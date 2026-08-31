@@ -34,6 +34,7 @@ const profileToTalent = (p) => ({
   handle: p.handle || null,
   taUrl: p.tripadvisor_url || null, gUrl: p.google_reviews_url || null,
   rateLow: p.rate_low != null ? Number(p.rate_low) : null,
+  photoUrl: p.photo_url || null,
   starRating: p.star_rating || null,
   stayKind: p.stay_kind || null,
   rateHigh: p.rate_high != null ? Number(p.rate_high) : null,
@@ -58,7 +59,7 @@ const sysMsg = (text) => ({ id: uid(), senderId: null, kind: "system", body: tex
 /* ── Cloud (Supabase) ── posts are global when configured; everything falls back to local demo mode when not. */
 const CLOUD = Boolean(supabase);
 const DEMO_MODE = false;   // set true only for local demos without a database
-const BUILD = "BUILD 65 — 29 Aug";   // bump every deploy; shown at the top of the welcome screen
+const BUILD = "BUILD 66 — 29 Aug";   // bump every deploy; shown at the top of the welcome screen
 
 /* ---- Install state ---- */
 // 43 characters of randomness — not guessable
@@ -2214,10 +2215,22 @@ function BottomNav({ nav, tab, setTab, badges }) {
 }
 
 /* ============================== Shared bits =============================== */
-function Avatar({ initials, size = 40, ring = null, ringDashed = false }) {
+function Avatar({ initials, url, size = 40, ring = null, ringDashed = false }) {
+  // `url` is optional, so all 23 existing callers keep working untouched:
+  // a photo when one has been set, initials when it has not, initials again if
+  // the image fails so a broken picture never appears.
+  const [failed, setFailed] = useState(false);
   const ringStyle = !ring ? {} : ringDashed
     ? { outline: `2.5px dashed ${ring}`, outlineOffset: 1.5 }
     : { boxShadow: `0 0 0 2.5px ${ring}` };
+  if (url && !failed) {
+    return (
+      <div className="rounded-xl overflow-hidden shrink-0" style={{ width: size, height: size, background: C.lineSoft, ...ringStyle }}>
+        <img src={url} alt="" loading="lazy" onError={() => setFailed(true)}
+          style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+      </div>
+    );
+  }
   return (
     <div className="rounded-xl flex items-center justify-center shrink-0" style={{ width: size, height: size, background: C.pine, ...ringStyle }}>
       <span className="font-semibold" style={{ color: C.goldSoft, fontSize: size * 0.38 }}>{initials}</span>
@@ -3192,6 +3205,9 @@ function TalentProfile({ talent, posts, trips = [], canRequest, viewer, self, co
   const myStories = (eng?.stories || []).filter((st) => st.authorId === t.id);
   const [viewStories, setViewStories] = useState(false);
   const [addStory, setAddStory] = useState(false);
+  const photoRef = useRef(null);
+  const [photoBusy, setPhotoBusy] = useState(false);
+  const [photoErr, setPhotoErr] = useState(null);
   const [shareToStory, setShareToStory] = useState(null);
   const [listMode, setListMode] = useState(null);
   const [credsOpen, setCredsOpen] = useState(false);
@@ -3216,14 +3232,23 @@ function TalentProfile({ talent, posts, trips = [], canRequest, viewer, self, co
         <div className="px-5">
           <div className="-mt-9 mb-3 flex items-end gap-3">
             <button onClick={() => myStories.length && setViewStories(true)} className="relative" style={{ cursor: myStories.length ? "pointer" : "default" }}>
-              <div className="rounded-2xl flex items-center justify-center" style={{ width: 72, height: 72, background: C.pine, border: `3px solid ${C.bg}`,
+              <div className="rounded-2xl overflow-hidden flex items-center justify-center" style={{ width: 72, height: 72, background: C.pine, border: `3px solid ${C.bg}`,
                 boxShadow: myStories.length ? `0 0 0 3px ${C.gold}` : gcp ? `0 0 0 3px ${gcp.color}` : "none" }}>
-                <span className="text-[23px] font-semibold" style={{ color: C.goldSoft }}>{t.initials}</span>
+                {t.photoUrl
+                  ? <img src={t.photoUrl} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                  : <span className="text-[23px] font-semibold" style={{ color: C.goldSoft }}>{t.initials}</span>}
               </div>
               {myStories.length > 0 && (
                 <span className="absolute -bottom-1 -right-1 rounded-full px-1.5 py-0.5 text-[10px] font-bold" style={{ background: C.gold, color: "#fff" }}>{myStories.length}</span>
               )}
             </button>
+            {self && (
+              <button onClick={() => photoRef.current?.click()} disabled={photoBusy}
+                className="tap mb-1 inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[12.5px] font-semibold"
+                style={{ background: C.pineSoft, color: C.pine }}>
+                <Camera size={13} strokeWidth={2.4} /> {photoBusy ? "Uploading…" : t.photoUrl ? "Change photo" : "Add photo"}
+              </button>
+            )}
             {self && (
               <button onClick={() => setAddStory(true)} className="tap mb-1 inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[12.5px] font-semibold"
                 style={{ background: C.goldSoft, color: "#7a5a1e" }}>
@@ -3236,6 +3261,7 @@ function TalentProfile({ talent, posts, trips = [], canRequest, viewer, self, co
               <div className="flex items-start gap-1.5">
                 <h1 className="text-[22px] font-semibold leading-tight tracking-[-0.01em]" style={{ color: C.ink, wordBreak: "break-word" }}>{t.name}</h1>
                 {t.handle && <div className="text-[13px] mt-0.5" style={{ color: C.muted }}>@{t.handle}</div>}
+                {photoErr && <div className="text-[12px] mt-0.5" style={{ color: C.maroon }}>{photoErr}</div>}
                 {t.verified && <BadgeCheck size={17} color={C.pine} className="shrink-0 mt-1" />}
               </div>
               <div className="flex items-center gap-1 text-[13.5px] mt-1" style={{ color: C.muted }}><MapPin size={13} /> {t.role === "guide" && t.guideClass && GUIDE_CLASSES[t.guideClass]
@@ -4876,6 +4902,17 @@ function NewTripSheet({ user, onClose, onDone, fromEnquiry }) {
     return (p.name || "").toLowerCase().includes(t) || (p.base || "").toLowerCase().includes(t);
   });
 
+  // Nobody by that name. Rather than an empty list, show anyone spelled close to
+  // it - a mistyped name is far more common than a missing person - and offer to
+  // invite exactly who was typed.
+  const near = (!shown.length && q.trim().length > 2)
+    ? people.filter((p) => {
+        if (crew.some((c) => c.id === p.id)) return false;
+        const a = q.trim().toLowerCase();
+        return (p.name || "").toLowerCase().split(/\s+/).some((w) => editDistance(w, a) <= 2);
+      }).slice(0, 4)
+    : [];
+
   const fmt = (d) => { try { return new Date(d + "T00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short" }); } catch (e) { return d; } };
 
   const inviteReady = inv.name.trim() && /\S+@\S+\.\S+/.test(inv.email);
@@ -5151,7 +5188,32 @@ function NewTripSheet({ user, onClose, onDone, fromEnquiry }) {
                   </button>
                 )}
                 <div style={{ maxHeight: 240, overflowY: "auto" }} className="hidescroll">
-                  {shown.length === 0 && <p className="text-[12.5px]" style={{ color: C.muted }}>Nobody matches that.</p>}
+                  {shown.length === 0 && q.trim() && (
+                    <div className="rounded-xl p-3.5 mb-2" style={{ background: C.goldSoft, border: `1px solid ${C.gold}` }}>
+                      <div className="text-[13.5px] font-semibold" style={{ color: "#7a5a1e" }}>
+                        Nobody here is called &ldquo;{q.trim()}&rdquo;
+                      </div>
+                      {near.length > 0 && (
+                        <>
+                          <p className="text-[12px] mt-1.5 mb-1.5" style={{ color: "#7a5a1e" }}>Did you mean one of these?</p>
+                          {near.map((p) => (
+                            <button key={p.id} onClick={() => { setQ(""); setCrew((L) => [...L, { id: p.id, name: p.name, role: p.role }]); }}
+                              className="tap w-full text-left rounded-lg px-2.5 py-2 mb-1 flex items-center gap-2"
+                              style={{ background: C.card, border: `1px solid ${C.line}` }}>
+                              <Avatar initials={p.initials} url={p.photoUrl} size={28} />
+                              <span className="flex-1 text-[13px] font-semibold truncate" style={{ color: C.ink }}>{p.name}</span>
+                              <span className="text-[11.5px]" style={{ color: C.muted }}>{p.base || ""}</span>
+                            </button>
+                          ))}
+                        </>
+                      )}
+                      <button onClick={() => { setInv({ name: q.trim(), email: "", cc: "+975", phone: "", role: "guide" }); setInviting(true); }}
+                        className="tap w-full h-10 rounded-xl text-[13px] font-semibold mt-1.5 flex items-center justify-center gap-2"
+                        style={{ background: C.pine, color: "#fff" }}>
+                        <UserPlus size={15} /> Invite {q.trim()} to the app
+                      </button>
+                    </div>
+                  )}
                   {shown.map((p) => {
                     const clash = busy[p.id];
                     return (
@@ -5936,8 +5998,7 @@ function ChannelMembers({ trip, meId, isOperator, onMessage, onChanged }) {
         return (
           <div key={m.id} className="px-3.5 py-2.5 flex items-center gap-2.5" style={{ borderBottom: `1px solid ${C.lineSoft}` }}>
             <div className="relative shrink-0">
-              <div className="w-9 h-9 rounded-lg flex items-center justify-center text-[11.5px] font-semibold"
-                style={{ background: C.pineDeep, color: C.goldSoft }}>{initialsOf(m.name || "?")}</div>
+              <Avatar initials={initialsOf(m.name || "?")} url={(talentById(m.id) || {}).photoUrl} size={36} />
               {ls.live && (
                 <span className="absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full"
                   style={{ background: "#3FA96B", border: `2px solid ${C.card}` }} />
@@ -5978,16 +6039,18 @@ function ChannelMembers({ trip, meId, isOperator, onMessage, onChanged }) {
               <span className="text-[12px]" style={{ color: "#7a5a1e" }}>Did you mean <b>{suggestEmail(inv.email)}</b>?</span>
             </button>
           )}
-          <div className="flex gap-1.5 mt-2.5 mb-3">
-            {[["moderator", "Moderator"], ["manager", "Manager or owner"]].map(([id, lbl]) => (
+          <BLabel>Their role</BLabel>
+          <div className="grid grid-cols-2 gap-1.5 mt-1 mb-2.5">
+            {[["guide", "Guide"], ["driver", "Driver"], ["moderator", "Moderator"], ["manager", "Manager or owner"]].map(([id, lbl]) => (
               <button key={id} onClick={() => setInv({ ...inv, role: id })}
-                className="tap flex-1 h-10 rounded-xl text-[13px] font-semibold"
+                className="tap h-10 rounded-xl text-[13px] font-semibold"
                 style={{ background: inv.role === id ? C.pine : C.bg, color: inv.role === id ? "#fff" : C.ink, border: `1px solid ${inv.role === id ? C.pine : C.line}` }}>{lbl}</button>
             ))}
           </div>
           <p className="text-[11.5px] mb-2.5 leading-snug" style={{ color: C.muted }}>
-            Office roles join the channel to watch and help. They are not crew, so they are never graded,
-            never counted for reviews, and the one-trip-at-a-time rule does not apply to them.
+            {["guide", "driver"].includes(inv.role)
+              ? "Crew are graded after the trip, can ask guests for reviews, and can only ever be on one trip at a time."
+              : "Office roles join the channel to watch and help. They are never graded, never counted for reviews, and can be on several trips at once."}
           </p>
           <button onClick={send} disabled={busy || !inv.name.trim() || !/\S+@\S+\.\S+/.test(inv.email)}
             className="tap w-full h-11 rounded-xl text-[14px] font-semibold"
@@ -6000,9 +6063,7 @@ function ChannelMembers({ trip, meId, isOperator, onMessage, onChanged }) {
       ) : (
         <button onClick={() => setInviting(true)} className="tap w-full px-3.5 py-3 flex items-center gap-2.5 text-left">
           <UserPlus size={16} color={C.gold} className="shrink-0" />
-          <span className="text-[13.5px] font-semibold" style={{ color: "#7a5a1e" }}>
-            Add someone from your office
-          </span>
+          <span className="text-[13.5px] font-semibold" style={{ color: "#7a5a1e" }}>Add</span>
         </button>
       ))}
 
