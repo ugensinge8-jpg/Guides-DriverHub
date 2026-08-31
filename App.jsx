@@ -58,7 +58,7 @@ const sysMsg = (text) => ({ id: uid(), senderId: null, kind: "system", body: tex
 /* ── Cloud (Supabase) ── posts are global when configured; everything falls back to local demo mode when not. */
 const CLOUD = Boolean(supabase);
 const DEMO_MODE = false;   // set true only for local demos without a database
-const BUILD = "BUILD 64 — 29 Aug";   // bump every deploy; shown at the top of the welcome screen
+const BUILD = "BUILD 65 — 29 Aug";   // bump every deploy; shown at the top of the welcome screen
 
 /* ---- Install state ---- */
 // 43 characters of randomness — not guessable
@@ -718,6 +718,26 @@ export default function App() {
   const [myProfile, setMyProfile] = useState(null);   // null=loading · false=none · object=exists
   const [profileTick, setProfileTick] = useState(0);
   const [dirTick, setDirTick] = useState(0);
+
+  // Stamp when this person was last about, so trip channels can show it.
+  // On open and every 4 minutes: enough to be useful, far cheaper on 4G than
+  // holding a socket open for every member of every trip.
+  useEffect(() => {
+    if (!CLOUD) return;
+    let stop = false;
+    const beat = async () => {
+      try {
+        const { data: { user: u } = {} } = await supabase.auth.getUser();
+        if (!u || stop) return;
+        await supabase.from("profiles").update({ last_seen_at: new Date().toISOString() }).eq("id", u.id);
+      } catch (e) {}
+    };
+    beat();
+    const iv = setInterval(beat, 240000);
+    const onWake = () => { if (document.visibilityState === "visible") beat(); };
+    document.addEventListener("visibilitychange", onWake);
+    return () => { stop = true; clearInterval(iv); document.removeEventListener("visibilitychange", onWake); };
+  }, []);
   const [dms, setDms] = useState([]);
   const [authBusy, setAuthBusy] = useState(false);   // true while the signup/reset wizard is running
   const [follows, setFollows] = useState([]);
@@ -5830,6 +5850,167 @@ function HotelPickerSheet({ trip, night, date, operator, onClose, onBooked }) {
   ), document.body);
 }
 
+/* How recently someone was in the app. Read from profiles.last_seen_at, which
+   is stamped on open, rather than a live socket: a permanent connection per
+   person is a poor trade on 4G for information this soft. */
+function lastSeenLabel(iso) {
+  if (!iso) return { text: "Not seen yet", live: false };
+  const mins = Math.floor((Date.now() - new Date(iso).getTime()) / 60000);
+  if (mins < 3) return { text: "Online now", live: true };
+  if (mins < 60) return { text: `${mins} min ago`, live: false };
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return { text: `${hrs} hour${hrs === 1 ? "" : "s"} ago`, live: false };
+  const days = Math.floor(hrs / 24);
+  if (days === 1) return { text: "Yesterday", live: false };
+  if (days < 7) return { text: `${days} days ago`, live: false };
+  return { text: "Over a week ago", live: false };
+}
+
+const TRIP_ROLE_LABEL = {
+  guide: "Guide", driver: "Driver", operator: "Operator",
+  moderator: "Moderator", manager: "Manager",
+};
+
+/* Who is in this trip's channel, when they were last about, and a way to reach
+   any one of them directly. */
+function ChannelMembers({ trip, meId, isOperator, onMessage, onChanged }) {
+  const [seen, setSeen] = useState({});
+  const [inviting, setInviting] = useState(false);
+  const [inv, setInv] = useState({ name: "", email: "", role: "moderator" });
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState(null);
+
+  const members = (trip.members || []);
+
+  useEffect(() => {
+    const ids = members.map((m) => m.id).filter((x) => /^[0-9a-f-]{36}$/.test(x));
+    if (!ids.length) return;
+    (async () => {
+      const { data } = await supabase.from("profiles").select("id, last_seen_at").in("id", ids);
+      const m = {};
+      (data || []).forEach((r) => { m[r.id] = r.last_seen_at; });
+      setSeen(m);
+    })();
+  }, [trip.id, members.length]);
+
+  const send = async () => {
+    if (!inv.name.trim() || !/\S+@\S+\.\S+/.test(inv.email)) return;
+    setBusy(true); setMsg(null);
+    const { data: row, error } = await supabase.from("trip_invites").insert({
+      trip_id: trip.id, operator_id: trip.operatorId,
+      name: inv.name.trim(), email: inv.email.trim().toLowerCase(), role: inv.role,
+    }).select("token").single();
+    if (error || !row) { setBusy(false); setMsg("Could not create that invitation."); return; }
+
+    const link = `${window.location.origin}/?invite=${row.token}`;
+    let emailed = false;
+    try {
+      const { data: res } = await supabase.functions.invoke("send-invite", {
+        body: { email: inv.email.trim(), name: inv.name.trim(), role: inv.role,
+                operator: trip.operatorName || "Your operator", tripTitle: trip.title,
+                dates: fmtRange(trip.start, trip.end || trip.start), link },
+      });
+      emailed = !!(res && res.ok);
+    } catch (e) { emailed = false; }
+
+    setBusy(false);
+    setMsg(emailed ? "Invitation emailed." : "Invitation created. Send them this link: " + link);
+    setInv({ name: "", email: "", role: "moderator" });
+    setInviting(false);
+    onChanged && onChanged();
+  };
+
+  return (
+    <div className="rounded-2xl overflow-hidden mb-3" style={{ border: `1px solid ${C.line}`, background: C.card }}>
+      <div className="px-3.5 py-2.5 flex items-center gap-2" style={{ borderBottom: `1px solid ${C.lineSoft}` }}>
+        <Users size={15} color={C.gold} />
+        <span className="text-[11.5px] font-semibold tracking-[.1em] uppercase" style={{ color: C.gold }}>
+          In this channel
+        </span>
+        <span className="text-[11.5px]" style={{ color: C.muted }}>{members.length}</span>
+      </div>
+
+      {members.map((m) => {
+        const ls = lastSeenLabel(seen[m.id]);
+        const isMe = m.id === meId;
+        return (
+          <div key={m.id} className="px-3.5 py-2.5 flex items-center gap-2.5" style={{ borderBottom: `1px solid ${C.lineSoft}` }}>
+            <div className="relative shrink-0">
+              <div className="w-9 h-9 rounded-lg flex items-center justify-center text-[11.5px] font-semibold"
+                style={{ background: C.pineDeep, color: C.goldSoft }}>{initialsOf(m.name || "?")}</div>
+              {ls.live && (
+                <span className="absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full"
+                  style={{ background: "#3FA96B", border: `2px solid ${C.card}` }} />
+              )}
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="text-[14px] font-semibold truncate" style={{ color: C.ink }}>
+                {m.name}{isMe ? " (you)" : ""}
+              </div>
+              <div className="text-[11.5px]" style={{ color: ls.live ? "#2F7D4F" : C.muted }}>
+                {TRIP_ROLE_LABEL[m.roleInTrip] || m.roleInTrip} · {ls.text}
+              </div>
+            </div>
+            {!isMe && onMessage && (
+              <button onClick={() => onMessage(m.id)} className="tap shrink-0 rounded-full px-3 py-1.5 text-[12px] font-semibold"
+                style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.pine }}>
+                Message
+              </button>
+            )}
+          </div>
+        );
+      })}
+
+      {isOperator && (inviting ? (
+        <div className="p-3.5">
+          <BLabel>Their name</BLabel>
+          <input value={inv.name} onChange={(e) => setInv({ ...inv, name: e.target.value })} maxLength={60}
+            placeholder="Karma Dorji"
+            className="w-full h-11 px-3 rounded-xl text-[15px] mb-2.5" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
+          <BLabel>Their email</BLabel>
+          <input value={inv.email} onChange={(e) => setInv({ ...inv, email: e.target.value.trim() })} maxLength={80}
+            inputMode="email" autoCapitalize="none" placeholder="karma@example.com"
+            className="w-full h-11 px-3 rounded-xl text-[15px]" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
+          {suggestEmail(inv.email) && (
+            <button onClick={() => setInv({ ...inv, email: suggestEmail(inv.email) })}
+              className="tap w-full rounded-lg px-2.5 py-1.5 mt-1.5 text-left"
+              style={{ background: C.goldSoft, border: `1px solid ${C.gold}` }}>
+              <span className="text-[12px]" style={{ color: "#7a5a1e" }}>Did you mean <b>{suggestEmail(inv.email)}</b>?</span>
+            </button>
+          )}
+          <div className="flex gap-1.5 mt-2.5 mb-3">
+            {[["moderator", "Moderator"], ["manager", "Manager or owner"]].map(([id, lbl]) => (
+              <button key={id} onClick={() => setInv({ ...inv, role: id })}
+                className="tap flex-1 h-10 rounded-xl text-[13px] font-semibold"
+                style={{ background: inv.role === id ? C.pine : C.bg, color: inv.role === id ? "#fff" : C.ink, border: `1px solid ${inv.role === id ? C.pine : C.line}` }}>{lbl}</button>
+            ))}
+          </div>
+          <p className="text-[11.5px] mb-2.5 leading-snug" style={{ color: C.muted }}>
+            Office roles join the channel to watch and help. They are not crew, so they are never graded,
+            never counted for reviews, and the one-trip-at-a-time rule does not apply to them.
+          </p>
+          <button onClick={send} disabled={busy || !inv.name.trim() || !/\S+@\S+\.\S+/.test(inv.email)}
+            className="tap w-full h-11 rounded-xl text-[14px] font-semibold"
+            style={{ background: inv.name.trim() && /\S+@\S+\.\S+/.test(inv.email) ? C.gold : C.line,
+                     color: inv.name.trim() && /\S+@\S+\.\S+/.test(inv.email) ? "#fff" : C.muted }}>
+            {busy ? "Sending…" : "Send the invitation"}
+          </button>
+          <button onClick={() => { setInviting(false); setMsg(null); }} className="tap w-full text-[13px] font-semibold mt-2" style={{ color: C.muted }}>Cancel</button>
+        </div>
+      ) : (
+        <button onClick={() => setInviting(true)} className="tap w-full px-3.5 py-3 flex items-center gap-2.5 text-left">
+          <UserPlus size={16} color={C.gold} className="shrink-0" />
+          <span className="text-[13.5px] font-semibold" style={{ color: "#7a5a1e" }}>
+            Add someone from your office
+          </span>
+        </button>
+      ))}
+
+      {msg && <p className="text-[12px] px-3.5 pb-3 leading-snug" style={{ color: C.pine }}>{msg}</p>}
+    </div>
+  );
+}
+
 function TripStays({ trip, isOperator }) {
   const [rows, setRows] = useState(null);
   const [pick, setPick] = useState(null);      // { night, date }
@@ -6374,6 +6555,9 @@ function TripHub({ user, meId, trip, actions, onMessage, onBack }) {
         )}
 
         <SectionLabel trailing={["active", "wrapping"].includes(tripStateNow(trip)) ? `closes in ${tripDaysLeft(trip)}d` : undefined}>Crew chat</SectionLabel>
+        <ChannelMembers trip={trip} meId={meId} isOperator={isTripOperator}
+          onMessage={onMessage} onChanged={() => actions.fetchTrips && actions.fetchTrips()} />
+
         {tripStateNow(trip) === "scheduled" ? (
           <div className="rounded-xl px-4 py-3.5 flex items-center gap-3" style={{ background: C.card, border: `1px solid ${C.line}` }}>
             <div className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0" style={{ background: C.goldSoft }}><Clock size={17} color={C.gold} /></div>
