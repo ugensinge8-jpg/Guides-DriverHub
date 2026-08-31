@@ -34,6 +34,8 @@ const profileToTalent = (p) => ({
   handle: p.handle || null,
   taUrl: p.tripadvisor_url || null, gUrl: p.google_reviews_url || null,
   rateLow: p.rate_low != null ? Number(p.rate_low) : null,
+  starRating: p.star_rating || null,
+  stayKind: p.stay_kind || null,
   rateHigh: p.rate_high != null ? Number(p.rate_high) : null,
   rateNote: p.rate_note || null,
   initials: initialsOf((p.role === "business" && p.company_name) || p.full_name || "?"),
@@ -56,7 +58,7 @@ const sysMsg = (text) => ({ id: uid(), senderId: null, kind: "system", body: tex
 /* ── Cloud (Supabase) ── posts are global when configured; everything falls back to local demo mode when not. */
 const CLOUD = Boolean(supabase);
 const DEMO_MODE = false;   // set true only for local demos without a database
-const BUILD = "BUILD 63 — 29 Aug";   // bump every deploy; shown at the top of the welcome screen
+const BUILD = "BUILD 64 — 29 Aug";   // bump every deploy; shown at the top of the welcome screen
 
 /* ---- Install state ---- */
 // 43 characters of randomness — not guessable
@@ -5628,8 +5630,210 @@ function WindowSeats({ trip, isOperator }) {
 /* ---------------- Trip detail: itinerary, notes, allergies ---------------- */
 /* ---- Hotels booked for one trip. The trip is where you ask "where are they
         sleeping"; the Hotels tab is where you ask "what is outstanding". ---- */
+/* Work out what kind of stay this is from what the hotel says about itself.
+   Deterministic on purpose: it runs offline, costs nothing, gives the same
+   answer every time, and an owner can override it. */
+const KIND_WORDS = {
+  luxury:   ["luxury","luxurious","five star","5 star","spa resort","suite","butler","fine dining","amankora","six senses","taj","le meridien","pemako"],
+  boutique: ["boutique","design hotel","intimate","hand-picked","curated","artisan","bespoke"],
+  heritage: ["heritage","traditional","ancestral","dzong","historic","century","restored farmhouse","cultural home"],
+  resort:   ["resort","spa","pool","wellness","retreat","riverside resort","hot stone"],
+  farmstay: ["farmstay","farm stay","homestay","home stay","village","family home","host family","organic farm"],
+  lodge:    ["lodge","trekking lodge","camp","base camp","guest house","guesthouse","hostel","backpacker"],
+  city:     ["city hotel","business hotel","downtown","town centre","town center","conference","airport hotel"],
+};
+
+/* A hotel may say several things. Whichever category has the most evidence wins,
+   with luxury and farmstay ranked first because they are the least ambiguous. */
+const PRIORITY = ["farmstay","luxury","heritage","boutique","resort","lodge","city"];
+
+function classifyStay({ name = "", pitch = "", tags = [] } = {}) {
+  const hay = [name, pitch, (tags || []).join(" ")].join(" ").toLowerCase();
+  const score = {};
+  for (const [kind, words] of Object.entries(KIND_WORDS)) {
+    let n = 0;
+    for (const w of words) if (hay.includes(w)) n++;
+    if (n) score[kind] = n;
+  }
+  const found = Object.keys(score);
+  if (!found.length) return null;
+  const best = Math.max(...found.map((k) => score[k]));
+  const tied = found.filter((k) => score[k] === best);
+  for (const k of PRIORITY) if (tied.includes(k)) return k;
+  return tied[0];
+}
+
+/* Stars, if the hotel has written them anywhere. */
+function readStars({ name = "", pitch = "", tags = [] } = {}) {
+  const hay = [name, pitch, (tags || []).join(" ")].toString().toLowerCase();
+  const m = hay.match(/([345])\s*[- ]?\s*star/);
+  return m ? Number(m[1]) : null;
+}
+
+const STAY_KINDS = [
+  ["all", "All"], ["luxury", "Luxury"], ["boutique", "Boutique"], ["heritage", "Heritage"],
+  ["resort", "Resort"], ["city", "City"], ["farmstay", "Farmstay"], ["lodge", "Lodge"],
+];
+
+/* Pick a hotel for one night. Photos, class, rate and description in one place,
+   so an operator is not opening profiles one at a time to compare. */
+function HotelPickerSheet({ trip, night, date, operator, onClose, onBooked }) {
+  const [kind, setKind] = useState("all");
+  const [stars, setStars] = useState(0);
+  const [q, setQ] = useState("");
+  const [photos, setPhotos] = useState({});
+  const [busyId, setBusyId] = useState(null);
+  const [err, setErr] = useState(null);
+
+  const hotels = useMemo(() => allProfiles().filter((p) => p.role === "business"), []);
+
+  useEffect(() => {
+    (async () => {
+      const ids = hotels.map((h) => h.id);
+      if (!ids.length) return;
+      const { data } = await supabase.from("business_photos").select("profile_id, path").in("profile_id", ids);
+      const m = {};
+      (data || []).forEach((r) => { if (!m[r.profile_id]) m[r.profile_id] = r.path; });
+      setPhotos(m);
+    })();
+  }, []);
+
+  const kindOf = (h) => h.stayKind || classifyStay({ name: h.name, pitch: h.pitch, tags: h.tags });
+  const starsOf = (h) => h.starRating || readStars({ name: h.name, pitch: h.pitch, tags: h.tags });
+
+  const shown = hotels.filter((h) => {
+    if (kind !== "all" && kindOf(h) !== kind) return false;
+    if (stars && starsOf(h) !== stars) return false;
+    if (q.trim()) {
+      const t = q.toLowerCase();
+      if (!(h.name || "").toLowerCase().includes(t) && !(h.base || "").toLowerCase().includes(t)) return false;
+    }
+    return true;
+  });
+
+  const book = async (h) => {
+    if (busyId) return;
+    setBusyId(h.id); setErr(null);
+    const next = new Date(date + "T00:00"); next.setDate(next.getDate() + 1);
+    const end = next.toISOString().slice(0, 10);
+    const { error } = await supabase.from("business_bookings").insert({
+      business_id: h.id, operator_id: operator.talentId,
+      business_name: h.name, operator_name: operator.name,
+      start_date: date, end_date: end,
+      trip_id: trip.id, night_no: night,
+      guests: trip.partySize || null, status: "requested",
+    });
+    setBusyId(null);
+    if (error) { setErr("Could not send that request. Try again."); return; }
+    onBooked && onBooked();
+    onClose();
+  };
+
+  return createPortal((
+    <div className="fixed inset-0 flex items-end lg:items-center lg:justify-center" style={{ background: "rgba(8,10,8,.55)", zIndex: 238 }} onClick={onClose}>
+      <div className="w-full rounded-t-3xl lg:rounded-3xl flex flex-col safe-bottom"
+        style={{ background: C.bg, maxHeight: "92dvh", maxWidth: 980 }} onClick={(e) => e.stopPropagation()}>
+        <div className="pt-3 shrink-0"><div className="w-10 h-1 rounded-full mx-auto" style={{ background: C.line }} /></div>
+
+        <div className="px-5 pt-3 pb-3 shrink-0">
+          <h2 className="text-[19px] font-semibold" style={{ color: C.ink }}>
+            Where are they sleeping on night {night}?
+          </h2>
+          <p className="text-[12.5px] mt-0.5" style={{ color: C.muted }}>
+            {fmtDate(date)} · {trip.title}
+          </p>
+
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search by name or town"
+            className="w-full h-11 px-3.5 rounded-xl text-[14.5px] mt-3"
+            style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }} />
+
+          <div className="flex gap-1.5 mt-2.5 overflow-x-auto hidescroll" style={{ scrollbarWidth: "none" }}>
+            {STAY_KINDS.map(([k, label]) => (
+              <button key={k} onClick={() => setKind(k)}
+                className="tap shrink-0 rounded-full px-3 py-1.5 text-[12.5px] font-semibold"
+                style={{ background: kind === k ? C.pine : C.card, color: kind === k ? "#fff" : C.ink, border: `1px solid ${kind === k ? C.pine : C.line}` }}>
+                {label}
+              </button>
+            ))}
+          </div>
+
+          <div className="flex gap-1.5 mt-2">
+            {[0, 3, 4, 5].map((n) => (
+              <button key={n} onClick={() => setStars(n)}
+                className="tap rounded-full px-3 py-1.5 text-[12.5px] font-semibold"
+                style={{ background: stars === n ? C.gold : C.card, color: stars === n ? "#fff" : C.ink, border: `1px solid ${stars === n ? C.gold : C.line}` }}>
+                {n === 0 ? "Any class" : `${n} star`}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="px-5 pb-6 overflow-y-auto hidescroll" style={{ scrollbarWidth: "none" }}>
+          {err && <p className="text-[13px] mb-2" style={{ color: C.maroon }}>{err}</p>}
+          {shown.length === 0 && (
+            <p className="text-[13px] py-6 text-center" style={{ color: C.muted }}>
+              No stays match that. Try another class, or clear the filters.
+            </p>
+          )}
+
+          <div className="w-grid2">
+            {shown.map((h) => {
+              const k = kindOf(h), st = starsOf(h), pic = photos[h.id];
+              return (
+                <div key={h.id} className="rounded-2xl overflow-hidden mb-2.5" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+                  {pic ? (
+                    <div style={{ height: 132, background: C.lineSoft }}>
+                      <img src={pic} alt="" loading="lazy" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                    </div>
+                  ) : (
+                    <div className="flex items-center justify-center" style={{ height: 132, background: C.pineSoft }}>
+                      <Store size={26} color={C.pine} />
+                    </div>
+                  )}
+                  <div className="p-3.5">
+                    <div className="flex items-start gap-2">
+                      <div className="flex-1 min-w-0">
+                        <div className="text-[15px] font-semibold truncate" style={{ color: C.ink }}>{h.name}</div>
+                        <div className="text-[12px]" style={{ color: C.muted }}>
+                          {h.base || "Bhutan"}
+                          {st ? ` · ${st} star` : ""}
+                          {k ? ` · ${(STAY_KINDS.find((x) => x[0] === k) || [, k])[1]}` : ""}
+                        </div>
+                      </div>
+                      {h.rateLow != null && (
+                        <div className="text-right shrink-0">
+                          <div className="text-[13.5px] font-semibold" style={{ color: C.ink }}>
+                            Nu {Number(h.rateLow).toLocaleString("en-IN")}
+                            {h.rateHigh ? `–${Number(h.rateHigh).toLocaleString("en-IN")}` : ""}
+                          </div>
+                          <div className="text-[10.5px]" style={{ color: C.muted }}>a guide, not a quote</div>
+                        </div>
+                      )}
+                    </div>
+                    {h.pitch && (
+                      <p className="text-[12.5px] mt-1.5 leading-snug" style={{ color: C.muted,
+                        display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{h.pitch}</p>
+                    )}
+                    <button onClick={() => book(h)} disabled={!!busyId}
+                      className="tap w-full h-10 rounded-xl text-[13.5px] font-semibold mt-2.5"
+                      style={{ background: C.pine, color: "#fff" }}>
+                      {busyId === h.id ? "Sending…" : "Ask for this night"}
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+    </div>
+  ), document.body);
+}
+
 function TripStays({ trip, isOperator }) {
   const [rows, setRows] = useState(null);
+  const [pick, setPick] = useState(null);      // { night, date }
+
   const load = async () => {
     const { data } = await supabase.from("business_bookings").select("*")
       .eq("trip_id", trip.id).order("start_date");
@@ -5637,72 +5841,101 @@ function TripStays({ trip, isOperator }) {
   };
   useEffect(() => { if (CLOUD) load(); else setRows([]); }, [trip.id]);
 
+  // One row per night the trip actually runs, so a gap is impossible to miss.
+  const nights = useMemo(() => {
+    if (!trip.start) return [];
+    const a = new Date(trip.start + "T00:00");
+    const b = new Date((trip.end || trip.start) + "T00:00");
+    const out = [];
+    const d = new Date(a);
+    let n = 1;
+    while (d < b || (n === 1 && +a === +b)) {
+      out.push({ night: n, date: d.toISOString().slice(0, 10) });
+      d.setDate(d.getDate() + 1); n++;
+      if (n > 60) break;
+    }
+    return out;
+  }, [trip.start, trip.end]);
+
   if (rows === null) return <p className="text-[13px]" style={{ color: C.muted }}>Loading…</p>;
 
-  if (rows.length === 0) {
-    return (
-      <TripEmpty
-        text={isOperator ? "No hotels booked for this trip yet." : "No stays recorded for this trip."}
-        canEdit={false} />
-    );
-  }
+  const bookedFor = (date) => rows.find((b) => b.status !== "cancelled" && b.status !== "declined"
+    && b.start_date <= date && b.end_date > date);
+  const covered = nights.filter((n) => bookedFor(n.date)).length;
+  const gap = nights.length - covered;
+  const cost = rows.filter((b) => b.status !== "cancelled" && b.status !== "declined")
+    .reduce((n, b) => n + (Number(b.quote_amount) || 0), 0);
 
-  // Nights covered vs nights the trip actually runs: the one number that matters.
-  const live = rows.filter((b) => b.status !== "cancelled" && b.status !== "declined");
-  const nightsOf = (b) => Math.max(1, Math.round((new Date(b.end_date) - new Date(b.start_date)) / 86400000));
-  const covered = live.reduce((n, b) => n + nightsOf(b), 0);
-  const tripNights = trip.start && trip.end
-    ? Math.max(1, Math.round((new Date(trip.end) - new Date(trip.start)) / 86400000)) : null;
-  const gap = tripNights != null ? tripNights - covered : null;
-  const totalCost = live.reduce((n, b) => n + (Number(b.quote_amount) || 0), 0);
+  if (nights.length === 0) {
+    return <TripEmpty text="Set the trip dates and the nights appear here." canEdit={false} />;
+  }
 
   return (
     <div>
       <div className="rounded-2xl px-4 py-3 mb-3" style={{ background: gap > 0 ? C.goldSoft : C.pineSoft }}>
         <div className="text-[13.5px] font-semibold" style={{ color: gap > 0 ? "#7a5a1e" : C.pine }}>
-          {covered} of {tripNights ?? covered} night{(tripNights ?? covered) === 1 ? "" : "s"} booked
-          {gap > 0 ? ` · ${gap} still to arrange` : gap === 0 ? " · fully covered" : ""}
+          {covered} of {nights.length} night{nights.length === 1 ? "" : "s"} booked
+          {gap > 0 ? ` · ${gap} still to arrange` : " · fully covered"}
         </div>
-        {totalCost > 0 && (
+        {cost > 0 && (
           <div className="text-[12px] mt-0.5" style={{ color: gap > 0 ? "#7a5a1e" : C.pine, opacity: .9 }}>
-            Nu {totalCost.toLocaleString("en-IN")} across {live.length} stay{live.length === 1 ? "" : "s"}
+            Nu {cost.toLocaleString("en-IN")} agreed so far
           </div>
         )}
       </div>
 
-      {rows.map((b) => {
-        const t = BK_TONE[b.status] || BK_TONE.requested;
-        const nights = Math.max(1, Math.round((new Date(b.end_date) - new Date(b.start_date)) / 86400000));
+      {nights.map(({ night, date }) => {
+        const b = bookedFor(date);
+        const t = b ? (BK_TONE[b.status] || BK_TONE.requested) : null;
         return (
-          <div key={b.id} className="rounded-2xl p-3.5 mb-2.5" style={{ background: C.card, border: `1px solid ${C.line}` }}>
-            <div className="flex items-start gap-2.5">
-              <div className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0" style={{ background: C.pineSoft }}>
-                <Store size={17} color={C.pine} />
-              </div>
-              <div className="flex-1 min-w-0">
-                <div className="text-[14.5px] font-semibold truncate" style={{ color: C.ink }}>{b.business_name || "Hotel"}</div>
-                <div className="text-[12.5px]" style={{ color: C.muted }}>
-                  {fmtRange(b.start_date, b.end_date)} · {nights} night{nights === 1 ? "" : "s"}
-                  {b.rooms ? ` · ${b.rooms} room${b.rooms === 1 ? "" : "s"}` : ""}{b.guests ? ` · ${b.guests} guest${b.guests === 1 ? "" : "s"}` : ""}
-                </div>
-                {b.quote_amount != null && (
-                  <div className="text-[13px] font-semibold mt-1" style={{ color: C.ink }}>Nu {Number(b.quote_amount).toLocaleString("en-IN")}</div>
-                )}
-              </div>
-              <span className="text-[11px] font-semibold rounded-full px-2.5 py-1 shrink-0" style={{ background: t.bg, color: t.fg }}>{t.label}</span>
+          <div key={night} className="flex items-stretch gap-2.5 mb-2">
+            <div className="shrink-0 rounded-xl flex flex-col items-center justify-center"
+              style={{ width: 62, background: C.card, border: `1px solid ${C.line}` }}>
+              <div className="text-[10px] font-bold tracking-[.1em] uppercase" style={{ color: C.gold }}>Day {night}</div>
+              <div className="text-[12.5px] font-semibold" style={{ color: C.ink }}>{fmtDate(date)}</div>
             </div>
-            {b.status === "cancelled" && b.cancel_reason && (
-              <p className="text-[12px] mt-2 leading-snug" style={{ color: C.maroon }}>{b.cancel_reason}</p>
+
+            {b ? (
+              <div className="flex-1 rounded-xl px-3.5 py-2.5 flex items-center gap-2.5 min-w-0"
+                style={{ background: C.card, border: `1px solid ${C.line}` }}>
+                <div className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0" style={{ background: C.pineSoft }}>
+                  <Store size={16} color={C.pine} />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="text-[14px] font-semibold truncate" style={{ color: C.ink }}>{b.business_name}</div>
+                  <div className="text-[11.5px]" style={{ color: C.muted }}>
+                    {b.rooms ? `${b.rooms} room${b.rooms === 1 ? "" : "s"}` : ""}
+                    {b.quote_amount != null ? `${b.rooms ? " · " : ""}Nu ${Number(b.quote_amount).toLocaleString("en-IN")}` : ""}
+                  </div>
+                </div>
+                <span className="text-[10.5px] font-semibold rounded-full px-2 py-1 shrink-0"
+                  style={{ background: t.bg, color: t.fg }}>{t.label}</span>
+              </div>
+            ) : isOperator ? (
+              <button onClick={() => setPick({ night, date })}
+                className="tap flex-1 rounded-xl flex items-center justify-center gap-2 text-[13.5px] font-semibold"
+                style={{ background: C.card, border: `1.5px dashed ${C.gold}`, color: "#7a5a1e", minHeight: 54 }}>
+                <Plus size={17} /> Book a stay for this night
+              </button>
+            ) : (
+              <div className="flex-1 rounded-xl flex items-center px-3.5 text-[12.5px]"
+                style={{ background: C.card, border: `1px dashed ${C.line}`, color: C.muted, minHeight: 54 }}>
+                Not booked yet
+              </div>
             )}
           </div>
         );
       })}
-      <p className="text-[11.5px] mt-1 leading-snug" style={{ color: C.muted }}>
-        Book a hotel from the <b>Hotels</b> tab and choose this trip, and it appears here.
-      </p>
+
+      {pick && (
+        <HotelPickerSheet trip={trip} night={pick.night} date={pick.date}
+          operator={{ talentId: trip.operatorId, name: trip.operatorName }}
+          onClose={() => setPick(null)} onBooked={load} />
+      )}
     </div>
   );
 }
+
 
 function TripEmpty({ text, canEdit, onEdit }) {
   return (
