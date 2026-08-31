@@ -56,7 +56,7 @@ const sysMsg = (text) => ({ id: uid(), senderId: null, kind: "system", body: tex
 /* ── Cloud (Supabase) ── posts are global when configured; everything falls back to local demo mode when not. */
 const CLOUD = Boolean(supabase);
 const DEMO_MODE = false;   // set true only for local demos without a database
-const BUILD = "BUILD 61 — 29 Aug";   // bump every deploy; shown at the top of the welcome screen
+const BUILD = "BUILD 63 — 29 Aug";   // bump every deploy; shown at the top of the welcome screen
 
 /* ---- Install state ---- */
 // 43 characters of randomness — not guessable
@@ -685,6 +685,9 @@ function VerifyReview({ token }) {
 }
 
 export default function App() {
+  // One source of truth for which experience is showing, shared with the shell
+  // so the container width and the layout can never disagree.
+  const wideView = useIsDesktop();
   useAutoUpdate();
   // A guest arriving on a review link never signs in — they see only the review form.
   const reviewToken = useMemo(() => {
@@ -1333,9 +1336,21 @@ export default function App() {
         .fade{ animation-duration:.2s; }
         textarea:focus, input:focus{ outline:none; border-color:${C.pine}!important; box-shadow:0 0 0 3px ${C.pine}1f; }
         textarea::placeholder, input::placeholder{ color:${C.muted}; opacity:.7; }
+        /* The app switches to the dashboard at 900px. Tailwind's lg: is 1024px,
+           so content laid out with lg: would change 124px later than the chrome.
+           These mirror it at the right width. */
+        @media (min-width: 900px) {
+          .w-grid2 { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
+          .w-grid2 > * { margin-bottom:0 !important; }
+          .w-read  { max-width:42rem; margin-left:auto; margin-right:auto; }
+        }
+        @media (min-width: 1280px) {
+          .w-grid3 { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; }
+          .w-grid3 > * { margin-bottom:0 !important; }
+        }
       `}</style>
 
-      <div className="w-full max-w-md lg:max-w-none flex flex-col" style={{ height: "100dvh", color: C.ink }}>
+      <div className="w-full flex flex-col" style={{ height: "100dvh", color: C.ink, maxWidth: wideView ? "none" : 448 }}>
         {!user ? (
           <Login onPick={setAccountId} session={session} myProfile={myProfile} onAuthed={reloadMe} onBusy={setAuthBusy} />
         ) : (
@@ -1535,6 +1550,36 @@ function RolePitch({ role, onCreate, onSignin, onBack }) {
   );
 }
 
+/* Shown on the login page and in settings. Not a question anyone must answer:
+   the app picks for itself, and this exists for when it picks wrong. */
+function ViewSwitch({ compact }) {
+  const [pref, setPref] = useState(() => readViewPref());
+  const auto = useIsDesktop();
+  const showing = pref === "auto" ? (auto ? "Website" : "Phone app") : (pref === "web" ? "Website" : "Phone app");
+  const set = (v) => { writeViewPref(v); setPref(v); };
+
+  return (
+    <div className={compact ? "" : "mt-6"}>
+      <div className="text-[11.5px] text-center mb-2" style={{ color: C.muted }}>
+        Showing the <b style={{ color: C.ink }}>{showing}</b> view.
+        {pref === "auto" ? " Chosen from your screen size." : " You set this."}
+      </div>
+      <div className="flex gap-1.5">
+        {[["auto", "Automatic"], ["app", "Phone app"], ["web", "Website"]].map(([v, label]) => {
+          const on = pref === v;
+          return (
+            <button key={v} onClick={() => set(v)}
+              className="tap flex-1 h-10 rounded-xl text-[12.5px] font-semibold"
+              style={{ background: on ? C.pine : C.card, color: on ? "#fff" : C.ink, border: `1px solid ${on ? C.pine : C.line}` }}>
+              {label}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function Login({ session, onAuthed, onBusy }) {
   const [authView, setAuthView] = useState(null);
   const [pitchRole, setPitchRole] = useState(null);
@@ -1646,6 +1691,7 @@ Guides, drivers and<br />operators. One app.
             we'll build it.
           </p>
         </div>
+        <ViewSwitch />
         <p className="text-center text-[10px] mt-4" style={{ color: C.line }}>{BUILD}</p>
       </div>
     </div>
@@ -1816,13 +1862,7 @@ function Shell({ user, posts, jobs, trips, listings, actions, engagement, dm, di
 
   return (
     <>
-      {desktop ? (
-        <WebHeader user={user} nav={nav} tab={tab}
-          setTab={(t) => { setOverlay(null); setSharedPost(null); setTab(t); }}
-          badges={{ jobs: jobsBadge, review: pendingModCount, chats: unreadDm, bookings: pendingBookings }}
-          alerts={alertItems.length} onOpenAlerts={() => setAlertsOpen(true)} onLogout={onLogout}
-          onSearch={(term) => { setOverlay(null); setTab(["operator", "business"].includes(user.kind) ? "discover" : "post"); setSearchTerm(term); }} />
-      ) : (
+      {!desktop && (
         <>
           <PortalBar user={user} />
           <TopBar onLogout={onLogout} alerts={alertItems.length} onOpenAlerts={() => setAlertsOpen(true)}
@@ -1831,10 +1871,21 @@ function Shell({ user, posts, jobs, trips, listings, actions, engagement, dm, di
       )}
 
       <div className="flex-1 flex min-h-0">
-        <div className="flex-1 flex flex-col min-h-0">
+        {desktop && (
+          <WebSideNav user={user} nav={nav} tab={tab}
+            setTab={(t) => { setOverlay(null); setSharedPost(null); setTab(t); }}
+            badges={{ jobs: jobsBadge, review: pendingModCount, chats: unreadDm, bookings: pendingBookings }}
+            onLogout={onLogout} />
+        )}
+        <div className="flex-1 flex flex-col min-h-0 min-w-0">
+          {desktop && (
+            <WebTopBar tab={tab} nav={nav} alerts={alertItems.length}
+              onOpenAlerts={() => setAlertsOpen(true)}
+              onSearch={(term) => { setOverlay(null); setTab(["operator", "business"].includes(user.kind) ? "discover" : "post"); setSearchTerm(term); }} />
+          )}
 
       <div className="flex-1 overflow-y-auto hidescroll" style={{ scrollbarWidth: "none" }}>
-        <div className={desktop ? "w-full mx-auto px-6 py-2" : "w-full"} style={desktop ? { maxWidth: 1240 } : undefined}>
+        <div className={desktop ? "w-full px-6 py-3" : "w-full"}>
         <VerifyBanner user={user} />
         {overlay ? (
           overlay.type === "profile" ? (
@@ -1941,88 +1992,84 @@ function Shell({ user, posts, jobs, trips, listings, actions, engagement, dm, di
   );
 }
 
-/* ============ The website. Desktop only. ============
-   Not the phone app stretched: its own chrome, with navigation across the top
-   where a desktop user looks for it. The phone keeps PortalBar + TopBar +
-   BottomNav exactly as they are, untouched. */
-function WebHeader({ user, nav, tab, setTab, badges, alerts, onOpenAlerts, onSearch, onLogout }) {
-  const [q, setQ] = useState("");
-  const submit = () => { const t = q.trim(); if (t && onSearch) onSearch(t); };
+/* ============ The website: a dashboard. Desktop only. ============
+   Navigation down the left where a desktop user's eye and mouse already are,
+   work on the right. The phone keeps PortalBar + TopBar + BottomNav, untouched. */
+function WebSideNav({ user, nav, tab, setTab, badges, onLogout }) {
   const names = { guide: "Guide Portal", driver: "Driver Portal", operator: "Operator Portal", business: "Business Portal", admin: "Admin Portal" };
-  const h = new Date().getHours();
-  const greet = h < 12 ? "Good morning" : h < 17 ? "Good afternoon" : "Good evening";
-  const first = String(user.name || "").split(" ")[0] || "there";
-
   return (
-    <div className="shrink-0 w-full">
-      {/* brand strip */}
-      <div className="w-full flex justify-center" style={{ background: C.pineDeep, height: 34 }}>
-        <div className="w-full flex items-center justify-between px-6" style={{ maxWidth: 1240 }}>
-          <span className="text-[10px] font-bold tracking-[.18em] uppercase" style={{ color: C.goldSoft }}>
-            {names[user.kind] || "Portal"}
-          </span>
-          <span className="text-[11.5px]" style={{ color: "rgba(255,255,255,.9)" }}>{greet}, {first}</span>
+    <div className="shrink-0 flex flex-col" style={{ width: 236, background: C.card, borderRight: `1px solid ${C.line}` }}>
+      <div className="px-5 pt-5 pb-4 flex items-center gap-2.5" style={{ borderBottom: `1px solid ${C.lineSoft}` }}>
+        <div className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0" style={{ background: C.pine }}>
+          <Compass size={19} color={C.goldSoft} strokeWidth={2.1} />
+        </div>
+        <div className="min-w-0">
+          <div className="text-[14px] font-semibold leading-tight truncate" style={{ color: C.ink }}>Bhutan</div>
+          <div className="text-[14px] font-semibold leading-tight truncate" style={{ color: C.ink }}>Tourism Hub</div>
         </div>
       </div>
 
-      {/* masthead */}
-      <div className="w-full flex justify-center" style={{ background: C.card, borderBottom: `1px solid ${C.line}` }}>
-        <div className="w-full flex items-center gap-6 px-6" style={{ maxWidth: 1240, height: 64 }}>
-          <div className="flex items-center gap-2.5 shrink-0">
-            <div className="w-9 h-9 rounded-xl flex items-center justify-center" style={{ background: C.pine }}>
-              <Compass size={19} color={C.goldSoft} strokeWidth={2.1} />
-            </div>
-            <div className="text-[16px] font-semibold tracking-[-0.01em]" style={{ color: C.ink }}>Bhutan Tourism Hub</div>
-          </div>
-
-          <div className="flex-1" />
-
-          <div className="flex items-center gap-2 shrink-0" style={{ width: 290 }}>
-            <div className="flex-1 flex items-center gap-2 h-10 px-3.5 rounded-full"
-              style={{ background: C.bg, border: `1px solid ${C.line}` }}>
-              <Search size={15} color={C.muted} />
-              <input value={q} onChange={(e) => setQ(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter") submit(); }}
-                placeholder="Search people"
-                className="flex-1 bg-transparent outline-none text-[13.5px]" style={{ color: C.ink }} />
-            </div>
-            <button onClick={onOpenAlerts} className="tap w-10 h-10 rounded-full flex items-center justify-center relative shrink-0"
-              style={{ background: C.bg, border: `1px solid ${C.line}` }} aria-label="Alerts">
-              <Bell size={17} color={C.ink} />
-              {alerts > 0 && (
-                <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full flex items-center justify-center text-[10px] font-bold text-white"
-                  style={{ background: C.maroon }}>{alerts > 9 ? "9+" : alerts}</span>
+      <div className="flex-1 px-3 pt-3 overflow-y-auto hidescroll" style={{ scrollbarWidth: "none" }}>
+        {nav.map((n) => {
+          const on = tab === n.id;
+          const badge = badges[n.id] || 0;
+          return (
+            <button key={n.id} onClick={() => setTab(n.id)}
+              className="tap w-full rounded-xl px-3 py-2.5 mb-1 flex items-center gap-3"
+              style={{ background: on ? C.pineSoft : "transparent" }}>
+              <n.Icon size={19} color={on ? C.pine : C.muted} strokeWidth={on ? 2.3 : 2} />
+              <span className="flex-1 text-left text-[14px] font-semibold" style={{ color: on ? C.pine : C.ink }}>{n.label}</span>
+              {badge > 0 && (
+                <span className="min-w-[19px] h-[19px] px-1 rounded-full flex items-center justify-center text-[10.5px] font-bold text-white"
+                  style={{ background: C.maroon }}>{badge > 9 ? "9+" : badge}</span>
               )}
             </button>
-            <button onClick={onLogout} className="tap w-10 h-10 rounded-full flex items-center justify-center shrink-0"
-              style={{ background: C.bg, border: `1px solid ${C.line}` }} aria-label="Sign out">
-              <LogOut size={16} color={C.muted} />
-            </button>
-          </div>
-        </div>
+          );
+        })}
       </div>
 
-      {/* navigation, where a desktop user looks for it */}
-      <div className="w-full flex justify-center" style={{ background: C.card, borderBottom: `1px solid ${C.line}` }}>
-        <div className="w-full flex items-stretch gap-1 px-6" style={{ maxWidth: 1240 }}>
-          {nav.map((n) => {
-            const on = tab === n.id;
-            const badge = badges[n.id] || 0;
-            return (
-              <button key={n.id} onClick={() => setTab(n.id)}
-                className="tap flex items-center gap-2 px-4 relative"
-                style={{ height: 46, borderBottom: `2.5px solid ${on ? C.gold : "transparent"}` }}>
-                <n.Icon size={16} color={on ? C.pine : C.muted} strokeWidth={on ? 2.3 : 2} />
-                <span className="text-[13.5px] font-semibold" style={{ color: on ? C.pine : C.muted }}>{n.label}</span>
-                {badge > 0 && (
-                  <span className="min-w-[17px] h-[17px] px-1 rounded-full flex items-center justify-center text-[10px] font-bold text-white"
-                    style={{ background: C.maroon }}>{badge > 9 ? "9+" : badge}</span>
-                )}
-              </button>
-            );
-          })}
+      <div className="px-4 py-3.5" style={{ borderTop: `1px solid ${C.lineSoft}` }}>
+        <div className="text-[10px] font-bold tracking-[.14em] uppercase mb-1" style={{ color: C.gold }}>
+          {names[user.kind] || "Portal"}
         </div>
+        <div className="flex items-center gap-2">
+          <div className="w-8 h-8 rounded-lg flex items-center justify-center text-[11px] font-semibold shrink-0"
+            style={{ background: C.pineDeep, color: C.goldSoft }}>{initialsOf(user.name || "?")}</div>
+          <div className="flex-1 min-w-0 text-[12.5px] font-medium truncate" style={{ color: C.ink }}>{user.name}</div>
+          <button onClick={onLogout} className="tap shrink-0" aria-label="Sign out">
+            <LogOut size={15} color={C.muted} />
+          </button>
+        </div>
+        <div className="text-[10px] mt-2.5" style={{ color: C.line }}>{BUILD}</div>
       </div>
+    </div>
+  );
+}
+
+function WebTopBar({ tab, nav, alerts, onOpenAlerts, onSearch }) {
+  const [q, setQ] = useState("");
+  const submit = () => { const t = q.trim(); if (t && onSearch) onSearch(t); };
+  const here = (nav.find((n) => n.id === tab) || {}).label || "";
+  return (
+    <div className="shrink-0 flex items-center gap-3 px-6"
+      style={{ height: 60, background: C.bg, borderBottom: `1px solid ${C.lineSoft}` }}>
+      <div className="text-[17px] font-semibold tracking-[-0.01em]" style={{ color: C.ink }}>{here}</div>
+      <div className="flex-1" />
+      <div className="flex items-center gap-2 h-10 px-3.5 rounded-full" style={{ background: C.card, border: `1px solid ${C.line}`, width: 260 }}>
+        <Search size={15} color={C.muted} />
+        <input value={q} onChange={(e) => setQ(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") submit(); }}
+          placeholder="Search people"
+          className="flex-1 bg-transparent outline-none text-[13.5px]" style={{ color: C.ink }} />
+      </div>
+      <button onClick={onOpenAlerts} className="tap w-10 h-10 rounded-full flex items-center justify-center relative shrink-0"
+        style={{ background: C.card, border: `1px solid ${C.line}` }} aria-label="Alerts">
+        <Bell size={17} color={C.ink} />
+        {alerts > 0 && (
+          <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full flex items-center justify-center text-[10px] font-bold text-white"
+            style={{ background: C.maroon }}>{alerts > 9 ? "9+" : alerts}</span>
+        )}
+      </button>
     </div>
   );
 }
@@ -2380,7 +2427,7 @@ function PostTab({ user, posts, onAdd, eng, onOpenProfile }) {
       {visible.length === 0 ? (
         <Empty Icon={Inbox} title="Nothing here yet" body="Approved highlights from every guide and driver appear here — share the first one." />
       ) : (
-        <div className="space-y-3.5 lg:max-w-2xl lg:mx-auto">
+        <div className="space-y-3.5 w-read">
           {visible.map((p) => {
             const author = talentById(p.talentId);
             const mine = p.talentId === me;
@@ -2830,7 +2877,7 @@ function Discover({ onOpen, initialQuery, dirTick, viewerKind }) {
       {list.length === 0 ? (
         <Empty Icon={Search} title="No matches" body={isBiz ? "Try another place type, or clear the filters." : "Try a different language or clear the filters."} />
       ) : (
-        <div className="space-y-3 lg:space-y-0 lg:grid lg:grid-cols-2 xl:grid-cols-3 lg:gap-3">{list.map((t) => <TalentCard key={t.id} t={t} onOpen={() => onOpen(t.id)} />)}</div>
+        <div className="space-y-3 w-grid2 w-grid3">{list.map((t) => <TalentCard key={t.id} t={t} onOpen={() => onOpen(t.id)} />)}</div>
       )}
     </div>
   );
@@ -2926,7 +2973,7 @@ function Feed({ posts, eng, admin, onDelete, onOpenProfile, following }) {
       {live.length === 0 ? (
         <Empty Icon={Inbox} title="No highlights yet" body="Approved posts from guides and drivers appear here." />
       ) : (
-        <div className="space-y-3.5 lg:max-w-2xl lg:mx-auto">
+        <div className="space-y-3.5 w-read">
           {live.map((p) => {
             const t = talentById(p.talentId);
             return (
@@ -8739,7 +8786,7 @@ function ChatsTab({ user, me, dm, trips, posts, dirTick, onOpenPost, openWith, o
   if (find) return <PickContact me={me} dirTick={dirTick} onPick={(id) => { setFind(false); setWithId(id); }} onBack={() => setFind(false)} />;
 
   return (
-    <div className="px-5 py-4 lg:max-w-2xl lg:mx-auto">
+    <div className="px-5 py-4 w-read">
       {/* Trip chats now live inside each trip. This tab is people, not trips. */}
       {myTrips.some((tr) => ["active", "wrapping"].includes(tripStateNow(tr))) && (
         <div className="rounded-xl px-4 py-3 mb-5 flex items-center gap-3" style={{ background: C.pineSoft }}>
@@ -10940,7 +10987,7 @@ function HotelsTab({ user, onOpenProfile }) {
       <div className="mt-7">
         <SectionLabel trailing={`${hotels.length}`}>Places you can book</SectionLabel>
         {hotels.length === 0 && <p className="text-[13px]" style={{ color: C.muted }}>No hotels have joined yet.</p>}
-        <div className="lg:grid lg:grid-cols-2 lg:gap-2.5">
+        <div className="w-grid2">
         {hotels.map((h) => (
           <button key={h.id} onClick={() => onOpenProfile(h.id)}
             className="tap w-full rounded-2xl p-3.5 mb-2 flex items-center gap-3 text-left"
@@ -11036,7 +11083,7 @@ function EnquiriesBoard({ user }) {
         </div>
       )}
 
-      <div className="lg:grid lg:grid-cols-2 lg:gap-3">
+      <div className="w-grid2">
       {live.map((r) => {
         const st = ENQ_STATUS[r.status] || ENQ_STATUS.open;
         return (
@@ -11338,7 +11385,6 @@ function FeedbackSheet({ user, onClose }) {
 
 function PrivacyPanel({ talent }) {
   const [legacyOpen, setLegacyOpen] = useState(false);
-  const [viewPref, setViewPref] = useState(() => readViewPref());
   const [fb, setFb] = useState(false);
   const [open, setOpen] = useState(null);   // 'privacy' | 'terms' | 'data' | null
   const [busy, setBusy] = useState(false);
@@ -11411,22 +11457,8 @@ function PrivacyPanel({ talent }) {
       {note && <div className="mx-4 mb-2 rounded-lg px-3 py-2 text-[12.5px]" style={{ background: C.pineSoft, color: C.pine }}>{note}</div>}
 
       <div className="px-4 py-3.5" style={{ borderTop: `1px solid ${C.lineSoft}` }}>
-        <div className="text-[13.5px] font-semibold mb-1" style={{ color: C.ink }}>How this looks</div>
-        <p className="text-[12px] leading-snug mb-2.5" style={{ color: C.muted }}>
-          We work it out from your screen. If it picks wrong, set it yourself.
-        </p>
-        <div className="flex gap-1.5">
-          {[["auto", "Automatic"], ["app", "Phone app"], ["web", "Website"]].map(([v, label]) => {
-            const on = viewPref === v;
-            return (
-              <button key={v} onClick={() => { writeViewPref(v); setViewPref(v); }}
-                className="tap flex-1 h-10 rounded-xl text-[12.5px] font-semibold"
-                style={{ background: on ? C.pine : C.card, color: on ? "#fff" : C.ink, border: `1px solid ${on ? C.pine : C.line}` }}>
-                {label}
-              </button>
-            );
-          })}
-        </div>
+        <div className="text-[13.5px] font-semibold mb-2" style={{ color: C.ink }}>How this looks</div>
+        <ViewSwitch compact />
       </div>
 
       {legacyOpen && <LegacyReviewsSheet talent={talent} onClose={() => setLegacyOpen(false)} />}
