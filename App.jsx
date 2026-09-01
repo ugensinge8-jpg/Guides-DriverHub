@@ -12,6 +12,12 @@ import {
 import mapImg from "./map.jpg";
 import { supabase } from "./supabase.js";
 
+/* The Druk Pah trip engine, from pristinebhutantravels.com. Two UMD files that
+   attach to window when loaded as modules. The brain MUST be imported first:
+   the engine reads it off the global as it evaluates. Verified under real ESM. */
+import "./itinerary-brain.js";
+import "./drukpah-engine.js";
+
 /* Bhutan Tourism Hub design system — paper, pine forest, temple gold, kemar red. */
 const C = {
   bg: "#F4F5F1", card: "#FFFFFF", ink: "#1A241E", muted: "#6E7A72",
@@ -58,8 +64,13 @@ const sysMsg = (text) => ({ id: uid(), senderId: null, kind: "system", body: tex
 
 /* ── Cloud (Supabase) ── posts are global when configured; everything falls back to local demo mode when not. */
 const CLOUD = Boolean(supabase);
+
+/* Read at call time rather than at load, so a missing or renamed engine file
+   gives a plain message instead of a blank screen. */
+const brainOf = () => (typeof window !== "undefined" && window.ItineraryBrain) || null;
+const drukPahOf = () => (typeof window !== "undefined" && window.DrukPah) || null;
 const DEMO_MODE = false;   // set true only for local demos without a database
-const BUILD = "BUILD 66 — 29 Aug";   // bump every deploy; shown at the top of the welcome screen
+const BUILD = "BUILD 67 — 01 Sep";   // bump every deploy; shown at the top of the welcome screen
 
 /* ---- Install state ---- */
 // 43 characters of randomness — not guessable
@@ -1755,6 +1766,7 @@ function Shell({ user, posts, jobs, trips, listings, actions, engagement, dm, di
   const [sharedPost, setSharedPost] = useState(null);
   const [searchTerm, setSearchTerm] = useState("");
   const [alertsOpen, setAlertsOpen] = useState(false);
+  const [buildOpen, setBuildOpen] = useState(false);
   const [bkRows] = useBookings("business_id", user.kind === "business" ? user.talentId : null);
   const pendingBookings = user.kind === "business" ? bkRows.filter((b) => b.status === "requested").length : 0;
   const lastAlertCount = useRef(0);
@@ -1801,7 +1813,20 @@ function Shell({ user, posts, jobs, trips, listings, actions, engagement, dm, di
     return () => { window.removeEventListener("beforeinstallprompt", onPrompt); window.removeEventListener("appinstalled", onInstalled); clearTimeout(t); };
   }, []);
 
-  const nav = NAV[user.kind];
+  const nav = useMemo(() => {
+    const base = NAV[user.kind] || [];
+    if (desktop && user.kind === "operator") {
+      return [...base.slice(0, 2), { id: "itinerary", label: "Itinerary", Icon: Compass }, ...base.slice(2)];
+    }
+    return base;
+  }, [user.kind, desktop]);
+
+  // Itinerary exists only on the desktop dashboard. If someone is on it and the
+  // window narrows to the phone layout, that tab vanishes from the bar and they
+  // would be stranded on a page with no way back. Send them to Trips instead.
+  useEffect(() => {
+    if (!nav.some((n) => n.id === tab)) setTab(DEFAULT_TAB[user.kind] || nav[0]?.id || "post");
+  }, [nav, tab, user.kind]);
   const actorId = user.talentId || user.id;
   const eng = { ...engagement, me: actorId, isAdmin: user.kind === "admin", sharePostTo: dm?.sharePostTo };
 
@@ -1938,6 +1963,26 @@ function Shell({ user, posts, jobs, trips, listings, actions, engagement, dm, di
               ? <OperatorDesk user={user} trips={trips} listings={listings} jobs={jobs} actions={actions} onOpenProfile={openProfile} onNavigate={setTab} />
               : <TalentProfile talent={talentById(user.talentId)} posts={posts} trips={trips} eng={eng} self onSetAvailability={actions.setAvailability} onOpenProfile={openProfile} onProfileSaved={actions.reloadDirectory} onBack={null} />)}
             {tab === "discover" && <Discover onOpen={openProfile} initialQuery={searchTerm} dirTick={dirTick} viewerKind={user.kind} />}
+            {tab === "itinerary" && (
+              <div className="px-5 py-5">
+                <h1 className="text-[22px] font-semibold tracking-[-0.01em]" style={{ color: C.ink }}>Itinerary builder</h1>
+                <p className="text-[13px] mt-1 mb-5 leading-snug" style={{ color: C.muted }}>
+                  Druk Pah drafts a route from your own engine, then you make it yours. Nothing is sent anywhere:
+                  it runs on this device, with or without a signal.
+                </p>
+                <button onClick={() => setBuildOpen(true)}
+                  className="tap w-full h-14 rounded-2xl flex items-center justify-center gap-2.5 text-[15.5px] font-semibold"
+                  style={{ background: C.pine, color: "#fff" }}>
+                  <Compass size={19} /> Start a new itinerary
+                </button>
+                <p className="text-[12px] mt-3 leading-snug" style={{ color: C.muted }}>
+                  To save days onto a trip, open that trip and use <b>Itinerary</b> there. Drafting here is for
+                  trying shapes out and building up your own touches.
+                </p>
+                {buildOpen && <ItineraryBuilder user={user} trip={null} onClose={() => setBuildOpen(false)} />}
+              </div>
+            )}
+
             {tab === "action" && <ActionTab user={user} unread={unreadDm} onOpenMessages={() => setTab("chats")}
               onOpenTrip={(id) => { PENDING_TRIP_ID = id; setTab("trips"); }} onGoTab={(t) => setTab(t)} />}
             {tab === "hotels" && <HotelsTab user={user} onOpenProfile={openProfile} />}
@@ -6072,6 +6117,354 @@ function ChannelMembers({ trip, meId, isOperator, onMessage, onChanged }) {
   );
 }
 
+/* ============ Druk Pah itinerary builder ============
+   Runs the operator's own engine: no model, no network, no cost. Two ways in -
+   answer Druk Pah's questions, or just describe the trip in words. Whatever it
+   drafts is fully editable, and the operator's own touches are theirs alone. */
+
+function ItineraryDayCard({ day, index, onChange, onRemove }) {
+  return (
+    <div className="rounded-2xl p-3.5 mb-2.5" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+      <div className="flex items-center gap-2 mb-2">
+        <div className="rounded-lg px-2.5 py-1 text-[11px] font-bold tracking-[.08em] uppercase shrink-0"
+          style={{ background: C.goldSoft, color: "#7a5a1e" }}>Day {index + 1}</div>
+        <input value={day.title} onChange={(e) => onChange({ ...day, title: e.target.value })}
+          placeholder="Where they are and what they do"
+          className="flex-1 bg-transparent outline-none text-[14.5px] font-semibold min-w-0" style={{ color: C.ink }} />
+        <button onClick={onRemove} className="tap shrink-0 text-[12px] font-semibold" style={{ color: C.maroon }}>Remove</button>
+      </div>
+      <textarea value={day.detail} onChange={(e) => onChange({ ...day, detail: e.target.value })}
+        rows={3} placeholder="The detail your guest reads"
+        className="w-full px-3 py-2.5 rounded-xl text-[13.5px] leading-relaxed resize-none"
+        style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
+    </div>
+  );
+}
+
+function ItineraryBuilder({ user, trip, onClose, onSaved }) {
+  const [mode, setMode] = useState("ask");        // ask | text | edit
+  const [sess, setSess] = useState(null);
+  const [q, setQ] = useState(null);
+  const [countVal, setCountVal] = useState("2");
+  const [picked, setPicked] = useState([]);
+  const [free, setFree] = useState("");
+  const [nights, setNights] = useState(trip && trip.start && trip.end
+    ? Math.max(1, Math.round((new Date(trip.end) - new Date(trip.start)) / 86400000)) : 6);
+  const [days, setDays] = useState([]);
+  const [notes, setNotes] = useState([]);
+  const [engineErr, setEngineErr] = useState(null);
+  const [touches, setTouches] = useState([]);
+  const [chosenTouches, setChosenTouches] = useState([]);
+  const [newTouch, setNewTouch] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [saveMsg, setSaveMsg] = useState(null);
+
+  // the operator's own touches
+  const loadTouches = async () => {
+    if (!CLOUD) return;
+    const { data } = await supabase.from("library_items").select("*")
+      .eq("operator_id", user.talentId).order("times_used", { ascending: false });
+    setTouches(data || []);
+  };
+  useEffect(() => { loadTouches(); }, []);
+
+  const startAsk = () => {
+    const DP = drukPahOf();
+    if (!DP) { setEngineErr("The trip engine did not load. Check that itinerary-brain.js and drukpah-engine.js are in the repository."); return; }
+    const sn = DP.session();
+    setSess(sn); setQ(sn.current()); setMode("ask"); setEngineErr(null);
+  };
+  useEffect(() => { startAsk(); }, []);
+
+  const planToDays = (plan) => {
+    const IB = brainOf();
+    return (plan.days || []).map((d, i) => {
+      const valley = (IB && IB.data.VAL[d.v] && IB.data.VAL[d.v].n) || d.v || "";
+      const acts = (d.acts || []).map((a) => a.n).filter(Boolean);
+      const drive = d.driveH ? `About ${d.driveH} hour${d.driveH === 1 ? "" : "s"} on the road. ` : "";
+      const fest = d.fest ? `${d.fest.n} is on. ` : "";
+      return {
+        title: i === 0 ? `Arrive ${valley}` : valley,
+        detail: (drive + fest + (acts.length ? acts.join(". ") + "." : "A day in " + valley + ".")).trim(),
+      };
+    });
+  };
+
+  const runEngine = (phrase, opts) => {
+    const IB = brainOf();
+    if (!IB) { setEngineErr("The trip engine did not load. Check that itinerary-brain.js is in the repository."); return; }
+    try {
+      const plan = IB.draft(phrase || "", { nights: opts.nights, diff: opts.diff || 3 });
+      setDays(planToDays(plan));
+      setNotes([...(plan.verdicts?.warns || []), ...(plan.verdicts?.notes || [])]);
+      setMode("edit"); setEngineErr(null);
+    } catch (e) {
+      setEngineErr("The engine could not draft that. Try fewer days, or describe it differently.");
+    }
+  };
+
+  const answer = (v) => {
+    if (!sess) return;
+    sess.answer(v);
+    if (sess.done()) {
+      try {
+        const r = sess.result();
+        setDays(planToDays(r.plan));
+        setNotes([...(r.plan.verdicts?.warns || []), ...(r.plan.verdicts?.notes || [])]);
+        setMode("edit");
+      } catch (e) { setEngineErr("The engine could not finish that. Try the text option instead."); }
+    } else {
+      setQ(sess.current()); setPicked([]); setCountVal("2");
+    }
+  };
+
+  const addTouch = async () => {
+    const name = newTouch.trim();
+    if (!name || !CLOUD) return;
+    await supabase.from("library_items").insert({
+      operator_id: user.talentId, kind: "experience", name,
+    });
+    setNewTouch(""); loadTouches();
+  };
+
+  const applyTouches = () => {
+    if (!chosenTouches.length || !days.length) return;
+    setDays((D) => D.map((d, i) => {
+      const t = chosenTouches[i % chosenTouches.length];
+      if (!t || d.detail.includes(t)) return d;
+      return { ...d, detail: `${d.detail} ${t}`.trim() };
+    }));
+  };
+
+  const save = async () => {
+    if (!trip || saving) return;
+    setSaving(true); setSaveMsg(null);
+    // Replace rather than append, so saving twice cannot double the itinerary.
+    await supabase.from("trip_itinerary").delete().eq("trip_id", trip.id);
+    const rows = days.map((d, i) => ({ trip_id: trip.id, day_no: i + 1, title: d.title || `Day ${i + 1}`, detail: d.detail || null }));
+    const { error } = rows.length ? await supabase.from("trip_itinerary").insert(rows) : { error: null };
+    setSaving(false);
+    if (error) { setSaveMsg("Could not save. Try once more."); return; }
+    for (const t of chosenTouches) {
+      const it = touches.find((x) => x.name === t);
+      if (it) await supabase.from("library_items").update({ times_used: (it.times_used || 0) + 1 }).eq("id", it.id);
+    }
+    onSaved && onSaved();
+    onClose();
+  };
+
+  return createPortal((
+    <div className="fixed inset-0 flex items-end lg:items-center lg:justify-center" style={{ background: "rgba(8,10,8,.6)", zIndex: 244 }} onClick={onClose}>
+      <div className="w-full rounded-t-3xl lg:rounded-3xl flex flex-col safe-bottom"
+        style={{ background: C.bg, maxHeight: "94dvh", maxWidth: 900 }} onClick={(e) => e.stopPropagation()}>
+        <div className="pt-3 shrink-0"><div className="w-10 h-1 rounded-full mx-auto" style={{ background: C.line }} /></div>
+
+        <div className="px-5 pt-3 pb-3 shrink-0 flex items-center gap-2.5">
+          <div className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0" style={{ background: C.pine }}>
+            <Compass size={18} color={C.goldSoft} />
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="text-[17px] font-semibold" style={{ color: C.ink }}>Druk Pah</div>
+            <div className="text-[11.5px]" style={{ color: C.muted }}>
+              Your own trip engine. No internet needed, nothing sent anywhere.
+            </div>
+          </div>
+          <button onClick={onClose} className="tap shrink-0 w-9 h-9 rounded-full flex items-center justify-center"
+            style={{ background: C.card, border: `1px solid ${C.line}` }}><X size={16} color={C.muted} /></button>
+        </div>
+
+        <div className="px-5 pb-6 overflow-y-auto hidescroll" style={{ scrollbarWidth: "none" }}>
+          {engineErr && (
+            <div className="rounded-xl px-3.5 py-3 mb-3" style={{ background: C.maroonSoft }}>
+              <p className="text-[13px] leading-snug" style={{ color: C.maroon }}>{engineErr}</p>
+            </div>
+          )}
+
+          {mode !== "edit" && (
+            <div className="flex gap-1.5 mb-4">
+              <button onClick={startAsk} className="tap flex-1 h-10 rounded-xl text-[13px] font-semibold"
+                style={{ background: mode === "ask" ? C.pine : C.card, color: mode === "ask" ? "#fff" : C.ink, border: `1px solid ${mode === "ask" ? C.pine : C.line}` }}>
+                Answer questions
+              </button>
+              <button onClick={() => setMode("text")} className="tap flex-1 h-10 rounded-xl text-[13px] font-semibold"
+                style={{ background: mode === "text" ? C.pine : C.card, color: mode === "text" ? "#fff" : C.ink, border: `1px solid ${mode === "text" ? C.pine : C.line}` }}>
+                Describe it in words
+              </button>
+            </div>
+          )}
+
+          {/* ---- the question flow ---- */}
+          {mode === "ask" && q && (
+            <div>
+              <div className="text-[11.5px] font-semibold mb-1" style={{ color: C.gold }}>
+                Question {q.progress.i} of {q.progress.n}
+              </div>
+              <div className="text-[18px] font-semibold leading-snug" style={{ color: C.ink }}>{q.t}</div>
+              {q.sub && <p className="text-[12.5px] mt-1 mb-3 leading-snug" style={{ color: C.muted }}>{q.sub}</p>}
+
+              {q.type === "count" ? (
+                <div className="flex gap-2 items-center">
+                  <input value={countVal} onChange={(e) => setCountVal(e.target.value.replace(/[^0-9]/g, "").slice(0, 3))}
+                    inputMode="numeric" className="flex-1 h-12 px-3.5 rounded-xl text-[15px]"
+                    style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }} />
+                  <button onClick={() => answer(Number(countVal) || 2)} className="tap h-12 px-5 rounded-xl text-[14px] font-semibold"
+                    style={{ background: C.pine, color: "#fff" }}>Next</button>
+                </div>
+              ) : q.type === "final" ? (
+                <div>
+                  {(q.groups || []).map(([label, items]) => (
+                    <div key={label} className="mb-3">
+                      <BLabel>{label}</BLabel>
+                      <div className="flex flex-wrap gap-1.5">
+                        {items.map((it) => {
+                          const on = picked.includes(it);
+                          return (
+                            <button key={it} onClick={() => setPicked((L) => on ? L.filter((x) => x !== it) : [...L, it])}
+                              className="tap rounded-full px-3 py-1.5 text-[12.5px] font-semibold"
+                              style={{ background: on ? C.pine : C.card, color: on ? "#fff" : C.ink, border: `1px solid ${on ? C.pine : C.line}` }}>{it}</button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ))}
+                  <button onClick={() => answer(picked)} className="tap w-full h-12 rounded-xl text-[15px] font-semibold mt-1"
+                    style={{ background: C.pine, color: "#fff" }}>Draft the trip</button>
+                </div>
+              ) : (
+                <div className="w-grid2">
+                  {(q.o || []).map(([id, icon, label, sub]) => (
+                    <button key={id} onClick={() => answer(id)}
+                      className="tap w-full text-left rounded-2xl p-3.5 mb-2 flex items-start gap-3"
+                      style={{ background: C.card, border: `1px solid ${C.line}` }}>
+                      <span className="text-[20px] leading-none shrink-0">{icon}</span>
+                      <span className="flex-1 min-w-0">
+                        <span className="block text-[14.5px] font-semibold" style={{ color: C.ink }}>{label}</span>
+                        <span className="block text-[12px] mt-0.5" style={{ color: C.muted }}>{sub}</span>
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {sess && q.progress.i > 1 && (
+                <button onClick={() => { sess.back(); setQ(sess.current()); }}
+                  className="tap text-[13px] font-semibold mt-2" style={{ color: C.muted }}>Back</button>
+              )}
+            </div>
+          )}
+
+          {/* ---- free text ---- */}
+          {mode === "text" && (
+            <div>
+              <BLabel>Describe the trip</BLabel>
+              <textarea value={free} onChange={(e) => setFree(e.target.value)} rows={4}
+                placeholder="A couple in October, festivals and the Tiger's Nest, she is 68, gentle pace"
+                className="w-full px-3.5 py-3 rounded-xl text-[15px] leading-relaxed resize-none"
+                style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }} />
+              <p className="text-[11.5px] mt-1.5 leading-snug" style={{ color: C.muted }}>
+                Write it as you would say it. The engine reads dates, ages, interests and places.
+              </p>
+              <div className="flex gap-2 items-center mt-3">
+                <div className="flex-1">
+                  <BLabel>Nights</BLabel>
+                  <input value={nights} onChange={(e) => setNights(Number(e.target.value.replace(/[^0-9]/g, "")) || 1)}
+                    inputMode="numeric" className="w-full h-12 px-3.5 rounded-xl text-[15px]"
+                    style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }} />
+                </div>
+                <button onClick={() => runEngine(free, { nights })} className="tap h-12 px-6 rounded-xl text-[15px] font-semibold self-end"
+                  style={{ background: C.pine, color: "#fff" }}>Draft it</button>
+              </div>
+            </div>
+          )}
+
+          {/* ---- the draft, fully editable ---- */}
+          {mode === "edit" && (
+            <div>
+              {notes.length > 0 && (
+                <div className="rounded-xl px-3.5 py-3 mb-3" style={{ background: C.goldSoft }}>
+                  <div className="text-[11.5px] font-semibold tracking-[.08em] uppercase mb-1" style={{ color: "#7a5a1e" }}>
+                    What the engine noticed
+                  </div>
+                  {notes.slice(0, 5).map((n, i) => (
+                    <p key={i} className="text-[12.5px] leading-snug" style={{ color: "#7a5a1e" }}>{n}</p>
+                  ))}
+                </div>
+              )}
+
+              <div className="rounded-2xl p-3.5 mb-3" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+                <div className="text-[13px] font-semibold mb-1" style={{ color: C.ink }}>Your own touches</div>
+                <p className="text-[11.5px] leading-snug mb-2" style={{ color: C.muted }}>
+                  The things only you do. Pick any and they are woven through the days.
+                </p>
+                <div className="flex flex-wrap gap-1.5 mb-2">
+                  {touches.map((t) => {
+                    const on = chosenTouches.includes(t.name);
+                    return (
+                      <button key={t.id} onClick={() => setChosenTouches((L) => on ? L.filter((x) => x !== t.name) : [...L, t.name])}
+                        className="tap rounded-full px-3 py-1.5 text-[12.5px] font-semibold"
+                        style={{ background: on ? C.gold : C.bg, color: on ? "#fff" : C.ink, border: `1px solid ${on ? C.gold : C.line}` }}>{t.name}</button>
+                    );
+                  })}
+                  {touches.length === 0 && (
+                    <span className="text-[12px]" style={{ color: C.muted }}>Nothing saved yet. Add your first below.</span>
+                  )}
+                </div>
+                <div className="flex gap-2">
+                  <input value={newTouch} onChange={(e) => setNewTouch(e.target.value)} maxLength={120}
+                    placeholder="We plant a tree in the guest's name"
+                    className="flex-1 h-10 px-3 rounded-xl text-[13.5px]"
+                    style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
+                  <button onClick={addTouch} disabled={!newTouch.trim()}
+                    className="tap h-10 px-4 rounded-xl text-[13px] font-semibold"
+                    style={{ background: newTouch.trim() ? C.pine : C.line, color: newTouch.trim() ? "#fff" : C.muted }}>Save</button>
+                </div>
+                {chosenTouches.length > 0 && (
+                  <button onClick={applyTouches} className="tap w-full h-10 rounded-xl text-[13px] font-semibold mt-2"
+                    style={{ background: C.goldSoft, color: "#7a5a1e" }}>
+                    Weave {chosenTouches.length} touch{chosenTouches.length === 1 ? "" : "es"} into the days
+                  </button>
+                )}
+              </div>
+
+              {days.map((d, i) => (
+                <ItineraryDayCard key={i} day={d} index={i}
+                  onChange={(nd) => setDays((D) => D.map((x, k) => k === i ? nd : x))}
+                  onRemove={() => setDays((D) => D.filter((_, k) => k !== i))} />
+              ))}
+
+              <button onClick={() => setDays((D) => [...D, { title: "", detail: "" }])}
+                className="tap w-full h-11 rounded-xl flex items-center justify-center gap-2 text-[13.5px] font-semibold mb-3"
+                style={{ background: C.card, border: `1.5px dashed ${C.line}`, color: C.pine }}>
+                <Plus size={16} /> Add a day of your own
+              </button>
+
+              {saveMsg && <p className="text-[13px] mb-2" style={{ color: C.maroon }}>{saveMsg}</p>}
+
+              <div className="flex gap-2">
+                <button onClick={() => { setMode("ask"); startAsk(); }}
+                  className="tap flex-1 h-12 rounded-2xl text-[14px] font-semibold"
+                  style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }}>Start again</button>
+                {trip && (
+                  <button onClick={save} disabled={saving || days.length === 0}
+                    className="tap flex-1 h-12 rounded-2xl text-[15px] font-semibold"
+                    style={{ background: days.length ? C.pine : C.line, color: days.length ? "#fff" : C.muted }}>
+                    {saving ? "Saving…" : `Save ${days.length} day${days.length === 1 ? "" : "s"} to the trip`}
+                  </button>
+                )}
+              </div>
+              {!trip && (
+                <p className="text-[12px] mt-2 leading-snug text-center" style={{ color: C.muted }}>
+                  Open this from a trip to save the days onto it.
+                </p>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  ), document.body);
+}
+
 function TripStays({ trip, isOperator }) {
   const [rows, setRows] = useState(null);
   const [pick, setPick] = useState(null);      // { night, date }
@@ -6266,6 +6659,7 @@ function TripHub({ user, meId, trip, actions, onMessage, onBack }) {
   const isTripOperator = trip.operatorId === meId;
   const [detailTab, setDetailTab] = useState("itinerary");
   const [crewOpen, setCrewOpen] = useState(false);
+  const [building, setBuilding] = useState(false);
   const [editDetail, setEditDetail] = useState(false);
   const [mpEdit, setMpEdit] = useState(false);
   const [mpPlace, setMpPlace] = useState("");
@@ -6522,16 +6916,41 @@ function TripHub({ user, meId, trip, actions, onMessage, onBack }) {
         </div>
 
         <div className="mb-5">
-          {detailTab === "itinerary" && ((trip.itinerary || []).length > 0 ? (
-            <div className="space-y-2">
-              {(trip.itinerary || []).map((it) => (
-                <div key={it.day} className="flex items-center gap-3 rounded-xl px-4 py-3" style={{ background: C.card, border: `1px solid ${C.line}` }}>
-                  <div className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0" style={{ background: C.pine }}><span className="text-[12px] font-bold" style={{ color: C.goldSoft }}>{it.day}</span></div>
-                  <span className="text-[14px] font-medium" style={{ color: C.ink }}>{it.title}</span>
+          {detailTab === "itinerary" && (
+            <div>
+              {(trip.itinerary || []).length > 0 ? (
+                <div className="space-y-2">
+                  {(trip.itinerary || []).map((it) => (
+                    <div key={it.day} className="rounded-xl px-4 py-3" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+                      <div className="flex items-center gap-3">
+                        <div className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0" style={{ background: C.pine }}><span className="text-[11.5px] font-bold" style={{ color: C.goldSoft }}>{it.day}</span></div>
+                        <span className="text-[14px] font-medium" style={{ color: C.ink }}>{it.title}</span>
+                      </div>
+                      {it.detail && (
+                        <p className="text-[13px] mt-1.5 leading-relaxed" style={{ color: C.muted, paddingLeft: 40 }}>{it.detail}</p>
+                      )}
+                    </div>
+                  ))}
                 </div>
-              ))}
+              ) : (
+                <TripEmpty text="No itinerary yet." canEdit={false} />
+              )}
+
+              {isTripOperator && (
+                <button onClick={() => setBuilding(true)}
+                  className="tap w-full h-12 rounded-xl flex items-center justify-center gap-2 text-[14px] font-semibold mt-3"
+                  style={{ background: C.card, border: `1.5px dashed ${C.gold}`, color: "#7a5a1e" }}>
+                  <Plus size={17} /> {(trip.itinerary || []).length ? "Rebuild with Druk Pah" : "Build the itinerary with Druk Pah"}
+                </button>
+              )}
+
+              {building && (
+                <ItineraryBuilder user={user} trip={trip}
+                  onClose={() => setBuilding(false)}
+                  onSaved={() => actions.fetchTrips && actions.fetchTrips()} />
+              )}
             </div>
-          ) : <TripEmpty text="No itinerary yet." canEdit={isTripOperator} onEdit={() => setEditDetail(true)} />)}
+          )}
 
           {detailTab === "stays" && <TripStays trip={trip} isOperator={isTripOperator} />}
 
