@@ -36,6 +36,11 @@
   </head>
   <body>
     <div id="root"></div>
+    <!-- Itinerary engines: knowledge core first, then Druk Pah.
+         Files live in the repo's public/js/ folder, served at /js/.
+         They expose window.ItineraryBrain and window.DrukPah for the app. -->
+    <script src="/js/itinerary-brain.js"></script>
+    <script src="/js/drukpah-engine.js"></script>
     <script type="module" src="/main.jsx"></script>
   </body>
 </html>
