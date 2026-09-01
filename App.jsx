@@ -12,11 +12,19 @@ import {
 import mapImg from "./map.jpg";
 import { supabase } from "./supabase.js";
 
-/* The Druk Pah trip engine, from pristinebhutantravels.com. Two UMD files that
-   attach to window when loaded as modules. The brain MUST be imported first:
-   the engine reads it off the global as it evaluates. Verified under real ESM. */
-import "./itinerary-brain.js";
-import "./drukpah-engine.js";
+/* The Druk Pah trip engine, from pristinebhutantravels.com.
+
+   These are UMD files: they assign to module.exports when that exists, and fall
+   back to window otherwise. Which path a bundler takes is not ours to choose -
+   Vite's CommonJS plugin sees module.exports and treats them as CommonJS, so
+   the exports are handed to us and window is never touched. Under plain ESM the
+   opposite happens. So take the namespace AND keep the global as a fallback,
+   and resolve at call time rather than at load.
+
+   The brain is imported first either way: under ESM the engine reads it off the
+   global as it evaluates. */
+import * as brainMod from "./itinerary-brain.js";
+import * as pahMod from "./drukpah-engine.js";
 
 /* Bhutan Tourism Hub design system — paper, pine forest, temple gold, kemar red. */
 const C = {
@@ -65,12 +73,34 @@ const sysMsg = (text) => ({ id: uid(), senderId: null, kind: "system", body: tex
 /* ── Cloud (Supabase) ── posts are global when configured; everything falls back to local demo mode when not. */
 const CLOUD = Boolean(supabase);
 
-/* Read at call time rather than at load, so a missing or renamed engine file
-   gives a plain message instead of a blank screen. */
-const brainOf = () => (typeof window !== "undefined" && window.ItineraryBrain) || null;
-const drukPahOf = () => (typeof window !== "undefined" && window.DrukPah) || null;
+/* Whichever way the bundle was made, find the engine: the CommonJS default
+   export, the ESM namespace itself, or the UMD global. `probe` is a function
+   the real object must have, so a half-loaded module is never mistaken for a
+   working one. */
+function resolveEngine(mod, globalName, probe) {
+  const d = mod && mod.default;
+  if (d && typeof d[probe] === "function") return d;
+  if (mod && typeof mod[probe] === "function") return mod;
+  const g = typeof window !== "undefined" ? window[globalName] : null;
+  if (g && typeof g[probe] === "function") return g;
+  return null;
+}
+const brainOf = () => resolveEngine(brainMod, "ItineraryBrain", "draft");
+const drukPahOf = () => resolveEngine(pahMod, "DrukPah", "session");
+
+/* Which route worked, for the error message if none did. */
+function engineDiag() {
+  const w = typeof window !== "undefined" ? window : {};
+  return [
+    "brain.default=" + (brainMod && brainMod.default ? "yes" : "no"),
+    "brain.draft=" + (brainMod && typeof brainMod.draft === "function" ? "yes" : "no"),
+    "window.ItineraryBrain=" + (w.ItineraryBrain ? "yes" : "no"),
+    "pah.default=" + (pahMod && pahMod.default ? "yes" : "no"),
+    "window.DrukPah=" + (w.DrukPah ? "yes" : "no"),
+  ].join(", ");
+}
 const DEMO_MODE = false;   // set true only for local demos without a database
-const BUILD = "BUILD 67 — 01 Sep";   // bump every deploy; shown at the top of the welcome screen
+const BUILD = "BUILD 68 — 01 Sep";   // bump every deploy; shown at the top of the welcome screen
 
 /* ---- Install state ---- */
 // 43 characters of randomness — not guessable
@@ -6170,7 +6200,10 @@ function ItineraryBuilder({ user, trip, onClose, onSaved }) {
 
   const startAsk = () => {
     const DP = drukPahOf();
-    if (!DP) { setEngineErr("The trip engine did not load. Check that itinerary-brain.js and drukpah-engine.js are in the repository."); return; }
+    // The brain alone is enough to draft. If only the question flow is missing,
+    // fall through to the text route rather than blocking the whole feature.
+    if (!DP && brainOf()) { setMode("text"); setEngineErr(null); return; }
+    if (!DP) { setEngineErr("The question flow could not start. " + engineDiag()); return; }
     const sn = DP.session();
     setSess(sn); setQ(sn.current()); setMode("ask"); setEngineErr(null);
   };
@@ -6192,7 +6225,7 @@ function ItineraryBuilder({ user, trip, onClose, onSaved }) {
 
   const runEngine = (phrase, opts) => {
     const IB = brainOf();
-    if (!IB) { setEngineErr("The trip engine did not load. Check that itinerary-brain.js is in the repository."); return; }
+    if (!IB) { setEngineErr("The trip engine could not be read. " + engineDiag()); return; }
     try {
       const plan = IB.draft(phrase || "", { nights: opts.nights, diff: opts.diff || 3 });
       setDays(planToDays(plan));
