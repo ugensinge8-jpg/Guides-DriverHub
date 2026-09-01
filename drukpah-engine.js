@@ -153,3 +153,15 @@ const DrukPah={session,questions:Q,flow,synth,
 if(typeof module!=='undefined'&&module.exports)module.exports=DrukPah;
 else root.DrukPah=DrukPah;
 })(typeof window!=='undefined'?window:globalThis);
+
+
+/* ---------------------------------------------------------------
+   Added for the Bhutan Tourism Hub build.
+   This one line makes the file an ES module. Without it Vite sees
+   `module.exports` above, treats the file as CommonJS, wraps it in a
+   factory that is never called, and neither the export nor `window`
+   is ever set. With it, the UMD block above takes the `window` path
+   and this re-exports the same object for a normal import.
+   The logic above is untouched.
+   --------------------------------------------------------------- */
+export default (typeof window !== 'undefined' ? window.DrukPah : globalThis.DrukPah);

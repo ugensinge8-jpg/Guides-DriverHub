@@ -23,8 +23,8 @@ import { supabase } from "./supabase.js";
 
    The brain is imported first either way: under ESM the engine reads it off the
    global as it evaluates. */
-import * as brainMod from "./itinerary-brain.js";
-import * as pahMod from "./drukpah-engine.js";
+import brainDefault, * as brainMod from "./itinerary-brain.js";
+import pahDefault, * as pahMod from "./drukpah-engine.js";
 
 /* Bhutan Tourism Hub design system — paper, pine forest, temple gold, kemar red. */
 const C = {
@@ -77,7 +77,8 @@ const CLOUD = Boolean(supabase);
    export, the ESM namespace itself, or the UMD global. `probe` is a function
    the real object must have, so a half-loaded module is never mistaken for a
    working one. */
-function resolveEngine(mod, globalName, probe) {
+function resolveEngine(mod, globalName, probe, direct) {
+  if (direct && typeof direct[probe] === "function") return direct;
   const d = mod && mod.default;
   if (d && typeof d[probe] === "function") return d;
   if (mod && typeof mod[probe] === "function") return mod;
@@ -85,13 +86,14 @@ function resolveEngine(mod, globalName, probe) {
   if (g && typeof g[probe] === "function") return g;
   return null;
 }
-const brainOf = () => resolveEngine(brainMod, "ItineraryBrain", "draft");
-const drukPahOf = () => resolveEngine(pahMod, "DrukPah", "session");
+const brainOf = () => resolveEngine(brainMod, "ItineraryBrain", "draft", brainDefault);
+const drukPahOf = () => resolveEngine(pahMod, "DrukPah", "session", pahDefault);
 
 /* Which route worked, for the error message if none did. */
 function engineDiag() {
   const w = typeof window !== "undefined" ? window : {};
   return [
+    "direct=" + (brainDefault ? "yes" : "no"),
     "brain.default=" + (brainMod && brainMod.default ? "yes" : "no"),
     "brain.draft=" + (brainMod && typeof brainMod.draft === "function" ? "yes" : "no"),
     "window.ItineraryBrain=" + (w.ItineraryBrain ? "yes" : "no"),
@@ -100,7 +102,7 @@ function engineDiag() {
   ].join(", ");
 }
 const DEMO_MODE = false;   // set true only for local demos without a database
-const BUILD = "BUILD 68 — 01 Sep";   // bump every deploy; shown at the top of the welcome screen
+const BUILD = "BUILD 69 — 01 Sep";   // bump every deploy; shown at the top of the welcome screen
 
 /* ---- Install state ---- */
 // 43 characters of randomness — not guessable
