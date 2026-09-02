@@ -97,7 +97,7 @@ function engineDiag() {
   ].join(", ");
 }
 const DEMO_MODE = false;   // set true only for local demos without a database
-const BUILD = "BUILD 75 — 02 Sep";   // bump every deploy; shown at the top of the welcome screen
+const BUILD = "BUILD 76 — 02 Sep";   // bump every deploy; shown at the top of the welcome screen
 
 /* ---- Install state ---- */
 // 43 characters of randomness — not guessable
@@ -6658,6 +6658,16 @@ function TripDocument({ trip, user, onClose }) {
   ), document.body);
 }
 
+/* The engine reports under three keys: warn (problems), notes (things to know)
+   and ok (what is going well). Warnings first, because a six-hour drive matters
+   more than a compliment. Defensive on every key: a future engine version that
+   drops one must not blank the panel or throw. */
+function readVerdicts(plan) {
+  const v = (plan && plan.verdicts) || {};
+  const pick = (k) => (Array.isArray(v[k]) ? v[k] : []);
+  return [...pick("warn"), ...pick("notes"), ...pick("ok")].filter(Boolean);
+}
+
 function ItineraryDayCard({ day, index, onChange, onRemove }) {
   return (
     <div className="rounded-2xl p-3.5 mb-2.5" style={{ background: C.card, border: `1px solid ${C.line}` }}>
@@ -6735,7 +6745,7 @@ function ItineraryBuilder({ user, trip, onClose, onSaved }) {
     try {
       const plan = IB.draft(phrase || "", { nights: opts.nights, diff: opts.diff || 3 });
       setDays(planToDays(plan));
-      setNotes([...(plan.verdicts?.warns || []), ...(plan.verdicts?.notes || [])]);
+      setNotes(readVerdicts(plan));
       setMode("edit"); setEngineErr(null);
     } catch (e) {
       setEngineErr("The engine could not draft that. Try fewer days, or describe it differently.");
@@ -6749,7 +6759,7 @@ function ItineraryBuilder({ user, trip, onClose, onSaved }) {
       try {
         const r = sess.result();
         setDays(planToDays(r.plan));
-        setNotes([...(r.plan.verdicts?.warns || []), ...(r.plan.verdicts?.notes || [])]);
+        setNotes(readVerdicts(r.plan));
         setMode("edit");
       } catch (e) { setEngineErr("The engine could not finish that. Try the text option instead."); }
     } else {
