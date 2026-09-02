@@ -102,7 +102,7 @@ function engineDiag() {
   ].join(", ");
 }
 const DEMO_MODE = false;   // set true only for local demos without a database
-const BUILD = "BUILD 70 — 01 Sep";   // bump every deploy; shown at the top of the welcome screen
+const BUILD = "BUILD 71 — 01 Sep";   // bump every deploy; shown at the top of the welcome screen
 
 /* ---- Install state ---- */
 // 43 characters of randomness — not guessable
@@ -11958,7 +11958,6 @@ function EnquiriesBoard({ user }) {
   const [pane, setPane] = useState("live");
   const [showDone, setShowDone] = useState(false);
   const [adding, setAdding] = useState(false);
-  const [showLost, setShowLost] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
   const [f, setF] = useState({ guest_name: "", guest_country: "", party_size: "", start_date: "", end_date: "", note: "" });
@@ -12009,17 +12008,21 @@ function EnquiriesBoard({ user }) {
   return (
     <div>
       <div className="flex gap-1.5 mb-3">
-        {[["live", "Enquiries", live.length], ["ready", "Turn into trip", ready.length]].map(([id, label, n]) => {
+        {[["live", "Enquiries", live.length], ["ready", "Turn into trip", ready.length], ["quiet", "Went quiet", lost.length]].map(([id, label, n]) => {
           const on = pane === id;
           const urgent = id === "ready" && n > 0;
+          const faded = id === "quiet";
           return (
             <button key={id} onClick={() => setPane(id)}
-              className="tap flex-1 h-11 rounded-xl flex items-center justify-center gap-2 text-[13.5px] font-semibold"
-              style={{ background: on ? C.pine : C.card, color: on ? "#fff" : C.ink,
-                       border: `1px solid ${on ? C.pine : (urgent ? C.gold : C.line)}` }}>
+              className="tap flex-1 rounded-xl flex items-center justify-center gap-1.5 text-[12.5px] font-semibold px-2"
+              style={{ height: 44,
+                       background: on ? (faded ? C.muted : C.pine) : C.card,
+                       color: on ? "#fff" : (faded ? C.muted : C.ink),
+                       opacity: !on && faded ? 0.72 : 1,
+                       border: `1px solid ${on ? (faded ? C.muted : C.pine) : (urgent ? C.gold : C.line)}` }}>
               {label}
               {n > 0 && (
-                <span className="min-w-[19px] h-[19px] px-1 rounded-full flex items-center justify-center text-[10.5px] font-bold"
+                <span className="min-w-[18px] h-[18px] px-1 rounded-full flex items-center justify-center text-[10px] font-bold"
                   style={{ background: on ? "rgba(255,255,255,.22)" : (urgent ? C.gold : C.line),
                            color: on ? "#fff" : (urgent ? "#fff" : C.muted) }}>{n}</span>
               )}
@@ -12031,7 +12034,9 @@ function EnquiriesBoard({ user }) {
       <p className="text-[12.5px] leading-snug mb-3" style={{ color: C.muted }}>
         {pane === "live"
           ? "A guest wrote to you but nothing is booked yet. No crew, no dates fixed, nobody else can see it."
-          : "These guests said yes. Turn each one into a trip and the guest, dates and notes carry straight over."}
+          : pane === "ready"
+            ? "These guests said yes. Turn each one into a trip and the guest, dates and notes carry straight over."
+            : "Enquiries that never became trips. Kept so you can look back, and reopened with one tap if a guest returns."}
       </p>
 
       {rows === null && <p className="text-[13px]" style={{ color: C.muted }}>Loading…</p>}
@@ -12187,15 +12192,26 @@ function EnquiriesBoard({ user }) {
         </div>
       )}
 
-      {lost.length > 0 && (
-        <div className="mt-6">
-          <button onClick={() => setShowLost((v) => !v)} className="tap text-[12.5px] font-semibold" style={{ color: C.muted }}>
-            {showLost ? "Hide" : "Show"} {lost.length} that went quiet
-          </button>
-          {showLost && lost.map((r) => (
+      {pane === "quiet" && lost.length === 0 && (
+        <div className="rounded-2xl px-4 py-5 text-center" style={{ background: C.card, border: `1px dashed ${C.line}` }}>
+          <div className="text-[14.5px] font-semibold" style={{ color: C.ink }}>Nothing has gone quiet</div>
+          <p className="text-[12.5px] mt-1 leading-snug" style={{ color: C.muted }}>
+            Enquiries you mark as quiet are kept here rather than deleted.
+          </p>
+        </div>
+      )}
+
+      {pane === "quiet" && lost.length > 0 && (
+        <div className="w-grid2" style={{ opacity: 0.72 }}>
+          {lost.map((r) => (
             <div key={r.id} className="rounded-xl p-3 mt-2 flex items-center gap-2" style={{ background: C.bg, border: `1px solid ${C.line}` }}>
               <div className="flex-1 min-w-0">
                 <div className="text-[13.5px] font-medium truncate" style={{ color: C.muted }}>{r.guest_name}</div>
+                <div className="text-[11px] truncate" style={{ color: C.muted, opacity: .8 }}>
+                  {r.guest_country ? r.guest_country + " · " : ""}
+                  {r.start_date ? fmt(r.start_date) : "no dates"}
+                  {r.party_size ? " · " + r.party_size + " guests" : ""}
+                </div>
               </div>
               <button onClick={() => setStatus(r.id, "open")} className="tap text-[11.5px] font-semibold rounded-full px-2.5 py-1 shrink-0"
                 style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }}>Reopen</button>
