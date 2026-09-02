@@ -102,7 +102,7 @@ function engineDiag() {
   ].join(", ");
 }
 const DEMO_MODE = false;   // set true only for local demos without a database
-const BUILD = "BUILD 69 — 01 Sep";   // bump every deploy; shown at the top of the welcome screen
+const BUILD = "BUILD 70 — 01 Sep";   // bump every deploy; shown at the top of the welcome screen
 
 /* ---- Install state ---- */
 // 43 characters of randomness — not guessable
@@ -11955,6 +11955,8 @@ function EnquiriesBoard({ user }) {
   const me = user.talentId;
   const [rows, setRows] = useState(null);
   const [building, setBuilding] = useState(null);   // the enquiry being turned into a trip
+  const [pane, setPane] = useState("live");
+  const [showDone, setShowDone] = useState(false);
   const [adding, setAdding] = useState(false);
   const [showLost, setShowLost] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -11994,29 +11996,68 @@ function EnquiriesBoard({ user }) {
   };
   const remove = async (id) => { await supabase.from("enquiries").delete().eq("id", id); load(); };
 
-  const live = (rows || []).filter((r) => r.status !== "lost");
+  // Still being worked: the guest has not said yes yet.
+  const live = (rows || []).filter((r) => r.status === "open" || r.status === "quoted");
+  // Said yes, but no trip exists yet. This is the queue that needs acting on.
+  const ready = (rows || []).filter((r) => r.status === "won" && !r.trip_id);
+  // Said yes and already became a trip. Kept for the record, folded away.
+  const converted = (rows || []).filter((r) => r.status === "won" && r.trip_id);
   const lost = (rows || []).filter((r) => r.status === "lost");
+  const shown = pane === "ready" ? ready : live;
   const fmt = (d) => { try { return new Date(d + "T00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short" }); } catch (e) { return d; } };
 
   return (
     <div>
-      <SectionLabel trailing={rows ? `${live.length}` : undefined}>Enquiries</SectionLabel>
+      <div className="flex gap-1.5 mb-3">
+        {[["live", "Enquiries", live.length], ["ready", "Turn into trip", ready.length]].map(([id, label, n]) => {
+          const on = pane === id;
+          const urgent = id === "ready" && n > 0;
+          return (
+            <button key={id} onClick={() => setPane(id)}
+              className="tap flex-1 h-11 rounded-xl flex items-center justify-center gap-2 text-[13.5px] font-semibold"
+              style={{ background: on ? C.pine : C.card, color: on ? "#fff" : C.ink,
+                       border: `1px solid ${on ? C.pine : (urgent ? C.gold : C.line)}` }}>
+              {label}
+              {n > 0 && (
+                <span className="min-w-[19px] h-[19px] px-1 rounded-full flex items-center justify-center text-[10.5px] font-bold"
+                  style={{ background: on ? "rgba(255,255,255,.22)" : (urgent ? C.gold : C.line),
+                           color: on ? "#fff" : (urgent ? "#fff" : C.muted) }}>{n}</span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+
       <p className="text-[12.5px] leading-snug mb-3" style={{ color: C.muted }}>
-        A guest wrote to you but nothing is booked yet. No crew, no dates fixed, nobody else can see it.
-        When the guest says yes, turn it into a trip and pick your crew then.
+        {pane === "live"
+          ? "A guest wrote to you but nothing is booked yet. No crew, no dates fixed, nobody else can see it."
+          : "These guests said yes. Turn each one into a trip and the guest, dates and notes carry straight over."}
       </p>
 
       {rows === null && <p className="text-[13px]" style={{ color: C.muted }}>Loading…</p>}
 
-      {rows && live.length === 0 && !adding && (
+      {rows && shown.length === 0 && !adding && (
         <div className="rounded-2xl px-4 py-5 text-center" style={{ background: C.card, border: `1px dashed ${C.line}` }}>
-          <div className="text-[14.5px] font-semibold" style={{ color: C.ink }}>Nothing in progress</div>
-          <p className="text-[12.5px] mt-1" style={{ color: C.muted }}>Next time a guest writes to you, put it here first.</p>
+          <div className="text-[14.5px] font-semibold" style={{ color: C.ink }}>
+            {pane === "live" ? "Nothing in progress" : "Nothing waiting to become a trip"}
+          </div>
+          <p className="text-[12.5px] mt-1 leading-snug" style={{ color: C.muted }}>
+            {pane === "live"
+              ? "Next time a guest writes to you, put it here first."
+              : ready.length === 0 && live.length > 0
+                ? "When a guest says yes, mark the enquiry won and it appears here."
+                : "Mark an enquiry won and it moves here, ready to become a trip."}
+          </p>
+          {pane === "ready" && live.length > 0 && (
+            <button onClick={() => setPane("live")} className="tap text-[12.5px] font-semibold mt-2" style={{ color: C.pine }}>
+              Back to the {live.length} in progress
+            </button>
+          )}
         </div>
       )}
 
       <div className="w-grid2">
-      {live.map((r) => {
+      {shown.map((r) => {
         const st = ENQ_STATUS[r.status] || ENQ_STATUS.open;
         return (
           <div key={r.id} className="rounded-2xl p-3.5 mb-2.5" style={{ background: C.card, border: `1px solid ${C.line}` }}>
@@ -12044,7 +12085,7 @@ function EnquiriesBoard({ user }) {
                   style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }}>Back to open</button>
               )}
               {r.status !== "won" && (
-                <button onClick={() => setStatus(r.id, "won")} className="tap text-[11.5px] font-semibold rounded-full px-2.5 py-1"
+                <button onClick={() => { setStatus(r.id, "won"); setPane("ready"); }} className="tap text-[11.5px] font-semibold rounded-full px-2.5 py-1"
                   style={{ background: C.pine, color: "#fff" }}>Guest said yes</button>
               )}
               <button onClick={() => setStatus(r.id, "lost")} className="tap text-[11.5px] font-semibold rounded-full px-2.5 py-1"
@@ -12123,6 +12164,27 @@ function EnquiriesBoard({ user }) {
         <NewTripSheet user={user} fromEnquiry={building}
           onClose={() => setBuilding(null)}
           onDone={() => { setBuilding(null); load(); }} />
+      )}
+
+      {pane === "ready" && converted.length > 0 && (
+        <div className="mt-4">
+          <button onClick={() => setShowDone((v) => !v)} className="tap text-[12.5px] font-semibold" style={{ color: C.muted }}>
+            {showDone ? "Hide" : "Show"} {converted.length} already turned into trips
+          </button>
+          {showDone && (
+            <div className="mt-2 w-grid2">
+              {converted.map((r) => (
+                <div key={r.id} className="rounded-xl px-3.5 py-2.5 mb-2 flex items-center gap-2.5" style={{ background: C.pineSoft }}>
+                  <Check size={15} color={C.pine} className="shrink-0" />
+                  <div className="flex-1 min-w-0">
+                    <div className="text-[13.5px] font-semibold truncate" style={{ color: C.pine }}>{r.guest_name}</div>
+                    <div className="text-[11.5px]" style={{ color: C.pine, opacity: .8 }}>Already a trip</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       )}
 
       {lost.length > 0 && (
