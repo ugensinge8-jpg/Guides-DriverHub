@@ -2,12 +2,7 @@
 import React, { useState, useRef, useMemo, useEffect } from "react";
 import { createPortal } from "react-dom";
 import {
-  Compass, Car, Building2, ShieldCheck, ImagePlus, X, Check, Clock, Send,
-  BadgeCheck, MapPin, Inbox, ChevronLeft, Star, Phone, Mail, Briefcase,
-  Search, LogOut, Newspaper, User, CalendarCheck, MessageCircle,
-  Map as MapIcon, MessageSquare, Users, Download, Mic, Video as VideoIcon, Heart, Share2, Trash2, Maximize2, Upload, Loader2, ArrowRight,
-  Award, UserX, RefreshCw, FileCheck2, ExternalLink, UserPlus, Send as SendIcon, Lock, Eye, EyeOff, CalendarDays, UserCheck, Plus, CheckCheck, Camera, Navigation as NavIcon, Bell, Share, PhoneCall, Wallet, AlertTriangle,
-  ShieldAlert, Store, Sparkles,
+  AlertTriangle, ArrowRight, Award, BadgeCheck, BarChart3, Bell, Briefcase, Building2, CalendarCheck, CalendarDays, Camera, Car, Check, CheckCheck, ChevronLeft, ChevronRight, Clock, Compass, Download, ExternalLink, Eye, EyeOff, FileCheck2, FileDown, Heart, ImagePlus, Inbox, Loader2, Lock, LogOut, Mail, Map as MapIcon, MapPin, Maximize2, MessageCircle, MessageSquare, Mic, Navigation as NavIcon, Newspaper, Phone, PhoneCall, Plus, RefreshCw, Search, Send, Send as SendIcon, Share, Share2, ShieldAlert, ShieldCheck, Sparkles, Star, Store, Trash2, Upload, User, UserCheck, UserPlus, Users, UserX, Video as VideoIcon, Wallet, X,
 } from "lucide-react";
 import mapImg from "./map.jpg";
 import { supabase } from "./supabase.js";
@@ -102,7 +97,7 @@ function engineDiag() {
   ].join(", ");
 }
 const DEMO_MODE = false;   // set true only for local demos without a database
-const BUILD = "BUILD 71 — 01 Sep";   // bump every deploy; shown at the top of the welcome screen
+const BUILD = "BUILD 75 — 02 Sep";   // bump every deploy; shown at the top of the welcome screen
 
 /* ---- Install state ---- */
 // 43 characters of randomness — not guessable
@@ -1402,6 +1397,23 @@ export default function App() {
         .fade{ animation-duration:.2s; }
         textarea:focus, input:focus{ outline:none; border-color:${C.pine}!important; box-shadow:0 0 0 3px ${C.pine}1f; }
         textarea::placeholder, input::placeholder{ color:${C.muted}; opacity:.7; }
+        /* Printing a trip: only the document goes on paper. */
+        /* The shell must always be exactly one screen tall. vh first for older
+           phones that do not know dvh, then dvh for those that do. Without the
+           fallback the column has no height at all and the bottom bar floats. */
+        .app-shell { height: 100vh; height: 100dvh; }
+        /* Belt and braces: even if the flex chain is broken by a future change,
+           the bar stays on the bottom edge of the screen. */
+        .nav-pinned { position: sticky; position: -webkit-sticky; bottom: 0; }
+        @supports not (height: 100dvh) {
+          .app-shell { height: 100vh; }
+        }
+        @media print {
+          .no-print { display: none !important; }
+          .print-page { max-width: none !important; padding: 0 !important; }
+          .print-row { break-inside: avoid; page-break-inside: avoid; }
+          body { background: #fff !important; }
+        }
         /* The app switches to the dashboard at 900px. Tailwind's lg: is 1024px,
            so content laid out with lg: would change 124px later than the chrome.
            These mirror it at the right width. */
@@ -1416,7 +1428,7 @@ export default function App() {
         }
       `}</style>
 
-      <div className="w-full flex flex-col" style={{ height: "100dvh", color: C.ink, maxWidth: wideView ? "none" : 448 }}>
+      <div className="w-full flex flex-col app-shell" style={{ color: C.ink, maxWidth: wideView ? "none" : 448 }}>
         {!user ? (
           <Login onPick={setAccountId} session={session} myProfile={myProfile} onAuthed={reloadMe} onBusy={setAuthBusy} />
         ) : (
@@ -1848,7 +1860,10 @@ function Shell({ user, posts, jobs, trips, listings, actions, engagement, dm, di
   const nav = useMemo(() => {
     const base = NAV[user.kind] || [];
     if (desktop && user.kind === "operator") {
-      return [...base.slice(0, 2), { id: "itinerary", label: "Itinerary", Icon: Compass }, ...base.slice(2)];
+      return [...base.slice(0, 2),
+        { id: "itinerary", label: "Itinerary", Icon: Compass },
+        { id: "reports", label: "Reports", Icon: BarChart3 },
+        ...base.slice(2)];
     }
     return base;
   }, [user.kind, desktop]);
@@ -1995,6 +2010,8 @@ function Shell({ user, posts, jobs, trips, listings, actions, engagement, dm, di
               ? <OperatorDesk user={user} trips={trips} listings={listings} jobs={jobs} actions={actions} onOpenProfile={openProfile} onNavigate={setTab} />
               : <TalentProfile talent={talentById(user.talentId)} posts={posts} trips={trips} eng={eng} self onSetAvailability={actions.setAvailability} onOpenProfile={openProfile} onProfileSaved={actions.reloadDirectory} onBack={null} />)}
             {tab === "discover" && <Discover onOpen={openProfile} initialQuery={searchTerm} dirTick={dirTick} viewerKind={user.kind} />}
+            {tab === "reports" && <ReportsTab user={user} />}
+
             {tab === "itinerary" && (
               <div className="px-5 py-5">
                 <h1 className="text-[22px] font-semibold tracking-[-0.01em]" style={{ color: C.ink }}>Itinerary builder</h1>
@@ -2271,7 +2288,7 @@ function useIsDesktop() {
 
 function BottomNav({ nav, tab, setTab, badges }) {
   return (
-    <div className="shrink-0 flex safe-bottom" style={{ background: C.card, borderTop: `1px solid ${C.line}`, position: "sticky", bottom: 0, zIndex: 240 }}>
+    <div className="shrink-0 flex safe-bottom nav-pinned" style={{ background: C.card, borderTop: `1px solid ${C.line}`, zIndex: 240 }}>
       {nav.map((n) => {
         const on = tab === n.id;
         const badge = badges[n.id] || 0;
@@ -3319,6 +3336,36 @@ function TalentProfile({ talent, posts, trips = [], canRequest, viewer, self, co
                 <span className="absolute -bottom-1 -right-1 rounded-full px-1.5 py-0.5 text-[10px] font-bold" style={{ background: C.gold, color: "#fff" }}>{myStories.length}</span>
               )}
             </button>
+            {self && (
+              <input ref={photoRef} type="file" accept="image/*" className="hidden"
+                onChange={async (e) => {
+                  const file = e.target.files && e.target.files[0];
+                  e.target.value = "";
+                  if (!file) return;
+                  setPhotoBusy(true); setPhotoErr(null);
+                  try {
+                    const dataUri = await new Promise((res, rej) => {
+                      const r = new FileReader();
+                      r.onload = () => res(r.result);
+                      r.onerror = () => rej(new Error("read"));
+                      r.readAsDataURL(file);
+                    });
+                    const small = await shrinkImage(dataUri, 640, 0.85);
+                    const blob = dataUriToBlob(small);
+                    const path = `avatar/${t.id}/${Date.now()}.jpg`;
+                    const { error: upErr } = await supabase.storage.from("post-media")
+                      .upload(path, blob, { contentType: "image/jpeg" });
+                    if (upErr) throw upErr;
+                    const url = supabase.storage.from("post-media").getPublicUrl(path).data.publicUrl;
+                    const { error: dbErr } = await supabase.from("profiles").update({ photo_url: url }).eq("id", t.id);
+                    if (dbErr) throw dbErr;
+                    onProfileSaved && onProfileSaved();
+                  } catch (err) {
+                    setPhotoErr("That photo did not upload. Try a smaller one, or check your connection.");
+                  }
+                  setPhotoBusy(false);
+                }} />
+            )}
             {self && (
               <button onClick={() => photoRef.current?.click()} disabled={photoBusy}
                 className="tap mb-1 inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[12.5px] font-semibold"
@@ -5435,7 +5482,43 @@ function TripsTab({ user, trips, actions, onMessage }) {
       {newTrip && <NewTripSheet user={user} onClose={() => setNewTrip(false)} onDone={() => actions.fetchTrips && actions.fetchTrips()} />}
 
       {mine.length === 0 ? (
-        <Empty Icon={MapIcon} title="No trips yet" body="Create one above, or accept a job request and the trip appears here." />
+        user.kind === "operator" ? (
+          <div className="rounded-2xl p-5" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+            <div className="text-[16px] font-semibold" style={{ color: C.ink }}>Put your season in here</div>
+            <p className="text-[13px] mt-1.5 leading-relaxed" style={{ color: C.muted }}>
+              Most operators already have trips booked in a notebook or a spreadsheet. Add them here and
+              everything else in the app starts working for you.
+            </p>
+
+            {[["1", "Add the trips you already have",
+               "Tap New trip. Name it, set the dates, add the meeting point, any allergies and notes. Nothing else needs to exist first."],
+              ["2", "Put your crew on each one",
+               "Pick a guide or driver and you see straight away who is free on those dates. Anyone already booked cannot be chosen. If they are not on the app yet, invite them by email and they land on that trip."],
+              ["3", "Book the nights",
+               "Open Stays and each night of the trip is listed. Tap the plus on any night to ask a hotel, and it shows you how many nights are still uncovered."],
+              ["4", "Let it run",
+               "The crew chat opens 3 days before. Reminders go out for the trip, for licences, and for grading afterwards. You do not have to remember any of it."],
+            ].map(([n, title, body]) => (
+              <div key={n} className="flex gap-3 mt-4">
+                <div className="w-7 h-7 rounded-full flex items-center justify-center shrink-0 text-[12.5px] font-bold"
+                  style={{ background: C.pineSoft, color: C.pine }}>{n}</div>
+                <div className="flex-1 min-w-0">
+                  <div className="text-[14px] font-semibold" style={{ color: C.ink }}>{title}</div>
+                  <p className="text-[12.5px] mt-0.5 leading-snug" style={{ color: C.muted }}>{body}</p>
+                </div>
+              </div>
+            ))}
+
+            <div className="rounded-xl px-3.5 py-3 mt-5" style={{ background: C.goldSoft }}>
+              <p className="text-[12.5px] leading-snug" style={{ color: "#7a5a1e" }}>
+                <b>Not booked yet?</b> Keep it as an enquiry in <b>Action</b> instead. When the guest says yes,
+                one tap turns it into a trip with their name, dates and notes already filled in.
+              </p>
+            </div>
+          </div>
+        ) : (
+          <Empty Icon={MapIcon} title="No trips yet" body="Create one above, or accept a job request and the trip appears here." />
+        )
       ) : (
         <>
           {/* Signing is an action, not a category. It stays above the tabs so it
@@ -6154,6 +6237,427 @@ function ChannelMembers({ trip, meId, isOperator, onMessage, onChanged }) {
    answer Druk Pah's questions, or just describe the trip in words. Whatever it
    drafts is fully editable, and the operator's own touches are theirs alone. */
 
+/* Turn rows into a CSV that Excel opens cleanly.
+   The awkward parts, all of which bite in real exports:
+     - a comma or quote or newline inside a value must be quoted and escaped
+     - a value starting with = + - @ is run as a FORMULA by Excel, which is both
+       wrong and a security problem, so it gets prefixed
+     - phone numbers like 17123456 lose nothing, but +975... must stay text
+     - a UTF-8 BOM is required or Excel mangles accented names */
+function csvCell(v) {
+  if (v === null || v === undefined) return "";
+  let s = String(v);
+  if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;          // stop Excel running it
+  if (/[",\n\r]/.test(s)) s = '"' + s.replace(/"/g, '""') + '"';
+  return s;
+}
+function toCSV(headers, rows) {
+  const head = headers.map((h) => csvCell(h.label)).join(",");
+  const body = rows.map((r) => headers.map((h) => csvCell(
+    typeof h.get === "function" ? h.get(r) : r[h.key]
+  )).join(",")).join("\r\n");
+  // Excel needs a byte order mark or it mangles accented names. Written as a
+  // char code rather than an escape, so the no-escapes rule stays absolute.
+  return String.fromCharCode(0xFEFF) + head + "\r\n" + body;
+}
+function downloadCSV(name, headers, rows) {
+  const blob = new Blob([toCSV(headers, rows)], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = name;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+const LOST_LABEL = {
+  price: "Too expensive", dates: "Dates did not work", no_reply: "Stopped replying",
+  chose_other: "Went with someone else", changed_plans: "Changed their plans",
+  visa: "Visa or permit", other: "Other", not_recorded: "Not recorded",
+};
+const SOURCE_LABEL = {
+  website: "Website", referral: "Referral", agent: "Agent", repeat: "Repeat guest",
+  social: "Social media", walk_in: "Walk in", other: "Other", not_recorded: "Not recorded",
+};
+
+function Bar({ label, n, of, won, tone }) {
+  const pct = of > 0 ? Math.round((n / of) * 100) : 0;
+  const wonPct = n > 0 && won != null ? Math.round((won / n) * 100) : null;
+  return (
+    <div className="mb-2">
+      <div className="flex items-baseline gap-2 mb-1">
+        <span className="text-[13px] font-medium flex-1 min-w-0 truncate" style={{ color: C.ink }}>{label}</span>
+        <span className="text-[13px] font-semibold" style={{ color: C.ink }}>{n}</span>
+        {wonPct != null && <span className="text-[11.5px]" style={{ color: C.muted }}>{wonPct}% won</span>}
+      </div>
+      <div className="h-2 rounded-full overflow-hidden" style={{ background: C.lineSoft }}>
+        <div style={{ width: `${pct}%`, height: "100%", background: tone || C.pine }} />
+      </div>
+    </div>
+  );
+}
+
+/* Reports: what happened, why, and everything in a form a spreadsheet accepts. */
+function ReportsTab({ user }) {
+  const [d, setD] = useState(null);
+  const [rows, setRows] = useState([]);
+  const [trips, setTrips] = useState([]);
+  const [err, setErr] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const year = new Date().getFullYear();
+  const [from, setFrom] = useState(`${year}-01-01`);
+  const [to, setTo] = useState(`${year}-12-31`);
+
+  const load = async () => {
+    setBusy(true); setErr(null);
+    const [ins, enq, trp] = await Promise.all([
+      supabase.rpc("operator_insights", { from_date: from, to_date: to }),
+      supabase.from("enquiries").select("*").order("start_date"),
+      supabase.from("trips").select("*").eq("operator_id", user.talentId).order("start_date"),
+    ]);
+    if (ins.error) setErr("Could not build the report.");
+    setD(ins.data || {}); setRows(enq.data || []); setTrips(trp.data || []);
+    setBusy(false);
+  };
+  useEffect(() => { if (CLOUD) load(); else setD({}); }, [from, to]);
+
+  const stamp = () => new Date().toISOString().slice(0, 10);
+
+  const exportEnquiries = () => downloadCSV(`enquiries-${stamp()}.csv`, [
+    { label: "Guest", key: "guest_name" }, { label: "Country", key: "guest_country" },
+    { label: "Email", key: "guest_email" }, { label: "Phone", key: "guest_phone" },
+    { label: "Guests", key: "party_size" }, { label: "From", key: "start_date" },
+    { label: "To", key: "end_date" }, { label: "Status", key: "status" },
+    { label: "Why lost", get: (r) => LOST_LABEL[r.lost_reason] || "" },
+    { label: "Found you via", get: (r) => SOURCE_LABEL[r.source] || "" },
+    { label: "Became a trip", get: (r) => (r.trip_id ? "Yes" : "No") },
+    { label: "Note", key: "note" },
+    { label: "Received", get: (r) => String(r.created_at || "").slice(0, 10) },
+  ], rows);
+
+  const exportTrips = () => downloadCSV(`trips-${stamp()}.csv`, [
+    { label: "Trip", key: "title" }, { label: "From", key: "start_date" }, { label: "To", key: "end_date" },
+    { label: "Nights", get: (t) => t.start_date && t.end_date
+        ? Math.max(1, Math.round((new Date(t.end_date) - new Date(t.start_date)) / 86400000)) : "" },
+    { label: "Guest", key: "guest_name" }, { label: "Country", key: "guest_country" },
+    { label: "Party size", key: "party_size" }, { label: "Meeting point", key: "meeting_point" },
+    { label: "Allergies", key: "allergies" }, { label: "Special notes", key: "special_notes" },
+    { label: "Status", key: "status" },
+  ], trips);
+
+  // Only addresses whose owner agreed to hear from you again.
+  const mailable = rows.filter((r) => r.status === "lost" && r.guest_email && r.marketing_ok);
+  const exportMailing = () => downloadCSV(`offers-list-${stamp()}.csv`, [
+    { label: "Email", key: "guest_email" }, { label: "Name", key: "guest_name" },
+    { label: "Country", key: "guest_country" },
+    { label: "Wanted to travel", key: "start_date" },
+    { label: "Guests", key: "party_size" },
+    { label: "Why it did not happen", get: (r) => LOST_LABEL[r.lost_reason] || "" },
+  ], mailable);
+
+  const totals = (d && d.totals) || {};
+  const months = (d && d.by_month) || [];
+  const peak = months.reduce((a, b) => (!a || (b.enquiries > a.enquiries) ? b : a), null);
+  const maxMonth = months.reduce((a, b) => Math.max(a, b.enquiries), 0);
+  const countries = (d && d.by_country) || [];
+  const why = (d && d.why_lost) || [];
+  const sources = (d && d.by_source) || [];
+  const lead = (d && d.lead_days) || {};
+  const lostTotal = why.reduce((a, b) => a + b.n, 0);
+
+  if (d === null) return <p className="text-[13px] px-5 py-4" style={{ color: C.muted }}>Building the report…</p>;
+
+  return (
+    <div className="px-5 py-5">
+      <h1 className="text-[22px] font-semibold tracking-[-0.01em]" style={{ color: C.ink }}>Reports</h1>
+      <p className="text-[13px] mt-1 mb-4 leading-snug" style={{ color: C.muted }}>
+        Your own year, counted. Everything here comes from what you have recorded, nothing is estimated.
+      </p>
+
+      <div className="flex gap-2 mb-5">
+        <div className="flex-1">
+          <BLabel>From</BLabel>
+          <input type="date" value={from} onChange={(e) => setFrom(e.target.value)}
+            className="w-full h-11 px-3 rounded-xl text-[14px]" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }} />
+        </div>
+        <div className="flex-1">
+          <BLabel>To</BLabel>
+          <input type="date" value={to} onChange={(e) => setTo(e.target.value)}
+            className="w-full h-11 px-3 rounded-xl text-[14px]" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }} />
+        </div>
+      </div>
+
+      {from > to && (
+        <div className="rounded-xl px-3.5 py-2.5 mb-3 flex items-start gap-2" style={{ background: C.goldSoft, border: `1px solid ${C.gold}` }}>
+          <AlertTriangle size={15} color={C.gold} className="shrink-0 mt-0.5" />
+          <span className="text-[12.5px] leading-snug" style={{ color: "#7a5a1e" }}>
+            The From date is after the To date, so nothing can fall inside it. Swap them to see the report.
+          </span>
+        </div>
+      )}
+      {err && <p className="text-[13px] mb-3" style={{ color: C.maroon }}>{err}</p>}
+
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5 mb-5">
+        <DashCount n={totals.enquiries ?? 0} label="enquiries" />
+        <DashCount n={totals.won ?? 0} label="became trips" />
+        <DashCount n={totals.conversion != null ? totals.conversion + "%" : "–"} label="conversion" />
+        <DashCount n={totals.guests ?? 0} label="guests won" />
+      </div>
+
+      {totals.enquiries === 0 && (
+        <div className="rounded-2xl px-4 py-6 text-center mb-5" style={{ background: C.card, border: `1px dashed ${C.line}` }}>
+          <div className="text-[14.5px] font-semibold" style={{ color: C.ink }}>Nothing to report yet</div>
+          <p className="text-[12.5px] mt-1 leading-snug" style={{ color: C.muted }}>
+            Every enquiry you record builds this page. Come back after a season and it will tell you
+            when your guests want to travel and why the others said no.
+          </p>
+        </div>
+      )}
+
+      {months.length > 0 && (
+        <div className="rounded-2xl p-4 mb-4" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+          <SectionLabel trailing={peak ? `busiest: ${peak.label}` : undefined}>When they want to travel</SectionLabel>
+          {months.map((m) => (
+            <Bar key={m.m} label={m.label} n={m.enquiries} of={maxMonth} won={m.won} />
+          ))}
+          <p className="text-[11.5px] mt-1.5 leading-snug" style={{ color: C.muted }}>
+            By the month guests asked to travel in, not when they wrote to you.
+          </p>
+        </div>
+      )}
+
+      {why.length > 0 && (
+        <div className="rounded-2xl p-4 mb-4" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+          <SectionLabel trailing={`${lostTotal} lost`}>Why they did not book</SectionLabel>
+          {why.map((w) => (
+            <Bar key={w.reason} label={LOST_LABEL[w.reason] || w.reason} n={w.n} of={lostTotal}
+              tone={w.reason === "not_recorded" ? C.line : C.maroon} />
+          ))}
+          {why.some((w) => w.reason === "not_recorded") && (
+            <p className="text-[11.5px] mt-1.5 leading-snug" style={{ color: C.muted }}>
+              Some have no reason recorded. Choosing one when an enquiry goes quiet makes this answerable.
+            </p>
+          )}
+        </div>
+      )}
+
+      {countries.length > 0 && (
+        <div className="rounded-2xl p-4 mb-4" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+          <SectionLabel>Where they come from</SectionLabel>
+          {countries.slice(0, 8).map((c) => (
+            <Bar key={c.country} label={c.country} n={c.n} of={countries[0].n} won={c.won} tone={C.gold} />
+          ))}
+        </div>
+      )}
+
+      {sources.length > 0 && (
+        <div className="rounded-2xl p-4 mb-4" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+          <SectionLabel>How they found you</SectionLabel>
+          {sources.map((x) => (
+            <Bar key={x.source} label={SOURCE_LABEL[x.source] || x.source} n={x.n} of={sources[0].n} won={x.won} />
+          ))}
+        </div>
+      )}
+
+      {lead && lead.median != null && (
+        <div className="rounded-2xl p-4 mb-5" style={{ background: C.pineSoft }}>
+          <div className="text-[13.5px] font-semibold" style={{ color: C.pine }}>
+            Guests book about {lead.median} days ahead
+          </div>
+          <p className="text-[12px] mt-1 leading-snug" style={{ color: C.pine, opacity: .9 }}>
+            Shortest {lead.shortest}, longest {lead.longest}. Advertising later than {lead.median} days
+            before a departure is likely too late for most of them.
+          </p>
+        </div>
+      )}
+
+      <SectionLabel>Take it away</SectionLabel>
+      <button onClick={exportEnquiries} disabled={!rows.length}
+        className="tap w-full h-12 rounded-xl flex items-center justify-between px-4 text-[14px] font-semibold mb-2"
+        style={{ background: C.card, border: `1px solid ${C.line}`, color: rows.length ? C.ink : C.muted }}>
+        <span>All enquiries</span><span className="text-[12px]" style={{ color: C.muted }}>{rows.length} rows</span>
+      </button>
+      <button onClick={exportTrips} disabled={!trips.length}
+        className="tap w-full h-12 rounded-xl flex items-center justify-between px-4 text-[14px] font-semibold mb-2"
+        style={{ background: C.card, border: `1px solid ${C.line}`, color: trips.length ? C.ink : C.muted }}>
+        <span>All trips</span><span className="text-[12px]" style={{ color: C.muted }}>{trips.length} rows</span>
+      </button>
+      <button onClick={exportMailing} disabled={!mailable.length}
+        className="tap w-full h-12 rounded-xl flex items-center justify-between px-4 text-[14px] font-semibold"
+        style={{ background: C.card, border: `1px solid ${C.line}`, color: mailable.length ? C.ink : C.muted }}>
+        <span>Offers list</span><span className="text-[12px]" style={{ color: C.muted }}>{mailable.length} agreed</span>
+      </button>
+      <p className="text-[11.5px] mt-2 leading-snug" style={{ color: C.muted }}>
+        The offers list holds only guests who did not book <b>and</b> agreed to hear from you again.
+        An address given for a quote is not permission to market, so the rest are left out.
+      </p>
+      <p className="text-[11.5px] mt-2 leading-snug" style={{ color: C.muted }}>
+        Files open straight in Excel or Google Sheets.
+      </p>
+    </div>
+  );
+}
+
+/* ---- The trip on paper. Two versions on purpose:
+        Guest copy  - the itinerary, the stays, where to meet. Nothing internal.
+        Crew sheet  - everything, including phone numbers, allergies and notes.
+        Printed through the browser, so it works offline and needs no library. ---- */
+function TripDocument({ trip, user, onClose }) {
+  const [copy, setCopy] = useState("guest");
+  const [stays, setStays] = useState([]);
+  const guest = copy === "guest";
+
+  useEffect(() => {
+    if (!CLOUD) return;
+    (async () => {
+      const { data } = await supabase.from("business_bookings").select("*")
+        .eq("trip_id", trip.id).order("start_date");
+      setStays((data || []).filter((b) => b.status !== "cancelled" && b.status !== "declined"));
+    })();
+  }, [trip.id]);
+
+  const nights = (() => {
+    if (!trip.start) return [];
+    const a = new Date(trip.start + "T00:00"), b = new Date((trip.end || trip.start) + "T00:00");
+    const out = []; const d = new Date(a); let n = 1;
+    while (d < b || (n === 1 && +a === +b)) {
+      out.push({ n, date: d.toISOString().slice(0, 10) });
+      d.setDate(d.getDate() + 1); n++; if (n > 60) break;
+    }
+    return out;
+  })();
+
+  const stayFor = (date) => stays.find((b) => b.start_date <= date && b.end_date > date);
+  const itin = trip.itinerary || [];
+  const crew = (trip.members || []).filter((m) => m.roleInTrip !== "operator");
+
+  return createPortal((
+    <div className="fixed inset-0 overflow-y-auto" style={{ background: C.bg, zIndex: 250 }}>
+      {/* controls, never printed */}
+      <div className="no-print sticky top-0 flex items-center gap-2 px-5 py-3"
+        style={{ background: C.card, borderBottom: `1px solid ${C.line}` }}>
+        <button onClick={onClose} className="tap flex items-center gap-1.5 text-[13.5px] font-semibold shrink-0" style={{ color: C.pine }}>
+          <ChevronLeft size={16} /> Back
+        </button>
+        <div className="flex-1" />
+        <div className="flex gap-1.5">
+          {[["guest", "Guest copy"], ["crew", "Crew sheet"]].map(([id, label]) => (
+            <button key={id} onClick={() => setCopy(id)}
+              className="tap rounded-full px-3 py-1.5 text-[12.5px] font-semibold"
+              style={{ background: copy === id ? C.pine : C.bg, color: copy === id ? "#fff" : C.ink, border: `1px solid ${copy === id ? C.pine : C.line}` }}>{label}</button>
+          ))}
+        </div>
+        <button onClick={() => window.print()} className="tap rounded-full px-4 py-1.5 text-[12.5px] font-semibold shrink-0"
+          style={{ background: C.gold, color: "#fff" }}>Print or save as PDF</button>
+      </div>
+
+      <div className="print-page" style={{ maxWidth: 760, margin: "0 auto", padding: "28px 26px 60px" }}>
+        {/* letterhead */}
+        <div className="flex items-start justify-between gap-4 pb-4" style={{ borderBottom: `2px solid ${C.pine}` }}>
+          <div>
+            <div className="text-[19px] font-semibold" style={{ color: C.pine }}>{trip.operatorName || user.name}</div>
+            <div className="text-[11.5px] mt-0.5" style={{ color: C.muted }}>
+              {guest ? "Your journey in Bhutan" : "Crew sheet — not for the guest"}
+            </div>
+          </div>
+          <div className="text-right shrink-0">
+            <div className="text-[11px] font-bold tracking-[.14em] uppercase" style={{ color: C.gold }}>
+              {guest ? "Itinerary" : "Trip sheet"}
+            </div>
+            <div className="text-[12px] mt-0.5" style={{ color: C.muted }}>{fmtRange(trip.start, trip.end || trip.start)}</div>
+          </div>
+        </div>
+
+        <h1 className="text-[24px] font-semibold mt-5 leading-tight" style={{ color: C.ink }}>{trip.title}</h1>
+        {trip.guestName && (
+          <div className="text-[14px] mt-1" style={{ color: C.muted }}>
+            Prepared for {trip.guestName}{trip.guestCountry ? `, ${trip.guestCountry}` : ""}
+            {trip.partySize ? ` · ${trip.partySize} guest${trip.partySize === 1 ? "" : "s"}` : ""}
+          </div>
+        )}
+
+        {trip.meeting && (
+          <div className="rounded-xl px-4 py-3 mt-4" style={{ background: C.pineSoft }}>
+            <div className="text-[10.5px] font-bold tracking-[.12em] uppercase" style={{ color: C.pine }}>Meeting point</div>
+            <div className="text-[14.5px] font-medium mt-0.5" style={{ color: C.pine }}>{trip.meeting}</div>
+          </div>
+        )}
+
+        {/* the days */}
+        <div className="mt-6">
+          <div className="text-[11px] font-bold tracking-[.14em] uppercase mb-3" style={{ color: C.gold }}>Day by day</div>
+          {itin.length === 0 && nights.length === 0 && (
+            <p className="text-[13.5px]" style={{ color: C.muted }}>No itinerary has been added yet.</p>
+          )}
+          {(itin.length ? itin : nights.map((x) => ({ day: x.n, title: "", detail: "" }))).map((d, i) => {
+            const night = nights[i];
+            const stay = night ? stayFor(night.date) : null;
+            return (
+              <div key={i} className="pb-3 mb-3 print-row" style={{ borderBottom: `1px solid ${C.lineSoft}` }}>
+                <div className="flex items-baseline gap-3">
+                  <div className="text-[11px] font-bold tracking-[.08em] uppercase shrink-0" style={{ color: C.gold, width: 62 }}>
+                    Day {d.day || i + 1}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-[15px] font-semibold" style={{ color: C.ink }}>{d.title || (night ? fmtDate(night.date) : "")}</div>
+                    {d.detail && <p className="text-[13.5px] mt-1 leading-relaxed" style={{ color: C.muted }}>{d.detail}</p>}
+                    {stay && (
+                      <div className="text-[12.5px] mt-1.5" style={{ color: C.pine }}>
+                        Night: {stay.business_name}
+                        {!guest && stay.rooms ? ` · ${stay.rooms} room${stay.rooms === 1 ? "" : "s"}` : ""}
+                        {!guest && stay.quote_amount != null ? ` · Nu ${Number(stay.quote_amount).toLocaleString("en-IN")}` : ""}
+                      </div>
+                    )}
+                  </div>
+                  {night && <div className="text-[12px] shrink-0" style={{ color: C.muted }}>{fmtDate(night.date)}</div>}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* crew: names for the guest, contact details only on the crew sheet */}
+        {crew.length > 0 && (
+          <div className="mt-5">
+            <div className="text-[11px] font-bold tracking-[.14em] uppercase mb-2" style={{ color: C.gold }}>
+              {guest ? "Looking after you" : "Crew"}
+            </div>
+            {crew.map((m) => (
+              <div key={m.id} className="flex items-center gap-2 py-1">
+                <span className="text-[14px] font-medium" style={{ color: C.ink }}>{m.name}</span>
+                <span className="text-[12.5px]" style={{ color: C.muted }}>
+                  {m.roleInTrip === "driver" ? "Driver" : m.roleInTrip === "guide" ? "Guide" : TRIP_ROLE_LABEL[m.roleInTrip] || m.roleInTrip}
+                </span>
+                {!guest && (talentById(m.id) || {}).phone && (
+                  <span className="text-[12.5px] ml-auto" style={{ color: C.ink }}>{(talentById(m.id) || {}).phone}</span>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* internal only */}
+        {!guest && trip.allergies && (
+          <div className="rounded-xl px-4 py-3 mt-5" style={{ background: C.maroonSoft }}>
+            <div className="text-[10.5px] font-bold tracking-[.12em] uppercase" style={{ color: C.maroon }}>Allergies and medical</div>
+            <p className="text-[13.5px] mt-1 leading-relaxed" style={{ color: C.maroon }}>{trip.allergies}</p>
+          </div>
+        )}
+        {!guest && trip.specialNotes && (
+          <div className="rounded-xl px-4 py-3 mt-2.5" style={{ background: C.goldSoft }}>
+            <div className="text-[10.5px] font-bold tracking-[.12em] uppercase" style={{ color: "#7a5a1e" }}>Special notes</div>
+            <p className="text-[13.5px] mt-1 leading-relaxed" style={{ color: "#7a5a1e" }}>{trip.specialNotes}</p>
+          </div>
+        )}
+
+        <div className="mt-8 pt-4 text-[11.5px]" style={{ borderTop: `1px solid ${C.line}`, color: C.muted }}>
+          {trip.operatorName || user.name}
+          {guest ? " · We look forward to welcoming you." : ` · Printed ${fmtDate(new Date().toISOString().slice(0, 10))}`}
+        </div>
+      </div>
+    </div>
+  ), document.body);
+}
+
 function ItineraryDayCard({ day, index, onChange, onRemove }) {
   return (
     <div className="rounded-2xl p-3.5 mb-2.5" style={{ background: C.card, border: `1px solid ${C.line}` }}>
@@ -6695,6 +7199,7 @@ function TripHub({ user, meId, trip, actions, onMessage, onBack }) {
   const [detailTab, setDetailTab] = useState("itinerary");
   const [crewOpen, setCrewOpen] = useState(false);
   const [building, setBuilding] = useState(false);
+  const [docOpen, setDocOpen] = useState(false);
   const [editDetail, setEditDetail] = useState(false);
   const [mpEdit, setMpEdit] = useState(false);
   const [mpPlace, setMpPlace] = useState("");
@@ -7070,6 +7575,15 @@ function TripHub({ user, meId, trip, actions, onMessage, onBack }) {
         )}
 
         <SectionLabel trailing={["active", "wrapping"].includes(tripStateNow(trip)) ? `closes in ${tripDaysLeft(trip)}d` : undefined}>Crew chat</SectionLabel>
+        {isTripOperator && (
+          <button onClick={() => setDocOpen(true)}
+            className="tap w-full h-11 rounded-xl flex items-center justify-center gap-2 text-[13.5px] font-semibold mb-3"
+            style={{ background: C.card, border: `1px solid ${C.line}`, color: C.pine }}>
+            <FileDown size={16} /> Trip document — guest copy or crew sheet
+          </button>
+        )}
+        {docOpen && <TripDocument trip={trip} user={user} onClose={() => setDocOpen(false)} />}
+
         <ChannelMembers trip={trip} meId={meId} isOperator={isTripOperator}
           onMessage={onMessage} onChanged={() => actions.fetchTrips && actions.fetchTrips()} />
 
@@ -11956,11 +12470,14 @@ function EnquiriesBoard({ user }) {
   const [rows, setRows] = useState(null);
   const [building, setBuilding] = useState(null);   // the enquiry being turned into a trip
   const [pane, setPane] = useState("live");
+  const [losing, setLosing] = useState(null);      // the enquiry being marked quiet
+  const [editing, setEditing] = useState(null);    // the enquiry having its details filled in
   const [showDone, setShowDone] = useState(false);
   const [adding, setAdding] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
-  const [f, setF] = useState({ guest_name: "", guest_country: "", party_size: "", start_date: "", end_date: "", note: "" });
+  const [f, setF] = useState({ guest_name: "", guest_country: "", party_size: "", start_date: "", end_date: "", note: "",
+    guest_email: "", guest_phone: "", source: "", marketing_ok: false });
 
   const load = async () => {
     const { data, error } = await supabase.from("enquiries").select("*")
@@ -11982,6 +12499,10 @@ function EnquiriesBoard({ user }) {
       start_date: f.start_date || null,
       end_date: f.end_date || null,
       note: f.note.trim() || null,
+      guest_email: f.guest_email.trim().toLowerCase() || null,
+      guest_phone: f.guest_phone.trim() || null,
+      source: f.source || null,
+      marketing_ok: !!f.marketing_ok,
     });
     setBusy(false);
     if (error) { setErr("That did not save. Try once more."); return; }
@@ -12093,7 +12614,13 @@ function EnquiriesBoard({ user }) {
                 <button onClick={() => { setStatus(r.id, "won"); setPane("ready"); }} className="tap text-[11.5px] font-semibold rounded-full px-2.5 py-1"
                   style={{ background: C.pine, color: "#fff" }}>Guest said yes</button>
               )}
-              <button onClick={() => setStatus(r.id, "lost")} className="tap text-[11.5px] font-semibold rounded-full px-2.5 py-1"
+              <button onClick={() => setEditing(r)} className="tap text-[11.5px] font-semibold rounded-full px-2.5 py-1"
+                style={{ background: (!r.guest_email || !r.source) ? C.goldSoft : C.bg,
+                         border: `1px solid ${(!r.guest_email || !r.source) ? C.gold : C.line}`,
+                         color: (!r.guest_email || !r.source) ? "#7a5a1e" : C.ink }}>
+                {(!r.guest_email || !r.source) ? "Add details" : "Details"}
+              </button>
+              <button onClick={() => setLosing(r)} className="tap text-[11.5px] font-semibold rounded-full px-2.5 py-1"
                 style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.muted }}>Went quiet</button>
             </div>
 
@@ -12120,6 +12647,36 @@ function EnquiriesBoard({ user }) {
           <input value={f.guest_name} onChange={(e) => setF({ ...f, guest_name: e.target.value })} maxLength={80}
             placeholder="Name, or the agent who wrote"
             className="w-full h-11 px-3 rounded-xl text-[15px] mb-3" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
+
+          <BLabel>Their email</BLabel>
+          <input value={f.guest_email} onChange={(e) => setF({ ...f, guest_email: e.target.value.trim() })} maxLength={90}
+            inputMode="email" autoCapitalize="none" placeholder="guest@example.com"
+            className="w-full h-11 px-3 rounded-xl text-[15px]" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
+          {suggestEmail(f.guest_email) && (
+            <button onClick={() => setF({ ...f, guest_email: suggestEmail(f.guest_email) })}
+              className="tap w-full rounded-lg px-2.5 py-1.5 mt-1.5 text-left"
+              style={{ background: C.goldSoft, border: `1px solid ${C.gold}` }}>
+              <span className="text-[12px]" style={{ color: "#7a5a1e" }}>Did you mean <b>{suggestEmail(f.guest_email)}</b>?</span>
+            </button>
+          )}
+
+          <label className="flex items-start gap-2.5 mt-2 mb-3 cursor-pointer">
+            <input type="checkbox" checked={f.marketing_ok} onChange={(e) => setF({ ...f, marketing_ok: e.target.checked })}
+              style={{ width: 18, height: 18, marginTop: 1, accentColor: C.pine }} />
+            <span className="text-[12px] leading-snug" style={{ color: C.muted }}>
+              They are happy to hear about future offers. Only these go on your offers list — an address
+              given for a quote is not permission to market.
+            </span>
+          </label>
+
+          <BLabel>How did they find you?</BLabel>
+          <div className="flex flex-wrap gap-1.5 mb-3">
+            {[["website", "Website"], ["referral", "Referral"], ["agent", "Agent"], ["repeat", "Repeat guest"], ["social", "Social"], ["walk_in", "Walk in"]].map(([id, label]) => (
+              <button key={id} onClick={() => setF({ ...f, source: f.source === id ? "" : id })}
+                className="tap rounded-full px-3 py-1.5 text-[12.5px] font-semibold"
+                style={{ background: f.source === id ? C.pine : C.bg, color: f.source === id ? "#fff" : C.ink, border: `1px solid ${f.source === id ? C.pine : C.line}` }}>{label}</button>
+            ))}
+          </div>
 
           <div className="flex gap-2 mb-3">
             <div className="flex-1">
@@ -12192,6 +12749,91 @@ function EnquiriesBoard({ user }) {
         </div>
       )}
 
+      {editing && createPortal((
+        <div className="fixed inset-0 flex items-end lg:items-center lg:justify-center" style={{ background: "rgba(8,10,8,.55)", zIndex: 236 }} onClick={() => setEditing(null)}>
+          <div className="w-full rounded-t-3xl lg:rounded-3xl safe-bottom" style={{ background: C.bg, maxWidth: 480, maxHeight: "92dvh", overflowY: "auto" }} onClick={(e) => e.stopPropagation()}>
+            <div className="pt-3"><div className="w-10 h-1 rounded-full mx-auto" style={{ background: C.line }} /></div>
+            <div className="px-5 pt-3 pb-6">
+              <h3 className="text-[17px] font-semibold" style={{ color: C.ink }}>{editing.guest_name}</h3>
+              <p className="text-[12.5px] mt-1 mb-3 leading-snug" style={{ color: C.muted }}>
+                Fill in what you know. These are what the reports are built from.
+              </p>
+
+              <BLabel>Their email</BLabel>
+              <input value={editing.guest_email || ""} onChange={(e) => setEditing({ ...editing, guest_email: e.target.value.trim() })}
+                inputMode="email" autoCapitalize="none" maxLength={90} placeholder="guest@example.com"
+                className="w-full h-11 px-3 rounded-xl text-[15px] mb-2" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }} />
+
+              <BLabel>Country</BLabel>
+              <input value={editing.guest_country || ""} onChange={(e) => setEditing({ ...editing, guest_country: e.target.value })}
+                maxLength={40} placeholder="Australia"
+                className="w-full h-11 px-3 rounded-xl text-[15px] mb-2" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }} />
+
+              <BLabel>How did they find you?</BLabel>
+              <div className="flex flex-wrap gap-1.5 mb-3">
+                {[["website", "Website"], ["referral", "Referral"], ["agent", "Agent"], ["repeat", "Repeat guest"], ["social", "Social"], ["walk_in", "Walk in"]].map(([id, label]) => (
+                  <button key={id} onClick={() => setEditing({ ...editing, source: editing.source === id ? null : id })}
+                    className="tap rounded-full px-3 py-1.5 text-[12.5px] font-semibold"
+                    style={{ background: editing.source === id ? C.pine : C.card, color: editing.source === id ? "#fff" : C.ink, border: `1px solid ${editing.source === id ? C.pine : C.line}` }}>{label}</button>
+                ))}
+              </div>
+
+              <label className="flex items-start gap-2.5 mb-4 cursor-pointer">
+                <input type="checkbox" checked={!!editing.marketing_ok} onChange={(e) => setEditing({ ...editing, marketing_ok: e.target.checked })}
+                  style={{ width: 18, height: 18, marginTop: 1, accentColor: C.pine }} />
+                <span className="text-[12px] leading-snug" style={{ color: C.muted }}>
+                  Happy to hear about future offers.
+                </span>
+              </label>
+
+              <button onClick={async () => {
+                  await supabase.from("enquiries").update({
+                    guest_email: (editing.guest_email || "").trim().toLowerCase() || null,
+                    guest_country: (editing.guest_country || "").trim() || null,
+                    source: editing.source || null,
+                    marketing_ok: !!editing.marketing_ok,
+                    updated_at: new Date().toISOString(),
+                  }).eq("id", editing.id);
+                  setEditing(null); load();
+                }}
+                className="tap w-full h-12 rounded-xl text-[15px] font-semibold" style={{ background: C.pine, color: "#fff" }}>Save</button>
+              <button onClick={() => setEditing(null)} className="tap w-full text-[13px] font-semibold mt-2" style={{ color: C.muted }}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      ), document.body)}
+
+      {losing && createPortal((
+        <div className="fixed inset-0 flex items-end lg:items-center lg:justify-center" style={{ background: "rgba(8,10,8,.55)", zIndex: 236 }} onClick={() => setLosing(null)}>
+          <div className="w-full rounded-t-3xl lg:rounded-3xl safe-bottom" style={{ background: C.bg, maxWidth: 460 }} onClick={(e) => e.stopPropagation()}>
+            <div className="pt-3"><div className="w-10 h-1 rounded-full mx-auto" style={{ background: C.line }} /></div>
+            <div className="px-5 pt-3 pb-6">
+              <h3 className="text-[17px] font-semibold" style={{ color: C.ink }}>Why did it not happen?</h3>
+              <p className="text-[12.5px] mt-1 mb-3 leading-snug" style={{ color: C.muted }}>
+                One tap. After a season this is what tells you where you are losing work.
+              </p>
+              {[["price", "Too expensive"], ["dates", "Dates did not work"], ["no_reply", "Stopped replying"],
+                ["chose_other", "Went with someone else"], ["changed_plans", "Changed their plans"],
+                ["visa", "Visa or permit"], ["other", "Something else"]].map(([id, label]) => (
+                <button key={id} onClick={async () => {
+                    await supabase.from("enquiries").update({ status: "lost", lost_reason: id }).eq("id", losing.id);
+                    setLosing(null); load();
+                  }}
+                  className="tap w-full text-left rounded-xl px-4 py-3 mb-1.5 text-[14px] font-medium"
+                  style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }}>{label}</button>
+              ))}
+              <button onClick={async () => {
+                  await supabase.from("enquiries").update({ status: "lost" }).eq("id", losing.id);
+                  setLosing(null); load();
+                }}
+                className="tap w-full text-[13px] font-semibold mt-2" style={{ color: C.muted }}>
+                Skip, I would rather not say
+              </button>
+            </div>
+          </div>
+        </div>
+      ), document.body)}
+
       {pane === "quiet" && lost.length === 0 && (
         <div className="rounded-2xl px-4 py-5 text-center" style={{ background: C.card, border: `1px dashed ${C.line}` }}>
           <div className="text-[14.5px] font-semibold" style={{ color: C.ink }}>Nothing has gone quiet</div>
@@ -12226,6 +12868,7 @@ function EnquiriesBoard({ user }) {
 
 function ActionTab({ user, unread, onOpenMessages, onOpenTrip, onGoTab }) {
   const desktop = useIsDesktop();
+  const [showReports, setShowReports] = useState(false);
 
   // Desktop gets the command centre. The phone keeps the simpler stacked view,
   // which is the right shape for a small screen and is untouched.
@@ -12237,6 +12880,21 @@ function ActionTab({ user, unread, onOpenMessages, onOpenTrip, onGoTab }) {
           <EnquiriesBoard user={user} />
         </div>
       </>
+    );
+  }
+
+  // On a phone there is no Reports tab in the bar, so it is reached from here.
+  // An operator working from a phone must still be able to see their own year.
+  if (user.kind === "operator" && showReports) {
+    return (
+      <div>
+        <button onClick={() => setShowReports(false)}
+          className="tap flex items-center gap-1.5 text-[13.5px] font-semibold px-5 pt-4"
+          style={{ color: C.pine }}>
+          <ChevronLeft size={16} /> Back
+        </button>
+        <ReportsTab user={user} />
+      </div>
     );
   }
 
@@ -12257,6 +12915,22 @@ function ActionTab({ user, unread, onOpenMessages, onOpenTrip, onGoTab }) {
         <ChevronLeft size={17} color={C.muted} style={{ transform: "rotate(180deg)" }} className="shrink-0" />
       </button>
 
+      {user.kind === "operator" && (
+        <button onClick={() => setShowReports(true)}
+          className="tap w-full rounded-2xl p-3.5 mb-5 flex items-center gap-3 text-left"
+          style={{ background: C.card, border: `1px solid ${C.line}` }}>
+          <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0" style={{ background: C.goldSoft }}>
+            <BarChart3 size={18} color={C.gold} />
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="text-[14.5px] font-semibold" style={{ color: C.ink }}>Reports</div>
+            <div className="text-[12px]" style={{ color: C.muted }}>
+              Your season, why enquiries were lost, and exports for Excel
+            </div>
+          </div>
+          <ChevronRight size={17} color={C.muted} className="shrink-0" />
+        </button>
+      )}
       <EnquiriesBoard user={user} />
     </div>
   );
