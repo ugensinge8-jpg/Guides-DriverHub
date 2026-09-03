@@ -17,10 +17,10 @@
      // plan  = full ItineraryBrain plan (route, days, verdicts, text)
      // meta  = {party, count, tier, planAround[]} for your pricing UI
    ============================================================ */
-(function(root){
-const IB = (typeof module!=='undefined'&&typeof require!=='undefined')
-  ? require('./itinerary-brain.js')
-  : root.ItineraryBrain;
+const DrukPah = (function(root){
+// The brain is loaded first in the app, so it has already run and this is
+// simply reading the value it left behind on the shared global.
+const IB = root.ItineraryBrain;
 
 const Q=[
 {k:'party',t:'Who is your guest travelling with?',sub:'Everything that follows bends around this.',o:[
@@ -150,18 +150,9 @@ function session(){
 }
 const DrukPah={session,questions:Q,flow,synth,
  greeting:'Kuzuzangpo la \u2014 I am Druk Pah. What does your guest want?'};
-if(typeof module!=='undefined'&&module.exports)module.exports=DrukPah;
-else root.DrukPah=DrukPah;
+root.DrukPah=DrukPah;
+return DrukPah;
 })(typeof window!=='undefined'?window:globalThis);
 
-
-/* ---------------------------------------------------------------
-   Added for the Bhutan Tourism Hub build.
-   This one line makes the file an ES module. Without it Vite sees
-   `module.exports` above, treats the file as CommonJS, wraps it in a
-   factory that is never called, and neither the export nor `window`
-   is ever set. With it, the UMD block above takes the `window` path
-   and this re-exports the same object for a normal import.
-   The logic above is untouched.
-   --------------------------------------------------------------- */
-export default (typeof window !== 'undefined' ? window.DrukPah : globalThis.DrukPah);
+/* Bhutan Tourism Hub build: a plain, single export of the object above. */
+export default DrukPah;

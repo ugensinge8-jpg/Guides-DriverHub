@@ -22,7 +22,7 @@
    and the data tables (VAL, WITHIN, FESTCAL, HOTELS, LAND, DEST…).
    The one invariant: no sentence the data tables cannot back.
    ============================================================ */
-(function(root){
+const ItineraryBrain = (function(root){
 const GATEWAY={
  paro:{n:'Paro',air:1,to:'paro',hrs:0,km:0,
   d:'Every international flight lands here. The only airport a visitor arrives at.'},
@@ -784,18 +784,9 @@ function replan(plan,ch){
 const ItineraryBrain={draft,replan,aiParse,buildRoute,recommend,festFor,poolFor,actDiff,
  checkPlan,legHours,legKm,hrsWord,enroute,fcFmt,
  data:{VAL,DEST,LAND,FESTCAL,WITHIN,HOTELS,TIERSTAR,ENROUTE,ROADORDER,HOP,HOPKM,DRUK_ROUTES}};
-if(typeof module!=='undefined'&&module.exports)module.exports=ItineraryBrain;
-else root.ItineraryBrain=ItineraryBrain;
+root.ItineraryBrain=ItineraryBrain;
+return ItineraryBrain;
 })(typeof window!=='undefined'?window:globalThis);
 
-
-/* ---------------------------------------------------------------
-   Added for the Bhutan Tourism Hub build.
-   This one line makes the file an ES module. Without it Vite sees
-   `module.exports` above, treats the file as CommonJS, wraps it in a
-   factory that is never called, and neither the export nor `window`
-   is ever set. With it, the UMD block above takes the `window` path
-   and this re-exports the same object for a normal import.
-   The logic above is untouched.
-   --------------------------------------------------------------- */
-export default (typeof window !== 'undefined' ? window.ItineraryBrain : globalThis.ItineraryBrain);
+/* Bhutan Tourism Hub build: a plain, single export of the object above. */
+export default ItineraryBrain;
