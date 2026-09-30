@@ -32,6 +32,7 @@ const profileToTalent = (p) => ({
   id: p.id, role: p.role, name: p.full_name || "Member", base: p.base || "",
   initials: initialsOf(p.full_name || "?"), years: p.years || 0, trips: 0, rating: null,
   verified: p.license_status === "verified", licenseStatus: p.license_status || "none",
+  licenseNumber: p.license_number || null, licenseExpiry: p.license_expiry || null,
   grades: {}, tags: Array.isArray(p.tags) ? p.tags : [],
   languages: Array.isArray(p.languages) ? p.languages : [],
   phone: p.phone || "", email: p.email || "", pitch: p.pitch || "", vehicle: p.vehicle || null,
@@ -325,7 +326,7 @@ export default function App() {
     if (error) console.error("fetchDms failed:", error.message);
     if (data) setDms(data.map((r) => ({
       id: r.id, from: r.sender_id, to: r.recipient_id, body: r.body,
-      sharedPostId: r.shared_post_id ?? null, photo: r.photo_url ?? null,
+      sharedPostId: r.shared_post_id ?? null, photo: r.photo_url ?? null, official: r.is_official ?? false,
       lat: r.lat ?? null, lng: r.lng ?? null,
       accuracy: r.accuracy_m ?? null, altitude: r.altitude_m ?? null,
       ts: new Date(r.created_at).getTime(), read: r.read,
@@ -975,7 +976,8 @@ function Shell({ user, posts, jobs, trips, listings, actions, engagement, dm, di
 
     // messages sent to me
     (dm?.dms || []).filter((m) => m.to === actorId && !m.read).forEach((m) =>
-      add({ id: `dm-${m.id}`, kind: m.sharedPostId ? "share" : "message", who: m.from, text: m.body, ts: m.ts }));
+      add({ id: `dm-${m.id}`, kind: m.official ? "official" : m.sharedPostId ? "share" : "message",
+        who: m.from, text: m.body, ts: m.ts, urgent: m.official }));
 
     // likes and comments on my posts
     (engagement?.likes || []).forEach((l) => {
@@ -1016,9 +1018,61 @@ function Shell({ user, posts, jobs, trips, listings, actions, engagement, dm, di
         add({ id: `new-${p.id}`, kind: "joined", who: p.id, text: roleLabel(p.role), ts: p.joinedAt });
     });
 
+    /* ---- Reminders about your own account ---- */
+    const me = PROFILE_DIR[actorId];
+    const DAY = 86400e3;
+
+    // your licence is expiring, or has expired
+    if (me?.licenseExpiry) {
+      const days = Math.ceil((new Date(me.licenseExpiry + "T23:59") - Date.now()) / DAY);
+      if (days < 0) {
+        add({ id: `lic-expired-${actorId}`, kind: "licenceExpired", who: actorId,
+          text: `Expired ${Math.abs(days)} ${Math.abs(days) === 1 ? "day" : "days"} ago`, ts: Date.now(), urgent: true });
+      } else if (days <= 60) {
+        add({ id: `lic-soon-${actorId}-${Math.floor(days / 7)}`, kind: "licenceSoon", who: actorId,
+          text: days === 0 ? "Expires today" : `${days} ${days === 1 ? "day" : "days"} left`,
+          ts: Date.now(), urgent: days <= 14 });
+      }
+    }
+
+    // your licence needs attention
+    if (user.licenseStatus === "rejected") {
+      add({ id: `lic-rejected-${actorId}`, kind: "licenceRejected", who: actorId,
+        text: "Upload a clearer photo from your profile", ts: Date.now(), urgent: true });
+    } else if (user.licenseStatus === "none") {
+      add({ id: `lic-missing-${actorId}`, kind: "licenceMissing", who: actorId,
+        text: "Operators prioritise verified crew", ts: Date.now() });
+    }
+
+    // a trip of yours starts soon
+    (trips || []).forEach((tr) => {
+      if (!tr || !tr.start) return;
+      const onIt = (tr.members || []).some((m) => m && m.id === actorId) || tr.operatorId === actorId;
+      if (!onIt) return;
+      const days = Math.ceil((new Date(tr.start + "T00:00") - Date.now()) / DAY);
+      if (days >= 0 && days <= 3) {
+        add({ id: `trip-soon-${tr.id}`, kind: "tripSoon", who: null,
+          text: `${tr.title} · ${days === 0 ? "starts today" : days === 1 ? "starts tomorrow" : `in ${days} days`}`,
+          ts: Date.now(), urgent: days <= 1, tripId: tr.id });
+      }
+    });
+
+    // a trip has ended and nobody has been asked for a review yet
+    if (user.kind === "operator") {
+      (trips || []).forEach((tr) => {
+        if (!tr || !tr.end || tr.operatorId !== actorId) return;
+        const ended = new Date(tr.end + "T23:59") < new Date();
+        const endedRecently = Date.now() - new Date(tr.end + "T23:59") < 21 * DAY;
+        if (ended && endedRecently) {
+          add({ id: `ask-review-${tr.id}`, kind: "askReview", who: null,
+            text: tr.title, ts: new Date(tr.end + "T23:59").getTime(), tripId: tr.id });
+        }
+      });
+    }
+
     return out.sort((a, b) => (b.ts || 0) - (a.ts || 0)).slice(0, 50);
     } catch (e) { console.error('alertItems failed:', e); return []; }
-  }, [dm?.dms, engagement?.likes, engagement?.comments, engagement?.follows, jobs, listings, posts, actorId, dirTick]);
+  }, [dm?.dms, engagement?.likes, engagement?.comments, engagement?.follows, jobs, listings, posts, trips, actorId, dirTick, user.licenseStatus]);
 
   // notify the device when something new arrives
   useEffect(() => {
@@ -1106,7 +1160,9 @@ function Shell({ user, posts, jobs, trips, listings, actions, engagement, dm, di
           onInstall={() => { setAlertsOpen(false); setInstallSheet(true); }}
           onOpenProfile={(id) => { setAlertsOpen(false); openProfile(id); }}
           onOpenMessages={() => { setAlertsOpen(false); setTab("chats"); }}
-          onOpenJobs={() => { setAlertsOpen(false); setTab(user.kind === "operator" ? "requests" : "jobs"); }} />
+          onOpenJobs={() => { setAlertsOpen(false); setTab(user.kind === "operator" ? "requests" : "jobs"); }}
+          onOpenTrips={() => { setAlertsOpen(false); setTab("trips"); }}
+          onOpenSelf={() => { setAlertsOpen(false); setTab(user.kind === "operator" || user.kind === "admin" ? "discover" : "profile"); }} />
       )}
 
       <BottomNav nav={nav} tab={tab}
@@ -3354,6 +3410,7 @@ function AdminUsers({ onChanged, currentAdminId }) {
   const [busyId, setBusyId] = useState(null);
   const [note, setNote] = useState(null);
   const [openId, setOpenId] = useState(null);
+  const [msgUser, setMsgUser] = useState(null);
 
   const flash = (m) => { setNote(m); setTimeout(() => setNote(null), 2600); };
 
@@ -3501,6 +3558,10 @@ function AdminUsers({ onChanged, currentAdminId }) {
                       <RefreshCw size={14} /> Un-verify
                     </button>
                   )}
+                  <button onClick={() => setMsgUser(u)} className="tap w-10 h-10 rounded-xl flex items-center justify-center shrink-0"
+                    style={{ background: C.pineSoft, border: `1px solid ${C.line}` }} aria-label="Message this user">
+                    <MessageCircle size={16} color={C.pine} />
+                  </button>
                   <button onClick={() => setOpenId(open ? null : u.id)} className="tap w-10 h-10 rounded-xl flex items-center justify-center shrink-0"
                     style={{ background: C.card, border: `1px solid ${C.line}` }} aria-label="More">
                     <span className="text-[16px] leading-none" style={{ color: C.muted }}>⋯</span>
@@ -3525,6 +3586,12 @@ function AdminUsers({ onChanged, currentAdminId }) {
             );
           })}
         </div>
+      )}
+
+      {msgUser && (
+        <AdminMessage adminId={currentAdminId} user={msgUser}
+          onClose={() => setMsgUser(null)}
+          onSent={(name) => flash(`Message sent to ${name}.`)} />
       )}
 
       <div className="mt-6 rounded-2xl p-4" style={{ background: C.card, border: `1px solid ${C.line}` }}>
@@ -4404,9 +4471,16 @@ function DmThread({ me, otherId, dm, posts, onOpenPost, onBack, onOpenProfile })
               )}
               <div className={`flex ${mine ? "justify-end" : "justify-start"}`} style={{ marginTop: grouped ? 2 : 8 }}>
                 <div style={{ maxWidth: "82%" }}>
+                  {m.official && !mine && (
+                    <div className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 mb-1 ml-0.5"
+                      style={{ background: C.pineSoft }}>
+                      <ShieldCheck size={10} color={C.pine} />
+                      <span className="text-[10px] font-bold tracking-[.04em]" style={{ color: C.pine }}>OFFICIAL</span>
+                    </div>
+                  )}
                   <div className="overflow-hidden" style={{
-                    background: mine ? C.pine : C.card,
-                    border: mine ? "none" : `1px solid ${C.line}`,
+                    background: mine ? C.pine : m.official ? C.pineSoft : C.card,
+                    border: mine ? "none" : `1px solid ${m.official ? C.pine + "33" : C.line}`,
                     borderRadius: 18,
                     borderBottomRightRadius: mine && lastOfGroup ? 5 : 18,
                     borderBottomLeftRadius: !mine && lastOfGroup ? 5 : 18,
@@ -4935,7 +5009,7 @@ function Stat({ n, label, onClick }) {
 }
 
 /* ============================== Notifications ============================= */
-function AlertsSheet({ items, onClose, onOpenProfile, onOpenMessages, onOpenJobs, notifyOn, onEnableNotify, installed, onInstall }) {
+function AlertsSheet({ items, onClose, onOpenProfile, onOpenMessages, onOpenJobs, onOpenTrips, onOpenSelf, notifyOn, onEnableNotify, installed, onInstall }) {
   const meta = {
     message:   { Icon: MessageCircle, bg: C.pineSoft,   fg: C.pine,     verb: "sent you a message" },
     share:     { Icon: Share2,        bg: C.pineSoft,   fg: C.pine,     verb: "shared a post with you" },
@@ -4946,6 +5020,13 @@ function AlertsSheet({ items, onClose, onOpenProfile, onOpenMessages, onOpenJobs
     listing:   { Icon: Briefcase,     bg: C.goldSoft,   fg: "#7a5a1e",  verb: "posted a job you can apply for" },
     applicant: { Icon: UserCheck,     bg: C.pineSoft,   fg: C.pine,     verb: "applied to your job" },
     joined:    { Icon: UserPlus,      bg: C.goldSoft,   fg: "#7a5a1e",  verb: "joined Bhutan Tourism Hub" },
+    licenceSoon:     { Icon: Clock,       bg: C.goldSoft,   fg: "#7a5a1e", verb: "Your licence is expiring", self: true },
+    licenceExpired:  { Icon: ShieldAlert, bg: C.maroonSoft, fg: C.maroon,  verb: "Your licence has expired", self: true },
+    licenceRejected: { Icon: ShieldAlert, bg: C.maroonSoft, fg: C.maroon,  verb: "Your licence wasn't approved", self: true },
+    licenceMissing:  { Icon: Upload,      bg: C.goldSoft,   fg: "#7a5a1e", verb: "Add your licence to get verified", self: true },
+    tripSoon:        { Icon: CalendarDays, bg: C.pineSoft,  fg: C.pine,    verb: "Trip starting soon", self: true },
+    askReview:       { Icon: Star,        bg: C.goldSoft,   fg: "#7a5a1e", verb: "Ask your guests for a review", self: true },
+    official:        { Icon: ShieldCheck, bg: C.pineSoft,   fg: C.pine,    verb: "Message from Bhutan Tourism Hub" },
   };
 
   const today = items.filter((a) => Date.now() - a.ts < 86400e3);
@@ -4991,24 +5072,38 @@ function AlertsSheet({ items, onClose, onOpenProfile, onOpenMessages, onOpenJobs
                   <div className="text-[11.5px] font-semibold tracking-[.12em] uppercase mt-3 mb-1" style={{ color: C.gold }}>{label}</div>
                   {group.map((a) => {
                     const m = meta[a.kind] || meta.message;
-                    const p = talentById(a.who);
+                    const p = m.self ? null : talentById(a.who);
                     const go = () => {
-                      if (a.kind === "message" || a.kind === "share") return onOpenMessages();
+                      if (a.kind === "message" || a.kind === "share" || a.kind === "official") return onOpenMessages();
                       if (a.kind === "job" || a.kind === "listing" || a.kind === "applicant") return onOpenJobs();
+                      if (a.kind === "tripSoon" || a.kind === "askReview") return onOpenTrips && onOpenTrips();
+                      if (m.self) return onOpenSelf && onOpenSelf();
                       if (p) return onOpenProfile(a.who);
                     };
                     return (
                       <button key={a.id} onClick={go} className="tap w-full text-left flex items-start gap-3 py-3" style={{ borderBottom: `1px solid ${C.lineSoft}` }}>
                         <div className="relative shrink-0">
-                          <Avatar initials={p?.initials || "?"} size={42} />
-                          <span className="absolute -bottom-1 -right-1 w-5 h-5 rounded-full flex items-center justify-center" style={{ background: m.bg, border: `2px solid ${C.card}` }}>
-                            <m.Icon size={10} color={m.fg} />
-                          </span>
+                          {m.self ? (
+                            <div className="rounded-xl flex items-center justify-center" style={{ width: 42, height: 42, background: m.bg }}>
+                              <m.Icon size={19} color={m.fg} />
+                            </div>
+                          ) : (
+                            <>
+                              <Avatar initials={p?.initials || "?"} size={42} />
+                              <span className="absolute -bottom-1 -right-1 w-5 h-5 rounded-full flex items-center justify-center" style={{ background: m.bg, border: `2px solid ${C.card}` }}>
+                                <m.Icon size={10} color={m.fg} />
+                              </span>
+                            </>
+                          )}
                         </div>
                         <div className="flex-1 min-w-0">
                           <div className="text-[13.5px] leading-snug" style={{ color: C.ink }}>
-                            <b>{p?.name || "Someone"}</b> <span style={{ color: C.muted }}>{m.verb}</span>
-                            {a.urgent && <span className="ml-1.5 text-[10px] font-bold rounded-full px-1.5 py-0.5" style={{ background: C.maroonSoft, color: C.maroon }}>URGENT</span>}
+                            {m.self ? (
+                              <b style={{ color: m.fg }}>{m.verb}</b>
+                            ) : (
+                              <><b>{p?.name || "Someone"}</b> <span style={{ color: C.muted }}>{m.verb}</span></>
+                            )}
+                            {a.urgent && <span className="ml-1.5 text-[10px] font-bold rounded-full px-1.5 py-0.5" style={{ background: C.maroonSoft, color: C.maroon }}>ACTION NEEDED</span>}
                           </div>
                           {a.text && a.kind !== "follow" && <div className="text-[12.5px] truncate mt-0.5" style={{ color: C.muted }}>{a.text}</div>}
                           <div className="text-[11px] mt-0.5" style={{ color: C.muted }}>{relTime(a.ts)}</div>
@@ -6322,6 +6417,128 @@ ${user.name || ""}`;
             <p className="text-[12px] leading-snug" style={{ color: "#7a5a1e" }}>
               <b>Tip:</b> ask on the last day of the trip, while the guests are still with you.
               A review written the same week is far more specific — and far more useful to the next operator reading it.
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+  ), document.body);
+}
+
+/* ========================================================================== */
+/*  ADMIN → MESSAGE A USER                                                    */
+/*  Official support messages. Sent through the normal message system so the  */
+/*  person replies in the usual place, but flagged so they can tell it is     */
+/*  genuinely from us and not someone impersonating support.                  */
+/* ========================================================================== */
+const ADMIN_TEMPLATES = [
+  {
+    id: "licence_unclear",
+    label: "Licence unclear",
+    body: "Kuzu Zangpo la,\n\nThank you for submitting your licence. Unfortunately the photo isn't clear enough for us to verify it — some of the details can't be read.\n\nCould you upload it again? Hold your phone flat above the licence rather than at an angle, make sure all four corners are in the frame, and check there's no glare.\n\nYou can do this from your Profile. Once it's clear we'll verify it quickly.\n\nKadrinchhey la,\nBhutan Tourism Hub",
+  },
+  {
+    id: "licence_expired",
+    label: "Licence expired",
+    body: "Kuzu Zangpo la,\n\nOur records show your licence has expired. Your Verified badge is paused until we see a current one.\n\nOnce you've renewed, upload a photo of the new licence from your Profile and we'll restore your badge straight away.\n\nIf the expiry date on your profile is wrong, just reply here and we'll correct it.\n\nKadrinchhey la,\nBhutan Tourism Hub",
+  },
+  {
+    id: "licence_mismatch",
+    label: "Number doesn't match",
+    body: "Kuzu Zangpo la,\n\nThe licence number on your profile doesn't match the document you uploaded. This is usually just a typing slip.\n\nCould you check the number and correct it from your Profile? It should be entered exactly as printed on the licence.\n\nKadrinchhey la,\nBhutan Tourism Hub",
+  },
+  {
+    id: "welcome",
+    label: "Welcome & verified",
+    body: "Kuzu Zangpo la,\n\nYour licence has been verified — your profile now carries the Verified badge, and operators can find and book you.\n\nTwo things worth doing now: add a few photos from your trips so operators can see your work, and keep your availability up to date so you appear in searches when you're free.\n\nIf anything isn't working, reply here. We read every message.\n\nKadrinchhey la,\nBhutan Tourism Hub",
+  },
+  {
+    id: "profile_incomplete",
+    label: "Profile incomplete",
+    body: "Kuzu Zangpo la,\n\nYour profile is missing a few details that operators look for — specialities, languages, or years of experience.\n\nOperators filter by these, so an incomplete profile is often skipped even when the person is well qualified. It takes two minutes to fill in from your Profile.\n\nKadrinchhey la,\nBhutan Tourism Hub",
+  },
+  { id: "custom", label: "Write my own", body: "" },
+];
+
+function AdminMessage({ adminId, user, onClose, onSent }) {
+  const [tpl, setTpl] = useState(ADMIN_TEMPLATES[0].id);
+  const [body, setBody] = useState(ADMIN_TEMPLATES[0].body);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+
+  const pick = (id) => {
+    setTpl(id);
+    const t = ADMIN_TEMPLATES.find((x) => x.id === id);
+    setBody(t ? t.body : "");
+    setErr(null);
+  };
+
+  const send = async () => {
+    const text = body.trim();
+    if (!text) { setErr("Write a message first."); return; }
+    setBusy(true); setErr(null);
+    const { error } = await supabase.from("direct_messages").insert({
+      sender_id: adminId, recipient_id: user.id, body: text, is_official: true,
+    });
+    setBusy(false);
+    if (error) {
+      console.error("admin message failed:", error.message);
+      // retry without the flag, in case the column migration hasn't been run
+      const retry = await supabase.from("direct_messages").insert({
+        sender_id: adminId, recipient_id: user.id, body: text,
+      });
+      if (retry.error) { setErr("Couldn't send — " + retry.error.message); return; }
+    }
+    auditLog(adminId, "admin.message", user.id, ADMIN_TEMPLATES.find((x) => x.id === tpl)?.label || "custom");
+    onSent && onSent(user.full_name || "the user");
+    onClose();
+  };
+
+  return createPortal((
+    <div className="fixed inset-0 flex items-end" style={{ background: "rgba(8,10,8,.55)", zIndex: 230 }} onClick={onClose}>
+      <div className="w-full rounded-t-3xl flex flex-col safe-bottom" style={{ background: C.card, maxHeight: "90dvh" }} onClick={(e) => e.stopPropagation()}>
+        <div className="p-5 pb-3 shrink-0">
+          <div className="w-10 h-1 rounded-full mx-auto mb-4" style={{ background: C.line }} />
+          <div className="flex items-center gap-3">
+            <Avatar initials={initialsOf(user.full_name)} size={42} />
+            <div className="flex-1 min-w-0">
+              <div className="text-[16px] font-semibold" style={{ color: C.ink }}>{user.full_name || "Unnamed"}</div>
+              <div className="text-[12.5px]" style={{ color: C.muted }}>{roleLabel(user.role)}{user.base ? ` · ${user.base}` : ""}</div>
+            </div>
+          </div>
+        </div>
+
+        <div className="flex-1 overflow-y-auto hidescroll px-5 pb-5" style={{ scrollbarWidth: "none" }}>
+          <div className="text-[11.5px] font-semibold tracking-[.12em] uppercase mb-2" style={{ color: C.gold }}>Choose a message</div>
+          <div className="flex flex-wrap gap-2 mb-4">
+            {ADMIN_TEMPLATES.map((t) => (
+              <Chip key={t.id} on={tpl === t.id} onClick={() => pick(t.id)}>{t.label}</Chip>
+            ))}
+          </div>
+
+          <textarea value={body} onChange={(e) => setBody(e.target.value)} rows={12} maxLength={1500}
+            placeholder="Write your message…"
+            className="w-full px-3.5 py-3 rounded-xl text-[14px] leading-relaxed resize-none"
+            style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
+          <div className="flex justify-between items-center mt-1 mb-4">
+            <span className="text-[11.5px]" style={{ color: C.muted }}>Edit freely before sending</span>
+            <span className="text-[11px]" style={{ color: C.muted }}>{body.length}/1500</span>
+          </div>
+
+          {err && <p className="text-[13px] mb-3" style={{ color: C.maroon }}>{err}</p>}
+
+          <button onClick={send} disabled={busy || !body.trim()}
+            className="tap w-full h-12 rounded-xl text-[15px] font-semibold inline-flex items-center justify-center gap-2"
+            style={{ background: body.trim() ? C.pine : "#C7CEC7", color: "#fff" }}>
+            {busy ? <Loader2 size={18} className="animate-spin" /> : <><SendIcon size={17} /> Send message</>}
+          </button>
+
+          <div className="rounded-xl p-3.5 flex gap-2.5 mt-4" style={{ background: C.bg, border: `1px solid ${C.line}` }}>
+            <ShieldCheck size={16} color={C.gold} className="shrink-0 mt-0.5" />
+            <p className="text-[12px] leading-snug" style={{ color: C.muted }}>
+              This arrives in their Messages marked as official, so they know it genuinely came from
+              Bhutan Tourism Hub. They can reply to you in the same thread. Every message you send is
+              recorded in the audit log.
             </p>
           </div>
         </div>
