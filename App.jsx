@@ -636,6 +636,7 @@ export default function App() {
     id: l.id, operatorId: l.operator_id, operator: l.operator_name, title: l.title, role: l.role,
     start: l.start_date, end: l.end_date, languages: l.languages || [], notes: l.notes || "",
     urgent: !!l.urgent, status: l.status, createdAt: new Date(l.created_at).getTime(),
+    deletedAt: l.deleted_at ? new Date(l.deleted_at).getTime() : null,
     applicants: (apps || []).filter((a) => a.listing_id === l.id).map((a) => {
       const t = talentById(a.talent_id);
       return { talentId: a.talent_id, name: t?.name || "Member", initials: t?.initials || "?", rating: t?.rating || null,
@@ -646,6 +647,7 @@ export default function App() {
     id: j.id, operatorId: j.operator_id, operator: j.operator_name, toTalentId: j.talent_id,
     title: j.title, role: j.role_needed, start: j.start_date, end: j.end_date,
     languages: j.languages || [], notes: j.notes || "", status: j.status, createdAt: new Date(j.created_at).getTime(),
+    deletedAt: j.deleted_at ? new Date(j.deleted_at).getTime() : null,
   });
 
   const fetchJobs = async () => {
@@ -808,6 +810,47 @@ export default function App() {
     fetchTrips();
   };
 
+  // Remove a job — it goes to the bin, invisible to talent but restorable.
+  const binListing = async (id, restore = false) => {
+    if (!CLOUD) return;
+    const { error } = await supabase.from("job_listings")
+      .update({ deleted_at: restore ? null : new Date().toISOString() }).eq("id", id);
+    if (error) { console.error("binListing failed:", error.message); return { ok: false, reason: error.message }; }
+    auditLog(realUserRef.current, restore ? "job.restore" : "job.bin", id);
+    fetchJobs();
+    return { ok: true };
+  };
+
+  // Erase for good. Applications go with it — nothing is left pointing nowhere.
+  const destroyListing = async (id) => {
+    if (!CLOUD) return;
+    await dbWrite("job_applicants.delete", supabase.from("job_applicants").delete().eq("listing_id", id));
+    const { error } = await supabase.from("job_listings").delete().eq("id", id);
+    if (error) { console.error("destroyListing failed:", error.message); return { ok: false, reason: error.message }; }
+    auditLog(realUserRef.current, "job.delete", id);
+    fetchJobs();
+    return { ok: true };
+  };
+
+  const binRequest = async (id, restore = false) => {
+    if (!CLOUD) return;
+    const { error } = await supabase.from("job_requests")
+      .update({ deleted_at: restore ? null : new Date().toISOString() }).eq("id", id);
+    if (error) { console.error("binRequest failed:", error.message); return { ok: false }; }
+    auditLog(realUserRef.current, restore ? "request.restore" : "request.bin", id);
+    fetchJobs();
+    return { ok: true };
+  };
+
+  const destroyRequest = async (id) => {
+    if (!CLOUD) return;
+    const { error } = await supabase.from("job_requests").delete().eq("id", id);
+    if (error) { console.error("destroyRequest failed:", error.message); return { ok: false }; }
+    auditLog(realUserRef.current, "request.delete", id);
+    fetchJobs();
+    return { ok: true };
+  };
+
   const postListing = async (l) => {
     if (!CLOUD) { setListings((L) => [{ id: uid(), status: "open", createdAt: Date.now(), applicants: [], ...l }, ...L]); return; }
     const { error: jlErr } = await supabase.from("job_listings").insert({
@@ -880,7 +923,7 @@ export default function App() {
           <Login onPick={setAccountId} session={session} myProfile={myProfile} onAuthed={reloadMe} onBusy={setAuthBusy} />
         ) : (
           <Shell key={user.id} user={user} posts={posts} jobs={jobs} trips={trips} listings={listings} enquiries={enquiries} dirTick={dirTick}
-            actions={{ addPost, approve, reject, deletePost, reloadDirectory: loadProfiles, setAvailability, toggleFollow, sendJob, setJobStatus, postChat, openChat, postListing, applyToListing, setApplicant, hireApplicant, saveEnquiry, setEnquiryStatus, convertEnquiry, reloadTrips: fetchTrips }} engagement={{ likes, comments, toggleLike, addComment, deleteComment, follows, toggleFollow, stories, addStory, deleteStory }} dm={{ dms, sendDm, markRead, sharePostTo }} onLogout={() => { if (session) supabase.auth.signOut(); setAccountId(null); }} />
+            actions={{ addPost, approve, reject, deletePost, reloadDirectory: loadProfiles, setAvailability, toggleFollow, sendJob, setJobStatus, postChat, openChat, postListing, applyToListing, setApplicant, hireApplicant, saveEnquiry, setEnquiryStatus, convertEnquiry, reloadTrips: fetchTrips, binListing, destroyListing, binRequest, destroyRequest }} engagement={{ likes, comments, toggleLike, addComment, deleteComment, follows, toggleFollow, stories, addStory, deleteStory }} dm={{ dms, sendDm, markRead, sharePostTo }} onLogout={() => { if (session) supabase.auth.signOut(); setAccountId(null); }} />
         )}
       </div>
     </div>
@@ -1102,12 +1145,12 @@ function Shell({ user, posts, jobs, trips, listings, enquiries, actions, engagem
       add({ id: `fl-${f.follower}`, kind: "follow", who: f.follower, text: "", ts: Date.now() }));
 
     // direct job requests to me
-    (jobs || []).filter((j) => j && j.toTalentId === actorId && j.status === "pending").forEach((j) =>
+    (jobs || []).filter((j) => j && !j.deletedAt && j.toTalentId === actorId && j.status === "pending").forEach((j) =>
       add({ id: `job-${j.id}`, kind: "job", who: j.operatorId, text: j.title, ts: j.createdAt }));
 
     // open listings matching my role (guides see guide jobs, drivers see driver jobs)
     if (user.kind === "guide" || user.kind === "driver") {
-      (listings || []).filter((l) => l && l.status === "open" && l.role === user.kind &&
+      (listings || []).filter((l) => l && !l.deletedAt && l.status === "open" && l.role === user.kind &&
         !(l.applicants || []).some((a) => a && a.talentId === actorId)).forEach((l) =>
         add({ id: `lst-${l.id}`, kind: "listing", who: l.operatorId, text: l.title, ts: l.createdAt, urgent: l.urgent }));
     }
@@ -1200,8 +1243,8 @@ function Shell({ user, posts, jobs, trips, listings, enquiries, actions, engagem
 
   const pendingModCount = posts.filter((p) => p.status === "pending").length;
   const myTalent = user.talentId ? talentById(user.talentId) : null;
-  const myJobsPending = myTalent ? jobs.filter((j) => j.toTalentId === myTalent.id && j.status === "pending").length : 0;
-  const availableListings = myTalent ? listings.filter((l) => l.status === "open" && l.role === user.kind && !(l.applicants || []).some((a) => a.talentId === myTalent.id)).length : 0;
+  const myJobsPending = myTalent ? jobs.filter((j) => !j.deletedAt && j.toTalentId === myTalent.id && j.status === "pending").length : 0;
+  const availableListings = myTalent ? listings.filter((l) => !l.deletedAt && l.status === "open" && l.role === user.kind && !(l.applicants || []).some((a) => a.talentId === myTalent.id)).length : 0;
   const jobsBadge = myJobsPending + availableListings;
   const todayStr = new Date().toISOString().slice(0, 10);
   const enquiryBadge = (enquiries || []).filter((e) =>
@@ -1715,7 +1758,7 @@ function Composer({ talent, onAdd }) {
 
 /* ========================= Jobs inbox (talent) =========================== */
 function JobsInbox({ user, jobs, onSet }) {
-  const mine = jobs.filter((j) => j.toTalentId === user.talentId);
+  const mine = jobs.filter((j) => !j.deletedAt && j.toTalentId === user.talentId);
   return (
     <div className="px-5 py-4">
       <SectionLabel trailing={`${mine.length} total`}>Job requests</SectionLabel>
@@ -1835,8 +1878,8 @@ function TalentCard({ t, onOpen }) {
 }
 
 /* ======================= Sent requests (operator) ======================== */
-function SentRequests({ operator, operatorId, jobs, onOpen }) {
-  const mine = jobs.filter((j) => (j.operatorId ? j.operatorId === operatorId : j.operator === operator));
+function SentRequests({ operator, operatorId, jobs, actions, onOpen }) {
+  const mine = jobs.filter((j) => !j.deletedAt && (j.operatorId ? j.operatorId === operatorId : j.operator === operator));
   return (
     <div className="px-5 py-4">
       <SectionLabel trailing={`${mine.length} sent`}>Job requests</SectionLabel>
@@ -1859,7 +1902,14 @@ function SentRequests({ operator, operatorId, jobs, onOpen }) {
                   <StatusBadge status={j.status} />
                 </div>
                 <div className="text-[14px] font-medium mt-3" style={{ color: C.ink }}>{j.title}</div>
-                <div className="flex flex-wrap gap-2 mt-2"><Pill Icon={CalendarCheck}>{fmtDate(j.start)} – {fmtDate(j.end)}</Pill>{j.languages?.map((l) => <Pill key={l}>{l}</Pill>)}</div>
+                <div className="flex flex-wrap gap-2 mt-2"><Pill Icon={CalendarCheck}>{fmtDate(j.start)} – {fmtDate(j.end)}</Pill>{(j.languages || []).map((l) => <Pill key={l}>{l}</Pill>)}</div>
+                {actions?.binRequest && j.status !== "accepted" && (
+                  <button onClick={() => actions.binRequest(j.id)}
+                    className="tap w-full mt-3 pt-2.5 text-[12.5px] font-semibold inline-flex items-center justify-center gap-1.5"
+                    style={{ borderTop: `1px solid ${C.lineSoft}`, color: C.muted }}>
+                    <Trash2 size={13} /> Withdraw this request
+                  </button>
+                )}
               </div>
             );
           })}
@@ -2596,10 +2646,10 @@ function AppStatusBadge({ status }) {
 function JobsHub({ user, jobs, listings, actions }) {
   const [sub, setSub] = useState("board");
   const t = talentById(user.talentId);
-  const open = listings.filter((l) => l.status === "open" && l.role === user.kind);
+  const open = listings.filter((l) => !l.deletedAt && l.status === "open" && l.role === user.kind);
   const notApplied = open.filter((l) => !(l.applicants || []).some((a) => a.talentId === t.id));
-  const applied = listings.filter((l) => (l.applicants || []).some((a) => a.talentId === t.id));
-  const invitesPending = jobs.filter((j) => j.toTalentId === t.id && j.status === "pending").length;
+  const applied = listings.filter((l) => !l.deletedAt && (l.applicants || []).some((a) => a.talentId === t.id));
+  const invitesPending = jobs.filter((j) => !j.deletedAt && j.toTalentId === t.id && j.status === "pending").length;
   return (
     <div>
       <div className="px-5 pt-4 pb-1">
@@ -2686,7 +2736,9 @@ function OperatorJobs({ user, jobs, listings, posts, actions, eng, onOpen }) {
   const [posting, setPosting] = useState(false);
   const [manageId, setManageId] = useState(null);
   const [profileId, setProfileId] = useState(null);
-  const mine = listings.filter((l) => (l.operatorId ? l.operatorId === myId : l.operator === user.name));
+  const all = listings.filter((l) => (l.operatorId ? l.operatorId === myId : l.operator === user.name));
+  const mine = all.filter((l) => !l.deletedAt);
+  const binned = all.filter((l) => l.deletedAt);
   const manage = mine.find((l) => l.id === manageId);
   const openCount = mine.filter((l) => l.status === "open").length;
 
@@ -2697,15 +2749,20 @@ function OperatorJobs({ user, jobs, listings, posts, actions, eng, onOpen }) {
   return (
     <div>
       <div className="px-5 pt-4 pb-1">
-        <Segmented value={sub} onChange={setSub} options={[["open", `Open jobs${openCount ? ` · ${openCount}` : ""}`], ["direct", "Direct requests"]]} />
+        <Segmented value={sub} onChange={setSub} options={[
+          ["open", `Open jobs${openCount ? ` · ${openCount}` : ""}`],
+          ["direct", "Direct requests"],
+          ["bin", `Bin${binned.length ? ` · ${binned.length}` : ""}`],
+        ]} />
       </div>
-      {sub === "open" && <OperatorListings listings={mine} onPost={() => setPosting(true)} onManage={setManageId} />}
-      {sub === "direct" && <SentRequests operator={user.name} operatorId={myId} jobs={jobs} onOpen={onOpen} />}
+      {sub === "open" && <OperatorListings listings={mine} actions={actions} onPost={() => setPosting(true)} onManage={setManageId} />}
+      {sub === "direct" && <SentRequests operator={user.name} operatorId={myId} jobs={jobs} actions={actions} onOpen={onOpen} />}
+      {sub === "bin" && <JobBin listings={binned} jobs={jobs.filter((j) => j.deletedAt && (j.operatorId === myId || j.operator === user.name))} actions={actions} />}
     </div>
   );
 }
 
-function OperatorListings({ listings, onPost, onManage }) {
+function OperatorListings({ listings, actions, onPost, onManage }) {
   return (
     <div className="px-5 pt-3 pb-4">
       <button onClick={onPost} className="tap w-full h-12 rounded-xl text-[14.5px] font-semibold inline-flex items-center justify-center gap-2 mb-4" style={{ background: C.pine, color: "#fff", boxShadow: `0 6px 16px ${C.pine}33` }}>
@@ -2718,19 +2775,22 @@ function OperatorListings({ listings, onPost, onManage }) {
           {listings.map((l) => {
             const pending = (l.applicants || []).filter((a) => a.status === "applied").length;
             return (
-              <button key={l.id} onClick={() => onManage(l.id)} className="tap w-full text-left rounded-2xl p-4" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+              <div key={l.id} className="rounded-2xl overflow-hidden" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+                <button onClick={() => onManage(l.id)} className="tap w-full text-left p-4">
                 <div className="flex items-start justify-between gap-2">
                   <div className="text-[15px] font-semibold leading-snug" style={{ color: C.ink }}>{l.title}</div>
                   {l.urgent && <ShortNotice />}
                 </div>
                 <div className="flex flex-wrap gap-2 mt-2.5"><Pill Icon={CalendarCheck}>{fmtDate(l.start)} – {fmtDate(l.end)}</Pill><Pill>{roleLabel(l.role)}</Pill></div>
                 <div className="flex items-center justify-between mt-3 pt-3" style={{ borderTop: `1px solid ${C.lineSoft}` }}>
-                  <span className="text-[13px] font-medium" style={{ color: l.applicants.length ? C.pine : C.muted }}>
-                    {l.applicants.length} applicant{l.applicants.length === 1 ? "" : "s"}{pending ? ` · ${pending} new` : ""}
+                  <span className="text-[13px] font-medium" style={{ color: (l.applicants || []).length ? C.pine : C.muted }}>
+                    {(l.applicants || []).length} applicant{(l.applicants || []).length === 1 ? "" : "s"}{pending ? ` · ${pending} new` : ""}
                   </span>
                   <span className="text-[12px] font-semibold rounded-full px-2 py-0.5" style={{ background: l.status === "open" ? C.pineSoft : C.bg, color: l.status === "open" ? C.pine : C.muted }}>{l.status === "open" ? "Open" : l.status === "filled" ? "Filled" : "Closed"}</span>
                 </div>
-              </button>
+                </button>
+                <RemoveJob listing={l} actions={actions} />
+              </div>
             );
           })}
         </div>
@@ -7298,6 +7358,168 @@ function BookingsTab({ user, enquiries, trips, actions, onOpenProfile }) {
           </>
         )
       )}
+    </div>
+  );
+}
+
+/* ========================================================================== */
+/*  REMOVING A JOB — two steps, never one                                     */
+/*  A listing people have applied to is somebody's hope of work. It goes to   */
+/*  the bin first, where it is invisible to them but recoverable.             */
+/* ========================================================================== */
+function RemoveJob({ listing, actions }) {
+  const [arm, setArm] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const count = (listing.applicants || []).length;
+
+  if (!arm) {
+    return (
+      <button onClick={() => setArm(true)}
+        className="tap w-full py-2.5 text-[12.5px] font-semibold inline-flex items-center justify-center gap-1.5"
+        style={{ borderTop: `1px solid ${C.lineSoft}`, color: C.muted }}>
+        <Trash2 size={13} /> Remove this job
+      </button>
+    );
+  }
+
+  return (
+    <div className="px-4 py-3" style={{ borderTop: `1px solid ${C.lineSoft}`, background: C.maroonSoft }}>
+      <p className="text-[12.5px] leading-snug mb-2.5" style={{ color: "#6b4a46" }}>
+        {count > 0
+          ? `${count} ${count === 1 ? "person has" : "people have"} applied. They won't be told, but the job disappears from their board straight away. You can restore it from the Bin.`
+          : "It moves to the Bin, where you can restore it or delete it for good."}
+      </p>
+      <div className="flex gap-2">
+        <button onClick={() => setArm(false)} className="tap flex-1 h-9 rounded-lg text-[12.5px] font-semibold"
+          style={{ background: C.card, color: C.muted }}>Keep it</button>
+        <button onClick={async () => { setBusy(true); await actions.binListing(listing.id); setBusy(false); }}
+          disabled={busy}
+          className="tap flex-1 h-9 rounded-lg text-[12.5px] font-bold inline-flex items-center justify-center gap-1.5"
+          style={{ background: C.maroon, color: "#fff" }}>
+          {busy ? <Loader2 size={13} className="animate-spin" /> : "Move to Bin"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* ========================================================================== */
+/*  THE BIN — restore, or erase for good                                      */
+/* ========================================================================== */
+function JobBin({ listings, jobs, actions }) {
+  const [busyId, setBusyId] = useState(null);
+  const [erasing, setErasing] = useState(null);
+
+  const daysLeft = (ts) => 30 - Math.floor((Date.now() - ts) / 86400e3);
+  const total = (listings || []).length + (jobs || []).length;
+
+  if (total === 0) {
+    return (
+      <div className="px-5 pt-3 pb-4">
+        <Empty Icon={Trash2} title="The bin is empty"
+          body="Jobs you remove are kept here for 30 days, so a mistake is never final." />
+      </div>
+    );
+  }
+
+  return (
+    <div className="px-5 pt-3 pb-4">
+      <div className="rounded-xl px-3.5 py-3 mb-4 flex gap-2.5" style={{ background: C.bg, border: `1px solid ${C.line}` }}>
+        <Clock size={15} color={C.gold} className="shrink-0 mt-0.5" />
+        <p className="text-[12px] leading-snug" style={{ color: C.muted }}>
+          Nothing here is visible to guides or drivers. Items clear themselves after 30 days,
+          or you can erase one now.
+        </p>
+      </div>
+
+      {(listings || []).map((l) => {
+        const left = daysLeft(l.deletedAt);
+        return (
+          <div key={l.id} className="rounded-2xl p-4 mb-3" style={{ background: C.card, border: `1px dashed ${C.line}`, opacity: .9 }}>
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex-1 min-w-0">
+                <div className="text-[14.5px] font-semibold leading-snug" style={{ color: C.ink }}>{l.title}</div>
+                <div className="text-[12.5px] mt-0.5" style={{ color: C.muted }}>
+                  {roleLabel(l.role)} · {fmtDate(l.start)} – {fmtDate(l.end)}
+                </div>
+              </div>
+              <span className="text-[11px] font-semibold rounded-full px-2 py-1 shrink-0"
+                style={{ background: left <= 7 ? C.maroonSoft : C.bg, color: left <= 7 ? C.maroon : C.muted }}>
+                {left > 0 ? `${left}d left` : "clearing"}
+              </span>
+            </div>
+
+            {(l.applicants || []).length > 0 && (
+              <div className="text-[12px] mt-2" style={{ color: C.muted }}>
+                {(l.applicants || []).length} application{(l.applicants || []).length === 1 ? "" : "s"} kept with it
+              </div>
+            )}
+
+            {erasing === l.id ? (
+              <div className="rounded-xl p-3 mt-3" style={{ background: C.maroonSoft }}>
+                <p className="text-[12.5px] mb-2.5" style={{ color: "#6b4a46" }}>
+                  This erases the job and every application to it. It cannot be undone.
+                </p>
+                <div className="flex gap-2">
+                  <button onClick={() => setErasing(null)} className="tap flex-1 h-9 rounded-lg text-[12.5px] font-semibold"
+                    style={{ background: C.card, color: C.muted }}>Cancel</button>
+                  <button onClick={async () => { setBusyId(l.id); await actions.destroyListing(l.id); setBusyId(null); setErasing(null); }}
+                    disabled={busyId === l.id}
+                    className="tap flex-1 h-9 rounded-lg text-[12.5px] font-bold"
+                    style={{ background: C.maroon, color: "#fff" }}>
+                    {busyId === l.id ? <Loader2 size={13} className="animate-spin" /> : "Erase for good"}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="flex gap-2 mt-3">
+                <button onClick={() => setErasing(l.id)}
+                  className="tap flex-1 h-10 rounded-xl text-[12.5px] font-semibold"
+                  style={{ background: C.card, border: `1px solid ${C.line}`, color: C.maroon }}>
+                  Delete permanently
+                </button>
+                <button onClick={async () => { setBusyId(l.id); await actions.binListing(l.id, true); setBusyId(null); }}
+                  disabled={busyId === l.id}
+                  className="tap flex-[1.3] h-10 rounded-xl text-[13px] font-semibold inline-flex items-center justify-center gap-1.5"
+                  style={{ background: C.pine, color: "#fff" }}>
+                  {busyId === l.id ? <Loader2 size={14} className="animate-spin" /> : <><RefreshCw size={14} /> Restore</>}
+                </button>
+              </div>
+            )}
+          </div>
+        );
+      })}
+
+      {(jobs || []).map((j) => {
+        const left = daysLeft(j.deletedAt);
+        const t = talentById(j.toTalentId);
+        return (
+          <div key={j.id} className="rounded-2xl p-4 mb-3" style={{ background: C.card, border: `1px dashed ${C.line}`, opacity: .9 }}>
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex-1 min-w-0">
+                <div className="text-[14.5px] font-semibold leading-snug" style={{ color: C.ink }}>{j.title}</div>
+                <div className="text-[12.5px] mt-0.5" style={{ color: C.muted }}>
+                  Direct request to {t?.name || "a member"}
+                </div>
+              </div>
+              <span className="text-[11px] font-semibold rounded-full px-2 py-1 shrink-0"
+                style={{ background: C.bg, color: C.muted }}>{left > 0 ? `${left}d left` : "clearing"}</span>
+            </div>
+            <div className="flex gap-2 mt-3">
+              <button onClick={async () => { setBusyId(j.id); await actions.destroyRequest(j.id); setBusyId(null); }}
+                className="tap flex-1 h-10 rounded-xl text-[12.5px] font-semibold"
+                style={{ background: C.card, border: `1px solid ${C.line}`, color: C.maroon }}>
+                Delete permanently
+              </button>
+              <button onClick={async () => { setBusyId(j.id); await actions.binRequest(j.id, true); setBusyId(null); }}
+                className="tap flex-[1.3] h-10 rounded-xl text-[13px] font-semibold inline-flex items-center justify-center gap-1.5"
+                style={{ background: C.pine, color: "#fff" }}>
+                <RefreshCw size={14} /> Restore
+              </button>
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }
