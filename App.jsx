@@ -6683,10 +6683,10 @@ const ENQ_STATUS = {
   new:    { label: "New",      bg: C.goldSoft,   fg: "#7a5a1e" },
   quoted: { label: "Quoted",   bg: "#E7EEF6",    fg: "#2b5a8a" },
   won:    { label: "Won",      bg: C.pineSoft,   fg: C.pine },
-  lost:   { label: "Lost",     bg: C.maroonSoft, fg: C.maroon },
+  lost:   { label: "Failed",   bg: C.maroonSoft, fg: C.maroon },
   cold:   { label: "Cold",     bg: C.bg,         fg: C.muted },
 };
-const ENQ_SOURCES = ["Website", "Email", "WhatsApp", "Referral", "Agent", "Repeat client", "Social media", "Other"];
+const ENQ_SOURCES = ["Website", "Email", "WhatsApp", "Phone", "Referral", "Agent", "Repeat client", "Social media", "Walk-in", "Other"];
 const LOST_REASONS = ["Price too high", "Dates unavailable", "Chose another operator", "Trip postponed", "No reply", "Other"];
 
 function EnquiriesTab({ user, enquiries, actions, onOpenTrips }) {
@@ -6698,8 +6698,10 @@ function EnquiriesTab({ user, enquiries, actions, onOpenTrips }) {
   const mine = (enquiries || []).filter((e) => e && e.operatorId === (user.talentId || user.id));
 
   const today = new Date().toISOString().slice(0, 10);
+  // a lost enquiry is not dead — this year's "too expensive" is next year's booking
   const needsChase = mine.filter((e) =>
-    ["new", "quoted", "cold"].includes(e.status) && (!e.followUpOn || e.followUpOn <= today));
+    ["new", "quoted", "cold", "lost"].includes(e.status) &&
+    (!e.followUpOn || e.followUpOn <= today));
 
   const shown =
     filter === "open"  ? mine.filter((e) => ["new", "quoted"].includes(e.status))
@@ -6745,7 +6747,7 @@ function EnquiriesTab({ user, enquiries, actions, onOpenTrips }) {
               {needsChase.length} {needsChase.length === 1 ? "enquiry needs" : "enquiries need"} a follow-up
             </div>
             <div className="text-[12px] mt-0.5" style={{ color: "#7a5a1e", opacity: .85 }}>
-              Most lost work is simply never chased.
+              Includes failed enquiries worth revisiting. Most lost work is simply never chased.
             </div>
           </div>
         </button>
@@ -6755,7 +6757,7 @@ function EnquiriesTab({ user, enquiries, actions, onOpenTrips }) {
         {[["open", `Open · ${mine.filter((e) => ["new","quoted"].includes(e.status)).length}`],
           ["chase", `To chase · ${needsChase.length}`],
           ["won", `Won · ${won}`],
-          ["lost", `Lost · ${mine.filter((e) => ["lost","cold"].includes(e.status)).length}`],
+          ["lost", `Failed · ${mine.filter((e) => ["lost","cold"].includes(e.status)).length}`],
           ["all", "All"]].map(([k, l]) => (
           <Chip key={k} on={filter === k} onClick={() => setFilter(k)}>{l}</Chip>
         ))}
@@ -6837,7 +6839,7 @@ function EnquiryCard({ enq, actions, onEdit, onFlash, onOpenTrips }) {
 
       {enq.status === "lost" && enq.lostReason && (
         <div className="text-[12.5px] mt-2.5 rounded-lg px-3 py-2" style={{ background: C.maroonSoft, color: C.maroon }}>
-          Lost — {enq.lostReason}
+          Didn't go ahead — {enq.lostReason}
         </div>
       )}
 
@@ -6854,6 +6856,20 @@ function EnquiryCard({ enq, actions, onEdit, onFlash, onOpenTrips }) {
         </button>
       )}
 
+      {enq.status === "lost" && (
+        <div className="flex gap-2 mt-3">
+          <button onClick={contactEmail} className="tap flex-1 h-10 rounded-xl text-[12.5px] font-semibold inline-flex items-center justify-center gap-1.5"
+            style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }}>
+            <Mail size={14} /> Follow up
+          </button>
+          <button onClick={() => actions.setEnquiryStatus(enq.id, "quoted")}
+            className="tap flex-1 h-10 rounded-xl text-[12.5px] font-semibold"
+            style={{ background: C.goldSoft, color: "#7a5a1e" }}>
+            Reopen
+          </button>
+        </div>
+      )}
+
       {["new", "quoted", "cold"].includes(enq.status) && !confirming && !losing && (
         <>
           <div className="flex gap-2 mt-3">
@@ -6868,12 +6884,12 @@ function EnquiryCard({ enq, actions, onEdit, onFlash, onOpenTrips }) {
           </div>
           <div className="flex gap-2 mt-2">
             <button onClick={() => setLosing(true)} className="tap flex-1 h-10 rounded-xl text-[12.5px] font-semibold"
-              style={{ background: C.card, border: `1px solid ${C.line}`, color: C.muted }}>
-              Didn't go ahead
+              style={{ background: C.card, border: `1px solid ${C.maroon}44`, color: C.maroon }}>
+              Failed
             </button>
             <button onClick={() => setConfirming(true)} className="tap flex-[1.4] h-10 rounded-xl text-[13px] font-semibold inline-flex items-center justify-center gap-1.5"
               style={{ background: C.pine, color: "#fff" }}>
-              <Check size={15} strokeWidth={3} /> They said yes
+              <MapIcon size={15} /> Make a Trip
             </button>
           </div>
         </>
@@ -6881,7 +6897,7 @@ function EnquiryCard({ enq, actions, onEdit, onFlash, onOpenTrips }) {
 
       {confirming && (
         <div className="rounded-xl p-3.5 mt-3 fade" style={{ background: C.pineSoft }}>
-          <div className="text-[13.5px] font-semibold mb-1" style={{ color: C.pine }}>Turn this into a trip?</div>
+          <div className="text-[13.5px] font-semibold mb-1" style={{ color: C.pine }}>Make this a trip?</div>
           <p className="text-[12.5px] mb-3" style={{ color: C.pine, opacity: .85 }}>
             {enq.start
               ? `A trip will be created for ${fmtDate(enq.start)}${enq.end ? ` – ${fmtDate(enq.end)}` : ""}, and you can hire your crew onto it.`
@@ -6893,7 +6909,7 @@ function EnquiryCard({ enq, actions, onEdit, onFlash, onOpenTrips }) {
             <button onClick={convert} disabled={busy || !enq.start || !enq.end}
               className="tap flex-1 h-10 rounded-lg text-[13px] font-bold inline-flex items-center justify-center gap-1.5"
               style={{ background: enq.start && enq.end ? C.pine : "#C7CEC7", color: "#fff" }}>
-              {busy ? <Loader2 size={14} className="animate-spin" /> : "Create the trip"}
+              {busy ? <Loader2 size={14} className="animate-spin" /> : <><MapIcon size={14} /> Make a Trip</>}
             </button>
           </div>
         </div>
@@ -6904,7 +6920,12 @@ function EnquiryCard({ enq, actions, onEdit, onFlash, onOpenTrips }) {
           <div className="text-[13px] font-semibold mb-2" style={{ color: C.ink }}>What happened?</div>
           <div className="flex flex-wrap gap-2 mb-2.5">
             {LOST_REASONS.map((r) => (
-              <button key={r} onClick={() => { actions.setEnquiryStatus(enq.id, "lost", { lost_reason: r }); setLosing(false); onFlash("Recorded. The pattern in these is worth reviewing."); }}
+              <button key={r} onClick={() => {
+                  const sixMonths = new Date(Date.now() + 182 * 86400e3).toISOString().slice(0, 10);
+                  actions.setEnquiryStatus(enq.id, "lost", { lost_reason: r, follow_up_on: enq.followUpOn || sixMonths });
+                  setLosing(false);
+                  onFlash("Recorded — it'll come back in your follow-ups in six months.");
+                }}
                 className="tap rounded-full px-3 py-1.5 text-[12.5px] font-medium"
                 style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }}>{r}</button>
             ))}
@@ -6912,7 +6933,12 @@ function EnquiryCard({ enq, actions, onEdit, onFlash, onOpenTrips }) {
           <div className="flex gap-2">
             <button onClick={() => setLosing(false)} className="tap flex-1 h-9 rounded-lg text-[12.5px] font-semibold"
               style={{ background: C.card, border: `1px solid ${C.line}`, color: C.muted }}>Cancel</button>
-            <button onClick={() => { actions.setEnquiryStatus(enq.id, "cold"); setLosing(false); onFlash("Marked cold — it'll still appear in follow-ups."); }}
+            <button onClick={() => {
+                const month = new Date(Date.now() + 30 * 86400e3).toISOString().slice(0, 10);
+                actions.setEnquiryStatus(enq.id, "cold", { follow_up_on: enq.followUpOn || month });
+                setLosing(false);
+                onFlash("Marked cold — back in your follow-ups in a month.");
+              }}
               className="tap flex-1 h-9 rounded-lg text-[12.5px] font-semibold"
               style={{ background: C.goldSoft, color: "#7a5a1e" }}>Just gone quiet</button>
           </div>
