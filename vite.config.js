@@ -4,35 +4,43 @@ import { VitePWA } from "vite-plugin-pwa";
 import tailwindcss from "tailwindcss";
 import autoprefixer from "autoprefixer";
 
-const ICONS = "https://nxnsdnayzimzfiwjrkvv.supabase.co/storage/v1/object/public/icons";
-
 export default defineConfig({
   css: { postcss: { plugins: [ tailwindcss({ content: ["./index.html", "./*.{js,jsx}"] }), autoprefixer() ] } },
   plugins: [
     react(),
     VitePWA({
-      strategies: "injectManifest",
-      srcDir: "src",
-      filename: "sw.js",
       registerType: "autoUpdate",
       injectRegister: "auto",
+      // icons live as real files in /public — browsers validate these, not inline data
+      includeAssets: ["favicon-32.png", "apple-touch-icon.png", "preview.png"],
       manifest: {
+        id: "/",
         name: "Bhutan Tourism Hub",
         short_name: "Tourism Hub",
         description: "Bhutan's marketplace connecting verified guides, drivers and tour operators.",
-        theme_color: "#21402F",
-        background_color: "#F4F5F1",
-        display: "standalone",
-        orientation: "portrait",
+        lang: "en",
+        dir: "ltr",
         start_url: "/",
         scope: "/",
+        display: "standalone",
+        orientation: "portrait",
+        theme_color: "#21402F",
+        background_color: "#F4F5F1",
+        categories: ["business", "travel", "productivity"],
         icons: [
-          { src: `${ICONS}/icon-192.png`, sizes: "192x192", type: "image/png" },
-          { src: `${ICONS}/icon-512.png`, sizes: "512x512", type: "image/png" },
-          { src: `${ICONS}/icon-maskable-1024.png`, sizes: "1024x1024", type: "image/png", purpose: "maskable" },
-        ],
+          // shown as-is: rounded corners with real transparency
+          { src: "/icon-192.png", sizes: "192x192", type: "image/png", purpose: "any" },
+          { src: "/icon-512.png", sizes: "512x512", type: "image/png", purpose: "any" },
+          // Android crops these to its own shape — full-bleed, content inside the safe zone
+          { src: "/icon-maskable-512.png", sizes: "512x512", type: "image/png", purpose: "maskable" }
+        ]
       },
-      injectManifest: { globPatterns: ["**/*.{js,css,html,jpg,png,svg,woff2}"] },
-    }),
-  ],
+      workbox: {
+        globPatterns: ["**/*.{js,css,html,jpg,png,svg,woff2}"],
+        cleanupOutdatedCaches: true,
+        clientsClaim: true,
+        skipWaiting: true
+      }
+    })
+  ]
 });
