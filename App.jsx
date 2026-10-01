@@ -47,7 +47,19 @@ const sysMsg = (text) => ({ id: uid(), senderId: null, kind: "system", body: tex
 /* ── Cloud (Supabase) ── posts are global when configured; everything falls back to local demo mode when not. */
 const CLOUD = Boolean(supabase);
 const DEMO_MODE = false;   // set true only for local demos without a database
-const BUILD = "BUILD 16 — 14 Aug";   // bump every deploy; shown at the top of the welcome screen
+const BUILD = "BUILD 18 — 15 Aug";   // bump every deploy; shown at the top of the welcome screen
+// which device someone is on — shown beside the build so a screenshot tells us both
+const DEVICE = (() => {
+  try {
+    const ua = navigator.userAgent || "";
+    if (/iPad|Tablet/i.test(ua)) return "iPad";
+    if (/iPhone|iPod/i.test(ua)) return "iPhone";
+    if (/Android/i.test(ua)) return /Mobile/i.test(ua) ? "Android" : "Android tablet";
+    if (/Mac OS X/i.test(ua)) return "Mac";
+    if (/Windows/i.test(ua)) return "Windows";
+    return "Desktop";
+  } catch (e) { return "Unknown"; }
+})();
 
 /* ---- Install state ---- */
 // 43 characters of randomness — not guessable
@@ -220,6 +232,102 @@ export default function App() {
   const [authBusy, setAuthBusy] = useState(false);   // true while the signup/reset wizard is running
   const [follows, setFollows] = useState([]);
   const [stories, setStories] = useState([]);
+  const [enquiries, setEnquiries] = useState([]);
+
+  const rowToEnquiry = (r) => ({
+    id: r.id, operatorId: r.operator_id,
+    clientName: r.guest_name, clientEmail: r.guest_email, clientPhone: r.guest_phone,
+    country: r.guest_country, source: r.source,
+    title: r.title, partySize: r.party_size, start: r.start_date, end: r.end_date,
+    interests: r.interests, budgetNote: r.budget_note, notes: r.note,
+    status: r.status, lostReason: r.lost_reason, lostNote: r.lost_note, quotedAmount: r.quoted_amount,
+    marketingOk: r.marketing_ok ?? false,
+    lastContacted: r.last_contacted ? new Date(r.last_contacted).getTime() : null,
+    followUpOn: r.follow_up_on, tripId: r.trip_id,
+    createdAt: new Date(r.created_at).getTime(),
+  });
+
+  const fetchEnquiries = async () => {
+    if (!CLOUD) return;
+    const { data, error } = await supabase.from("enquiries").select("*").order("created_at", { ascending: false });
+    if (error) { console.error("fetchEnquiries failed:", error.message); return; }
+    setEnquiries((data || []).map(rowToEnquiry));
+  };
+  useEffect(() => {
+    if (!CLOUD) return;
+    fetchEnquiries();
+    const ch = supabase.channel("enquiries-live")
+      .on("postgres_changes", { event: "*", schema: "public", table: "enquiries" }, fetchEnquiries)
+      .subscribe();
+    return () => { supabase.removeChannel(ch); };
+  }, []);
+
+  const saveEnquiry = async (e) => {
+    const me = realUserRef.current;
+    if (!CLOUD || !me) return { ok: false };
+    const row = {
+      operator_id: me,
+      guest_name: e.clientName?.trim() || "Unnamed",
+      guest_email: e.clientEmail?.trim() || null,
+      guest_phone: e.clientPhone?.trim() || null,
+      guest_country: e.country?.trim() || null,
+      source: e.source || null,
+      title: e.title?.trim() || null,
+      party_size: e.partySize ? Number(e.partySize) : null,
+      start_date: e.start || null, end_date: e.end || null,
+      interests: e.interests?.trim() || null,
+      budget_note: e.budgetNote?.trim() || null,
+      note: e.notes?.trim() || null,
+      status: e.status || "new",
+      lost_reason: e.lostReason?.trim() || null,
+      quoted_amount: e.quotedAmount?.trim() || null,
+      follow_up_on: e.followUpOn || null,
+    };
+    const res = e.id
+      ? await supabase.from("enquiries").update(row).eq("id", e.id)
+      : await supabase.from("enquiries").insert(row);
+    if (res.error) { console.error("saveEnquiry failed:", res.error.message); return { ok: false, reason: res.error.message }; }
+    fetchEnquiries();
+    return { ok: true };
+  };
+
+  const setEnquiryStatus = async (id, status, extra = {}) => {
+    if (!CLOUD) return;
+    const patch = { status, ...extra };
+    if (status !== "new") patch.last_contacted = new Date().toISOString();
+    const { error } = await supabase.from("enquiries").update(patch).eq("id", id);
+    if (error) console.error("setEnquiryStatus failed:", error.message);
+    fetchEnquiries();
+  };
+
+  // a won enquiry becomes a real trip, carrying its details across
+  const convertEnquiry = async (enq) => {
+    const me = realUserRef.current;
+    if (!CLOUD || !me) return { ok: false };
+    const { data: created, error } = await supabase.from("trips").insert({
+      operator_id: me,
+      operator_name: PROFILE_DIR[me]?.name || "Operator",
+      title: enq.title || `${enq.clientName} — Bhutan`,
+      start_date: enq.start, end_date: enq.end,
+      chat_state: new Date(enq.start + "T00:00").getTime() - 3 * 86400e3 > Date.now() ? "scheduled" : "active",
+    }).select("id").single();
+    if (error || !created) {
+      console.error("convertEnquiry failed:", error?.message);
+      return { ok: false, reason: error?.message || "Couldn't create the trip" };
+    }
+    await dbWrite("trip_members.insert", supabase.from("trip_members").insert({
+      trip_id: created.id, user_id: me, display_name: PROFILE_DIR[me]?.name || "Operator", role_in_trip: "operator",
+    }));
+    await dbWrite("trip_messages.insert", supabase.from("trip_messages").insert({
+      trip_id: created.id, sender_id: null, kind: "system",
+      body: `Trip created from an enquiry by ${enq.clientName}${enq.partySize ? ` · ${enq.partySize} guests` : ""}.`,
+    }));
+    await supabase.from("enquiries").update({
+      status: "won", trip_id: created.id, converted_at: new Date().toISOString(),
+    }).eq("id", enq.id);
+    fetchEnquiries(); fetchTrips();
+    return { ok: true, tripId: created.id };
+  };
 
   const loadProfiles = async () => {
     if (!CLOUD) return;
@@ -771,8 +879,8 @@ export default function App() {
         {!user ? (
           <Login onPick={setAccountId} session={session} myProfile={myProfile} onAuthed={reloadMe} onBusy={setAuthBusy} />
         ) : (
-          <Shell key={user.id} user={user} posts={posts} jobs={jobs} trips={trips} listings={listings} dirTick={dirTick}
-            actions={{ addPost, approve, reject, deletePost, reloadDirectory: loadProfiles, setAvailability, toggleFollow, sendJob, setJobStatus, postChat, openChat, postListing, applyToListing, setApplicant, hireApplicant }} engagement={{ likes, comments, toggleLike, addComment, deleteComment, follows, toggleFollow, stories, addStory, deleteStory }} dm={{ dms, sendDm, markRead, sharePostTo }} onLogout={() => { if (session) supabase.auth.signOut(); setAccountId(null); }} />
+          <Shell key={user.id} user={user} posts={posts} jobs={jobs} trips={trips} listings={listings} enquiries={enquiries} dirTick={dirTick}
+            actions={{ addPost, approve, reject, deletePost, reloadDirectory: loadProfiles, setAvailability, toggleFollow, sendJob, setJobStatus, postChat, openChat, postListing, applyToListing, setApplicant, hireApplicant, saveEnquiry, setEnquiryStatus, convertEnquiry, reloadTrips: fetchTrips }} engagement={{ likes, comments, toggleLike, addComment, deleteComment, follows, toggleFollow, stories, addStory, deleteStory }} dm={{ dms, sendDm, markRead, sharePostTo }} onLogout={() => { if (session) supabase.auth.signOut(); setAccountId(null); }} />
         )}
       </div>
     </div>
@@ -799,7 +907,7 @@ function Login({ onPick, session, myProfile, onAuthed, onBusy }) {
       {/* brand */}
       <div className="px-6 pt-3">
         <div className="rounded-lg px-2.5 py-1 inline-block text-[10px] font-bold tracking-[.1em]"
-          style={{ background: C.pineSoft, color: C.pine }}>{BUILD}</div>
+          style={{ background: C.pineSoft, color: C.pine }}>{BUILD} · {DEVICE}</div>
       </div>
 
       <div className="px-6 pt-3 flex items-center gap-2.5">
@@ -907,7 +1015,7 @@ function Login({ onPick, session, myProfile, onAuthed, onBusy }) {
             we'll build it.
           </p>
         </div>
-        <p className="text-center text-[10px] mt-4" style={{ color: C.line }}>{BUILD}</p>
+        <p className="text-center text-[10px] mt-4" style={{ color: C.line }}>{BUILD} · {DEVICE}</p>
       </div>
     </div>
   );
@@ -931,12 +1039,12 @@ function WelcomeBullet({ Icon, title, body }) {
 const NAV = {
   guide: [{ id: "post", label: "Feed", Icon: Newspaper }, { id: "jobs", label: "Jobs", Icon: Briefcase }, { id: "trips", label: "Trips", Icon: MapIcon }, { id: "chats", label: "Messages", Icon: MessageSquare }, { id: "profile", label: "Profile", Icon: User }],
   driver: [{ id: "post", label: "Feed", Icon: Newspaper }, { id: "jobs", label: "Jobs", Icon: Briefcase }, { id: "trips", label: "Trips", Icon: MapIcon }, { id: "chats", label: "Messages", Icon: MessageSquare }, { id: "profile", label: "Profile", Icon: User }],
-  operator: [{ id: "discover", label: "Discover", Icon: Search }, { id: "requests", label: "Jobs", Icon: Briefcase }, { id: "trips", label: "Trips", Icon: MapIcon }, { id: "chats", label: "Messages", Icon: MessageSquare }, { id: "feed", label: "Feed", Icon: Newspaper }],
+  operator: [{ id: "enquiries", label: "Enquiries", Icon: Inbox }, { id: "discover", label: "Discover", Icon: Search }, { id: "requests", label: "Jobs", Icon: Briefcase }, { id: "trips", label: "Trips", Icon: MapIcon }, { id: "chats", label: "Messages", Icon: MessageSquare }],
   admin: [{ id: "review", label: "Review", Icon: ShieldCheck }, { id: "users", label: "Users", Icon: Users }, { id: "feed", label: "Feed", Icon: Newspaper }, { id: "discover", label: "Discover", Icon: Search }, { id: "chats", label: "Messages", Icon: MessageSquare }],
 };
-const DEFAULT_TAB = { guide: "post", driver: "post", operator: "discover", admin: "review" };
+const DEFAULT_TAB = { guide: "post", driver: "post", operator: "enquiries", admin: "review" };
 
-function Shell({ user, posts, jobs, trips, listings, actions, engagement, dm, dirTick, onLogout }) {
+function Shell({ user, posts, jobs, trips, listings, enquiries, actions, engagement, dm, dirTick, onLogout }) {
   const [tab, setTab] = useState(DEFAULT_TAB[user.kind]);
   const [overlay, setOverlay] = useState(null); // {type:'profile'|'request', talentId}
   const [dmWith, setDmWith] = useState(null);
@@ -1095,6 +1203,10 @@ function Shell({ user, posts, jobs, trips, listings, actions, engagement, dm, di
   const myJobsPending = myTalent ? jobs.filter((j) => j.toTalentId === myTalent.id && j.status === "pending").length : 0;
   const availableListings = myTalent ? listings.filter((l) => l.status === "open" && l.role === user.kind && !(l.applicants || []).some((a) => a.talentId === myTalent.id)).length : 0;
   const jobsBadge = myJobsPending + availableListings;
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const enquiryBadge = (enquiries || []).filter((e) =>
+    e && e.operatorId === actorId && ["new", "quoted", "cold"].includes(e.status) &&
+    (!e.followUpOn || e.followUpOn <= todayStr)).length;
 
   const openProfile = (talentId) => setOverlay({ type: "profile", talentId });
   const openRequest = (talentId) => setOverlay({ type: "request", talentId });
@@ -1126,6 +1238,7 @@ function Shell({ user, posts, jobs, trips, listings, actions, engagement, dm, di
             {tab === "trips" && <TripsTab user={user} trips={trips} actions={actions} />}
             {tab === "chats" && <ChatsTab user={user} me={actorId} dm={dm} trips={trips} actions={actions} posts={posts} dirTick={dirTick} onOpenPost={setSharedPost} openWith={dmWith} onOpened={() => setDmWith(null)} onOpenProfile={openProfile} />}
             {tab === "profile" && <TalentProfile talent={talentById(user.talentId)} posts={posts} eng={eng} self onSetAvailability={actions.setAvailability} onOpenProfile={openProfile} onBack={null} />}
+            {tab === "enquiries" && <EnquiriesTab user={user} enquiries={enquiries} actions={actions} onOpenTrips={() => setTab("trips")} />}
             {tab === "discover" && <Discover onOpen={openProfile} initialQuery={searchTerm} dirTick={dirTick} />}
             {tab === "requests" && <OperatorJobs user={user} jobs={jobs} listings={listings} posts={posts} actions={actions} eng={eng} onOpen={openProfile} />}
             {tab === "feed" && <Feed posts={posts} eng={eng} admin={user.kind === "admin"} onDelete={actions.deletePost} onOpenProfile={openProfile} following={myFollowing} />}
@@ -1167,7 +1280,7 @@ function Shell({ user, posts, jobs, trips, listings, actions, engagement, dm, di
 
       <BottomNav nav={nav} tab={tab}
         setTab={(t) => { setOverlay(null); setSharedPost(null); setTab(t); }}
-        badges={{ jobs: jobsBadge, review: pendingModCount, chats: unreadDm }} />
+        badges={{ jobs: jobsBadge, review: pendingModCount, chats: unreadDm, enquiries: enquiryBadge }} />
     </>
   );
 }
@@ -2204,27 +2317,52 @@ function CrewAvatars({ members, size = 26 }) {
 
 function TripsTab({ user, trips, actions }) {
   const [openId, setOpenId] = useState(null);
+  const [view, setView] = useState("upcoming");
   const meId = user.talentId || user.id;
-  const mineId = user.talentId || user.id;
-  const mine = trips.filter((tr) => (tr.members || []).some((m) => m.id === mineId) || (tr.operatorId && tr.operatorId === mineId));
+  const mine = (trips || []).filter((tr) => tr && ((tr.members || []).some((m) => m && m.id === meId) || tr.operatorId === meId));
   const open = mine.find((tr) => tr.id === openId);
   if (open) return <TripHub user={user} meId={meId} trip={open} actions={actions} onBack={() => setOpenId(null)} />;
+
+  const isPast = (tr) => tripStateNow(tr) === "completed";
+  const upcoming = mine.filter((tr) => !isPast(tr)).sort((a, b) => new Date(a.start) - new Date(b.start));
+  const past = mine.filter(isPast).sort((a, b) => new Date(b.end) - new Date(a.end));
+  const shown = view === "past" ? past : upcoming;
+
   return (
     <div className="px-5 py-4">
       <SectionLabel trailing={`${mine.length}`}>Trips</SectionLabel>
-      {mine.length === 0 ? (
-        <Empty Icon={MapIcon} title="No trips yet" body="When a job request is accepted, the trip and its group chat appear here." />
+
+      <div className="flex gap-2 mb-4">
+        <Chip on={view === "upcoming"} onClick={() => setView("upcoming")}>Upcoming · {upcoming.length}</Chip>
+        <Chip on={view === "past"} onClick={() => setView("past")}>Past · {past.length}</Chip>
+      </div>
+
+      {shown.length === 0 ? (
+        <Empty Icon={MapIcon}
+          title={view === "past" ? "No past trips yet" : "No upcoming trips"}
+          body={view === "past"
+            ? "Completed trips move here, so your list stays focused on what's ahead."
+            : "When a booking is confirmed, the trip and its crew chat appear here."} />
       ) : (
-        <div className="space-y-3">{mine.map((tr) => <TripCard key={tr.id} trip={tr} onOpen={() => setOpenId(tr.id)} />)}</div>
+        <div className="space-y-3" style={{ opacity: view === "past" ? 0.72 : 1 }}>
+          {shown.map((tr) => <TripCard key={tr.id} trip={tr} past={view === "past"} onOpen={() => setOpenId(tr.id)} />)}
+        </div>
+      )}
+
+      {view === "past" && past.length > 0 && (
+        <p className="text-[11.5px] text-center mt-4 leading-snug" style={{ color: C.muted }}>
+          Past trips stay here as your record. Crew chats are archived and read-only.
+        </p>
       )}
     </div>
   );
 }
 
-function TripCard({ trip, onOpen }) {
+function TripCard({ trip, onOpen, past }) {
   const msgs = (trip.chat?.messages || []).filter((m) => m.kind !== "system");
   return (
-    <button onClick={onOpen} className="tap w-full text-left rounded-2xl p-4" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+    <button onClick={onOpen} className="tap w-full text-left rounded-2xl p-4"
+      style={{ background: past ? C.bg : C.card, border: `1px solid ${C.line}` }}>
       <div className="flex items-start justify-between gap-3">
         <div className="text-[15px] font-semibold leading-snug" style={{ color: C.ink }}>{trip.title}</div>
         <TripStateBadge state={tripStateNow(trip)} />
@@ -2309,19 +2447,10 @@ function TripHub({ user, meId, trip, actions, onBack }) {
           ))}
         </div>
 
-        {trip.itinerary.length > 0 && (
-          <>
-            <SectionLabel>Itinerary</SectionLabel>
-            <div className="space-y-2 mb-5">
-              {(trip.itinerary || []).map((it) => (
-                <div key={it.day} className="flex items-center gap-3 rounded-xl px-4 py-3" style={{ background: C.card, border: `1px solid ${C.line}` }}>
-                  <div className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0" style={{ background: C.pine }}><span className="text-[12px] font-bold" style={{ color: C.goldSoft }}>{it.day}</span></div>
-                  <span className="text-[14px] font-medium" style={{ color: C.ink }}>{it.title}</span>
-                </div>
-              ))}
-            </div>
-          </>
-        )}
+        <div className="mb-5">
+          <ItineraryBuilder trip={trip} canEdit={user.kind === "operator" || user.kind === "admin"}
+            onChanged={actions.reloadTrips} />
+        </div>
 
         <SectionLabel>Group chat</SectionLabel>
         <div className="rounded-xl px-4 py-3.5 flex items-center gap-3" style={{ background: C.card, border: `1px solid ${C.line}` }}>
@@ -6545,4 +6674,517 @@ function AdminMessage({ adminId, user, onClose, onSent }) {
       </div>
     </div>
   ), document.body);
+}
+
+/* ========================================================================== */
+/*  ENQUIRIES — the pipeline before a trip exists                             */
+/* ========================================================================== */
+const ENQ_STATUS = {
+  new:    { label: "New",      bg: C.goldSoft,   fg: "#7a5a1e" },
+  quoted: { label: "Quoted",   bg: "#E7EEF6",    fg: "#2b5a8a" },
+  won:    { label: "Won",      bg: C.pineSoft,   fg: C.pine },
+  lost:   { label: "Lost",     bg: C.maroonSoft, fg: C.maroon },
+  cold:   { label: "Cold",     bg: C.bg,         fg: C.muted },
+};
+const ENQ_SOURCES = ["Website", "Email", "WhatsApp", "Referral", "Agent", "Repeat client", "Social media", "Other"];
+const LOST_REASONS = ["Price too high", "Dates unavailable", "Chose another operator", "Trip postponed", "No reply", "Other"];
+
+function EnquiriesTab({ user, enquiries, actions, onOpenTrips }) {
+  const [filter, setFilter] = useState("open");
+  const [editing, setEditing] = useState(null);   // enquiry object or {} for new
+  const [note, setNote] = useState(null);
+
+  const flash = (m) => { setNote(m); setTimeout(() => setNote(null), 3000); };
+  const mine = (enquiries || []).filter((e) => e && e.operatorId === (user.talentId || user.id));
+
+  const today = new Date().toISOString().slice(0, 10);
+  const needsChase = mine.filter((e) =>
+    ["new", "quoted", "cold"].includes(e.status) && (!e.followUpOn || e.followUpOn <= today));
+
+  const shown =
+    filter === "open"  ? mine.filter((e) => ["new", "quoted"].includes(e.status))
+    : filter === "chase" ? needsChase
+    : filter === "won"   ? mine.filter((e) => e.status === "won")
+    : filter === "lost"  ? mine.filter((e) => ["lost", "cold"].includes(e.status))
+    : mine;
+
+  const won = mine.filter((e) => e.status === "won").length;
+  const closed = mine.filter((e) => ["won", "lost"].includes(e.status)).length;
+  const rate = closed ? Math.round((won / closed) * 100) : null;
+
+  if (editing) {
+    return <EnquiryForm user={user} enquiry={editing} actions={actions}
+      onBack={() => setEditing(null)}
+      onSaved={(msg) => { setEditing(null); flash(msg); }} />;
+  }
+
+  return (
+    <div className="px-5 py-4">
+      <div className="flex items-center justify-between mb-3">
+        <div className="text-[12px] font-semibold tracking-[.14em] uppercase" style={{ color: C.gold }}>Enquiries</div>
+        {rate !== null && (
+          <span className="text-[12px]" style={{ color: C.muted }}>{rate}% converted</span>
+        )}
+      </div>
+
+      <button onClick={() => setEditing({})}
+        className="tap w-full h-12 rounded-xl text-[14.5px] font-semibold inline-flex items-center justify-center gap-2 mb-3"
+        style={{ background: C.pine, color: "#fff", boxShadow: `0 6px 16px ${C.pine}33` }}>
+        <Plus size={17} strokeWidth={3} /> New enquiry
+      </button>
+
+      {note && <div className="rounded-xl px-3.5 py-2.5 mb-3 text-[13px]" style={{ background: C.pineSoft, color: C.pine }}>{note}</div>}
+
+      {needsChase.length > 0 && filter !== "chase" && (
+        <button onClick={() => setFilter("chase")}
+          className="tap w-full rounded-xl px-3.5 py-3 mb-3 flex items-center gap-3 text-left"
+          style={{ background: C.goldSoft, border: `1px solid ${C.gold}33` }}>
+          <Clock size={17} color={C.gold} className="shrink-0" />
+          <div className="flex-1">
+            <div className="text-[13.5px] font-semibold" style={{ color: "#7a5a1e" }}>
+              {needsChase.length} {needsChase.length === 1 ? "enquiry needs" : "enquiries need"} a follow-up
+            </div>
+            <div className="text-[12px] mt-0.5" style={{ color: "#7a5a1e", opacity: .85 }}>
+              Most lost work is simply never chased.
+            </div>
+          </div>
+        </button>
+      )}
+
+      <div className="flex gap-2 overflow-x-auto hidescroll pb-1 mb-4" style={{ scrollbarWidth: "none" }}>
+        {[["open", `Open · ${mine.filter((e) => ["new","quoted"].includes(e.status)).length}`],
+          ["chase", `To chase · ${needsChase.length}`],
+          ["won", `Won · ${won}`],
+          ["lost", `Lost · ${mine.filter((e) => ["lost","cold"].includes(e.status)).length}`],
+          ["all", "All"]].map(([k, l]) => (
+          <Chip key={k} on={filter === k} onClick={() => setFilter(k)}>{l}</Chip>
+        ))}
+      </div>
+
+      {shown.length === 0 ? (
+        <Empty Icon={Inbox} title={filter === "chase" ? "Nothing to chase" : "No enquiries here"}
+          body={filter === "chase"
+            ? "Everything open has a follow-up date in the future."
+            : "Record every enquiry, even the ones that look unlikely. The pattern in what you lose is worth knowing."} />
+      ) : (
+        <div className="space-y-3">
+          {shown.map((e) => (
+            <EnquiryCard key={e.id} enq={e} actions={actions}
+              onEdit={() => setEditing(e)}
+              onFlash={flash}
+              onOpenTrips={onOpenTrips} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function EnquiryCard({ enq, actions, onEdit, onFlash, onOpenTrips }) {
+  const [busy, setBusy] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  const [losing, setLosing] = useState(false);
+  const st = ENQ_STATUS[enq.status] || ENQ_STATUS.new;
+
+  const today = new Date().toISOString().slice(0, 10);
+  const overdue = ["new", "quoted", "cold"].includes(enq.status) && enq.followUpOn && enq.followUpOn < today;
+
+  const convert = async () => {
+    setBusy(true);
+    const res = await actions.convertEnquiry(enq);
+    setBusy(false);
+    setConfirming(false);
+    if (res.ok) { onFlash(`${enq.clientName} is now a trip. Add your crew from Trips.`); onOpenTrips && onOpenTrips(); }
+    else onFlash("Couldn't create the trip — " + (res.reason || "try again"));
+  };
+
+  const contactWhatsApp = () => {
+    const digits = String(enq.clientPhone || "").replace(/[^\d]/g, "");
+    if (!digits) return onFlash("No phone number saved for this enquiry.");
+    const text = encodeURIComponent(
+      `Kuzu Zangpo la ${enq.clientName},\n\nFollowing up on your enquiry about travelling in Bhutan${enq.start ? ` around ${fmtDate(enq.start)}` : ""}. Is this still something you're planning?\n\nHappy to answer any questions.`);
+    window.open(`https://wa.me/${digits}?text=${text}`, "_blank", "noopener");
+    actions.setEnquiryStatus(enq.id, enq.status === "new" ? "quoted" : enq.status);
+  };
+
+  const contactEmail = () => {
+    if (!enq.clientEmail) return onFlash("No email saved for this enquiry.");
+    const subject = encodeURIComponent(`Your Bhutan trip${enq.start ? ` — ${fmtDate(enq.start)}` : ""}`);
+    const body = encodeURIComponent(
+      `Dear ${enq.clientName},\n\nI'm following up on your enquiry about travelling in Bhutan${enq.start ? ` around ${fmtDate(enq.start)}` : ""}.\n\nIs this still something you're planning? I'd be glad to answer any questions.\n\nKind regards`);
+    window.location.href = `mailto:${enq.clientEmail}?subject=${subject}&body=${body}`;
+    actions.setEnquiryStatus(enq.id, enq.status === "new" ? "quoted" : enq.status);
+  };
+
+  return (
+    <div className="rounded-2xl p-4" style={{ background: C.card, border: `1px solid ${overdue ? "#e6c9c4" : C.line}` }}>
+      <div className="flex items-start justify-between gap-3">
+        <button onClick={onEdit} className="tap flex-1 min-w-0 text-left">
+          <div className="text-[15px] font-semibold leading-snug" style={{ color: C.ink }}>{enq.clientName}</div>
+          {enq.title && <div className="text-[13px] mt-0.5" style={{ color: C.muted }}>{enq.title}</div>}
+        </button>
+        <span className="text-[11.5px] font-semibold rounded-full px-2.5 py-1 shrink-0" style={{ background: st.bg, color: st.fg }}>{st.label}</span>
+      </div>
+
+      <div className="flex flex-wrap gap-2 mt-2.5">
+        {enq.start && <Pill Icon={CalendarCheck}>{fmtDate(enq.start)}{enq.end ? ` – ${fmtDate(enq.end)}` : ""}</Pill>}
+        {enq.partySize > 0 && <Pill Icon={Users}>{enq.partySize} {enq.partySize === 1 ? "guest" : "guests"}</Pill>}
+        {enq.country && <Pill>{enq.country}</Pill>}
+        {enq.source && <Pill>{enq.source}</Pill>}
+      </div>
+
+      {enq.notes && <p className="text-[13px] leading-snug mt-2.5" style={{ color: C.muted }}>{enq.notes}</p>}
+
+      {enq.status === "lost" && enq.lostReason && (
+        <div className="text-[12.5px] mt-2.5 rounded-lg px-3 py-2" style={{ background: C.maroonSoft, color: C.maroon }}>
+          Lost — {enq.lostReason}
+        </div>
+      )}
+
+      {overdue && (
+        <div className="text-[12.5px] mt-2.5 rounded-lg px-3 py-2 inline-flex items-center gap-1.5" style={{ background: C.goldSoft, color: "#7a5a1e" }}>
+          <Clock size={12} /> Follow-up was due {fmtDate(enq.followUpOn)}
+        </div>
+      )}
+
+      {enq.status === "won" && (
+        <button onClick={onOpenTrips} className="tap w-full h-10 rounded-xl text-[13px] font-semibold inline-flex items-center justify-center gap-1.5 mt-3"
+          style={{ background: C.pineSoft, color: C.pine }}>
+          <MapIcon size={14} /> Open the trip
+        </button>
+      )}
+
+      {["new", "quoted", "cold"].includes(enq.status) && !confirming && !losing && (
+        <>
+          <div className="flex gap-2 mt-3">
+            <button onClick={contactWhatsApp} className="tap flex-1 h-10 rounded-xl text-[12.5px] font-semibold inline-flex items-center justify-center gap-1.5"
+              style={{ background: "#25D366", color: "#fff" }}>
+              <MessageCircle size={14} /> WhatsApp
+            </button>
+            <button onClick={contactEmail} className="tap flex-1 h-10 rounded-xl text-[12.5px] font-semibold inline-flex items-center justify-center gap-1.5"
+              style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }}>
+              <Mail size={14} /> Email
+            </button>
+          </div>
+          <div className="flex gap-2 mt-2">
+            <button onClick={() => setLosing(true)} className="tap flex-1 h-10 rounded-xl text-[12.5px] font-semibold"
+              style={{ background: C.card, border: `1px solid ${C.line}`, color: C.muted }}>
+              Didn't go ahead
+            </button>
+            <button onClick={() => setConfirming(true)} className="tap flex-[1.4] h-10 rounded-xl text-[13px] font-semibold inline-flex items-center justify-center gap-1.5"
+              style={{ background: C.pine, color: "#fff" }}>
+              <Check size={15} strokeWidth={3} /> They said yes
+            </button>
+          </div>
+        </>
+      )}
+
+      {confirming && (
+        <div className="rounded-xl p-3.5 mt-3 fade" style={{ background: C.pineSoft }}>
+          <div className="text-[13.5px] font-semibold mb-1" style={{ color: C.pine }}>Turn this into a trip?</div>
+          <p className="text-[12.5px] mb-3" style={{ color: C.pine, opacity: .85 }}>
+            {enq.start
+              ? `A trip will be created for ${fmtDate(enq.start)}${enq.end ? ` – ${fmtDate(enq.end)}` : ""}, and you can hire your crew onto it.`
+              : "Add the dates first — a trip needs a start and end date."}
+          </p>
+          <div className="flex gap-2">
+            <button onClick={() => setConfirming(false)} className="tap flex-1 h-10 rounded-lg text-[13px] font-semibold"
+              style={{ background: C.card, color: C.muted }}>Cancel</button>
+            <button onClick={convert} disabled={busy || !enq.start || !enq.end}
+              className="tap flex-1 h-10 rounded-lg text-[13px] font-bold inline-flex items-center justify-center gap-1.5"
+              style={{ background: enq.start && enq.end ? C.pine : "#C7CEC7", color: "#fff" }}>
+              {busy ? <Loader2 size={14} className="animate-spin" /> : "Create the trip"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {losing && (
+        <div className="rounded-xl p-3.5 mt-3 fade" style={{ background: C.bg, border: `1px solid ${C.line}` }}>
+          <div className="text-[13px] font-semibold mb-2" style={{ color: C.ink }}>What happened?</div>
+          <div className="flex flex-wrap gap-2 mb-2.5">
+            {LOST_REASONS.map((r) => (
+              <button key={r} onClick={() => { actions.setEnquiryStatus(enq.id, "lost", { lost_reason: r }); setLosing(false); onFlash("Recorded. The pattern in these is worth reviewing."); }}
+                className="tap rounded-full px-3 py-1.5 text-[12.5px] font-medium"
+                style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }}>{r}</button>
+            ))}
+          </div>
+          <div className="flex gap-2">
+            <button onClick={() => setLosing(false)} className="tap flex-1 h-9 rounded-lg text-[12.5px] font-semibold"
+              style={{ background: C.card, border: `1px solid ${C.line}`, color: C.muted }}>Cancel</button>
+            <button onClick={() => { actions.setEnquiryStatus(enq.id, "cold"); setLosing(false); onFlash("Marked cold — it'll still appear in follow-ups."); }}
+              className="tap flex-1 h-9 rounded-lg text-[12.5px] font-semibold"
+              style={{ background: C.goldSoft, color: "#7a5a1e" }}>Just gone quiet</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function EnquiryForm({ user, enquiry, actions, onBack, onSaved }) {
+  const e = enquiry || {};
+  const isNew = !e.id;
+  const [f, setF] = useState({
+    id: e.id, clientName: e.clientName || "", clientEmail: e.clientEmail || "", clientPhone: e.clientPhone || "",
+    country: e.country || "", source: e.source || "", title: e.title || "",
+    partySize: e.partySize || "", start: e.start || "", end: e.end || "",
+    interests: e.interests || "", budgetNote: e.budgetNote || "", notes: e.notes || "",
+    status: e.status || "new", quotedAmount: e.quotedAmount || "", followUpOn: e.followUpOn || "",
+  });
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const set = (k, v) => setF((x) => ({ ...x, [k]: v }));
+
+  const save = async () => {
+    if (!f.clientName.trim()) { setErr("Who is the enquiry from?"); return; }
+    setBusy(true); setErr(null);
+    const res = await actions.saveEnquiry(f);
+    setBusy(false);
+    if (!res.ok) { setErr(res.reason || "Couldn't save. Try again."); return; }
+    onSaved(isNew ? "Enquiry saved." : "Enquiry updated.");
+  };
+
+  return (
+    <div className="pb-6 fade">
+      <div className="h-14 px-4 flex items-center gap-3" style={{ borderBottom: `1px solid ${C.lineSoft}` }}>
+        <button onClick={onBack} className="tap w-9 h-9 rounded-full flex items-center justify-center" style={{ border: `1px solid ${C.line}`, background: C.card }}>
+          <ChevronLeft size={19} color={C.ink} />
+        </button>
+        <span className="text-[15px] font-semibold" style={{ color: C.ink }}>{isNew ? "New enquiry" : "Edit enquiry"}</span>
+      </div>
+
+      <div className="px-5 py-4">
+        <Label>Client name</Label>
+        <input value={f.clientName} onChange={(ev) => set("clientName", ev.target.value)} maxLength={80}
+          placeholder="Who asked?" className="w-full h-12 px-4 rounded-xl text-[15px] mb-4"
+          style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }} />
+
+        <div className="grid grid-cols-2 gap-3 mb-4">
+          <div>
+            <Label>Email</Label>
+            <input value={f.clientEmail} onChange={(ev) => set("clientEmail", ev.target.value)} inputMode="email" autoCapitalize="none"
+              placeholder="optional" className="w-full h-12 px-3.5 rounded-xl text-[14px]"
+              style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }} />
+          </div>
+          <div>
+            <Label>WhatsApp</Label>
+            <input value={f.clientPhone} onChange={(ev) => set("clientPhone", ev.target.value)} inputMode="tel"
+              placeholder="+61 4XX…" className="w-full h-12 px-3.5 rounded-xl text-[14px]"
+              style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }} />
+          </div>
+        </div>
+
+        <Label>Where did they come from?</Label>
+        <div className="flex flex-wrap gap-2 mb-4">
+          {ENQ_SOURCES.map((x) => <Chip key={x} on={f.source === x} onClick={() => set("source", f.source === x ? "" : x)}>{x}</Chip>)}
+        </div>
+
+        <Label>Trip title</Label>
+        <input value={f.title} onChange={(ev) => set("title", ev.target.value)} maxLength={80}
+          placeholder="e.g. 8-day Western Bhutan + Punakha" className="w-full h-12 px-4 rounded-xl text-[15px] mb-4"
+          style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }} />
+
+        <div className="grid grid-cols-3 gap-3 mb-4">
+          <div>
+            <Label>Guests</Label>
+            <input value={f.partySize} onChange={(ev) => set("partySize", ev.target.value.replace(/[^\d]/g, ""))} inputMode="numeric"
+              placeholder="2" className="w-full h-12 px-3.5 rounded-xl text-[14px]"
+              style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }} />
+          </div>
+          <div>
+            <Label>From</Label>
+            <input type="date" value={f.start} onChange={(ev) => set("start", ev.target.value)}
+              className="w-full h-12 px-2.5 rounded-xl text-[13px]"
+              style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }} />
+          </div>
+          <div>
+            <Label>To</Label>
+            <input type="date" value={f.end} onChange={(ev) => set("end", ev.target.value)}
+              className="w-full h-12 px-2.5 rounded-xl text-[13px]"
+              style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }} />
+          </div>
+        </div>
+
+        <Label>Country</Label>
+        <input value={f.country} onChange={(ev) => set("country", ev.target.value)} maxLength={40}
+          placeholder="e.g. Australia" className="w-full h-12 px-4 rounded-xl text-[15px] mb-4"
+          style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }} />
+
+        <Label>What are they interested in?</Label>
+        <textarea value={f.interests} onChange={(ev) => set("interests", ev.target.value)} rows={2} maxLength={300}
+          placeholder="Trekking, festivals, birding, photography…"
+          className="w-full px-3.5 py-3 rounded-xl text-[14px] resize-none mb-4"
+          style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }} />
+
+        <Label>Notes</Label>
+        <textarea value={f.notes} onChange={(ev) => set("notes", ev.target.value)} rows={3} maxLength={600}
+          placeholder="Anything worth remembering — budget signals, hesitations, who they're travelling with."
+          className="w-full px-3.5 py-3 rounded-xl text-[14px] resize-none mb-4"
+          style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }} />
+
+        <Label>Follow up on</Label>
+        <input type="date" value={f.followUpOn} onChange={(ev) => set("followUpOn", ev.target.value)}
+          className="w-full h-12 px-3.5 rounded-xl text-[14px] mb-1.5"
+          style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }} />
+        <p className="text-[11.5px] mb-5" style={{ color: C.muted }}>
+          It'll appear in "To chase" on this date. Most lost work is simply never followed up.
+        </p>
+
+        {err && <p className="text-[13px] mb-3" style={{ color: C.maroon }}>{err}</p>}
+
+        <button onClick={save} disabled={busy}
+          className="tap w-full rounded-xl flex items-center justify-center gap-2 text-[15px] font-semibold"
+          style={{ height: 52, background: C.pine, color: "#fff" }}>
+          {busy ? <Loader2 size={18} className="animate-spin" /> : <>{isNew ? "Save enquiry" : "Save changes"}</>}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* ========================================================================== */
+/*  ITINERARY BUILDER — operator adds the day-by-day plan                      */
+/* ========================================================================== */
+function ItineraryBuilder({ trip, canEdit, onChanged }) {
+  const [days, setDays] = useState(trip.itinerary || []);
+  const [adding, setAdding] = useState(false);
+  const [title, setTitle] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [editId, setEditId] = useState(null);
+  const [editText, setEditText] = useState("");
+
+  useEffect(() => { setDays(trip.itinerary || []); }, [trip.itinerary]);
+
+  const nights = trip.start && trip.end
+    ? Math.max(1, Math.round((new Date(trip.end) - new Date(trip.start)) / 86400e3) + 1)
+    : null;
+
+  const add = async () => {
+    const t = title.trim();
+    if (!t) return;
+    setBusy(true);
+    const nextDay = (days.length ? Math.max(...days.map((d) => d.day || 0)) : 0) + 1;
+    const { error } = await supabase.from("trip_itinerary").insert({
+      trip_id: trip.id, day_no: nextDay, title: t,
+    });
+    setBusy(false);
+    if (error) { console.error("itinerary insert failed:", error.message); return; }
+    setTitle(""); setAdding(false);
+    onChanged && onChanged();
+  };
+
+  const saveEdit = async (dayNo) => {
+    const t = editText.trim();
+    if (!t) return;
+    setBusy(true);
+    const { error } = await supabase.from("trip_itinerary")
+      .update({ title: t }).eq("trip_id", trip.id).eq("day_no", dayNo);
+    setBusy(false);
+    if (error) { console.error("itinerary update failed:", error.message); return; }
+    setEditId(null);
+    onChanged && onChanged();
+  };
+
+  const remove = async (dayNo) => {
+    setBusy(true);
+    const { error } = await supabase.from("trip_itinerary")
+      .delete().eq("trip_id", trip.id).eq("day_no", dayNo);
+    setBusy(false);
+    if (error) { console.error("itinerary delete failed:", error.message); return; }
+    onChanged && onChanged();
+  };
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-3">
+        <div className="text-[12px] font-semibold tracking-[.14em] uppercase" style={{ color: C.gold }}>Itinerary</div>
+        {nights && <span className="text-[12px]" style={{ color: C.muted }}>{days.length}/{nights} days planned</span>}
+      </div>
+
+      {days.length === 0 && !adding && (
+        <div className="rounded-2xl px-5 py-6 text-center mb-3" style={{ background: C.card, border: `1px dashed ${C.line}` }}>
+          <div className="w-11 h-11 rounded-2xl flex items-center justify-center mx-auto mb-2.5" style={{ background: C.goldSoft }}>
+            <CalendarDays size={20} color={C.gold} />
+          </div>
+          <div className="text-[14.5px] font-semibold" style={{ color: C.ink }}>No days planned yet</div>
+          <p className="text-[12.5px] mt-1" style={{ color: C.muted }}>
+            {canEdit ? "Add the day-by-day plan so your crew knows the route." : "The operator hasn't added the plan yet."}
+          </p>
+        </div>
+      )}
+
+      {days.length > 0 && (
+        <div className="space-y-2 mb-3">
+          {days.map((it) => (
+            <div key={it.day} className="rounded-xl px-3.5 py-3 flex items-start gap-3"
+              style={{ background: C.card, border: `1px solid ${C.line}` }}>
+              <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0" style={{ background: C.pine }}>
+                <span className="text-[12px] font-bold" style={{ color: C.goldSoft }}>{it.day}</span>
+              </div>
+              {editId === it.day ? (
+                <div className="flex-1">
+                  <input value={editText} onChange={(e) => setEditText(e.target.value)} maxLength={120}
+                    onKeyDown={(e) => e.key === "Enter" && saveEdit(it.day)}
+                    className="w-full h-10 px-3 rounded-lg text-[14px] mb-2"
+                    style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} autoFocus />
+                  <div className="flex gap-2">
+                    <button onClick={() => setEditId(null)} className="tap flex-1 h-9 rounded-lg text-[12.5px] font-semibold"
+                      style={{ background: C.card, border: `1px solid ${C.line}`, color: C.muted }}>Cancel</button>
+                    <button onClick={() => saveEdit(it.day)} disabled={busy}
+                      className="tap flex-1 h-9 rounded-lg text-[12.5px] font-semibold" style={{ background: C.pine, color: "#fff" }}>Save</button>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <span className="flex-1 text-[14px] leading-snug" style={{ color: C.ink }}>{it.title}</span>
+                  {canEdit && (
+                    <div className="flex gap-1 shrink-0">
+                      <button onClick={() => { setEditId(it.day); setEditText(it.title); }}
+                        className="tap w-8 h-8 rounded-lg flex items-center justify-center" style={{ background: C.bg }} aria-label="Edit day">
+                        <Maximize2 size={13} color={C.muted} />
+                      </button>
+                      <button onClick={() => remove(it.day)} disabled={busy}
+                        className="tap w-8 h-8 rounded-lg flex items-center justify-center" style={{ background: C.maroonSoft }} aria-label="Remove day">
+                        <Trash2 size={13} color={C.maroon} />
+                      </button>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {canEdit && (adding ? (
+        <div className="rounded-xl p-3.5 fade" style={{ background: C.card, border: `1px solid ${C.pine}` }}>
+          <div className="text-[12.5px] font-medium mb-2" style={{ color: C.ink }}>
+            Day {(days.length ? Math.max(...days.map((d) => d.day || 0)) : 0) + 1}
+          </div>
+          <input value={title} onChange={(e) => setTitle(e.target.value)} maxLength={120}
+            onKeyDown={(e) => e.key === "Enter" && add()}
+            placeholder="e.g. Paro → Thimphu, Buddha Dordenma, evening at Tashichho Dzong"
+            className="w-full h-11 px-3.5 rounded-lg text-[14px] mb-2.5"
+            style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} autoFocus />
+          <div className="flex gap-2">
+            <button onClick={() => { setAdding(false); setTitle(""); }}
+              className="tap flex-1 h-10 rounded-lg text-[13px] font-semibold"
+              style={{ background: C.card, border: `1px solid ${C.line}`, color: C.muted }}>Cancel</button>
+            <button onClick={add} disabled={busy || !title.trim()}
+              className="tap flex-[1.4] h-10 rounded-lg text-[13.5px] font-semibold inline-flex items-center justify-center gap-1.5"
+              style={{ background: title.trim() ? C.pine : "#C7CEC7", color: "#fff" }}>
+              {busy ? <Loader2 size={14} className="animate-spin" /> : <><Plus size={14} strokeWidth={3} /> Add day</>}
+            </button>
+          </div>
+        </div>
+      ) : (
+        <button onClick={() => setAdding(true)}
+          className="tap w-full h-11 rounded-xl text-[13.5px] font-semibold inline-flex items-center justify-center gap-1.5"
+          style={{ background: C.goldSoft, color: "#7a5a1e" }}>
+          <Plus size={15} strokeWidth={3} /> Add {days.length ? "another day" : "the first day"}
+        </button>
+      ))}
+    </div>
+  );
 }
