@@ -1039,10 +1039,10 @@ function WelcomeBullet({ Icon, title, body }) {
 const NAV = {
   guide: [{ id: "post", label: "Feed", Icon: Newspaper }, { id: "jobs", label: "Jobs", Icon: Briefcase }, { id: "trips", label: "Trips", Icon: MapIcon }, { id: "chats", label: "Messages", Icon: MessageSquare }, { id: "profile", label: "Profile", Icon: User }],
   driver: [{ id: "post", label: "Feed", Icon: Newspaper }, { id: "jobs", label: "Jobs", Icon: Briefcase }, { id: "trips", label: "Trips", Icon: MapIcon }, { id: "chats", label: "Messages", Icon: MessageSquare }, { id: "profile", label: "Profile", Icon: User }],
-  operator: [{ id: "enquiries", label: "Enquiries", Icon: Inbox }, { id: "discover", label: "Discover", Icon: Search }, { id: "requests", label: "Jobs", Icon: Briefcase }, { id: "trips", label: "Trips", Icon: MapIcon }, { id: "chats", label: "Messages", Icon: MessageSquare }],
+  operator: [{ id: "bookings", label: "Bookings", Icon: CalendarCheck }, { id: "discover", label: "Crew", Icon: Search }, { id: "requests", label: "Jobs", Icon: Briefcase }, { id: "chats", label: "Messages", Icon: MessageSquare }, { id: "feed", label: "Feed", Icon: Newspaper }],
   admin: [{ id: "review", label: "Review", Icon: ShieldCheck }, { id: "users", label: "Users", Icon: Users }, { id: "feed", label: "Feed", Icon: Newspaper }, { id: "discover", label: "Discover", Icon: Search }, { id: "chats", label: "Messages", Icon: MessageSquare }],
 };
-const DEFAULT_TAB = { guide: "post", driver: "post", operator: "enquiries", admin: "review" };
+const DEFAULT_TAB = { guide: "post", driver: "post", operator: "bookings", admin: "review" };
 
 function Shell({ user, posts, jobs, trips, listings, enquiries, actions, engagement, dm, dirTick, onLogout }) {
   const [tab, setTab] = useState(DEFAULT_TAB[user.kind]);
@@ -1205,7 +1205,7 @@ function Shell({ user, posts, jobs, trips, listings, enquiries, actions, engagem
   const jobsBadge = myJobsPending + availableListings;
   const todayStr = new Date().toISOString().slice(0, 10);
   const enquiryBadge = (enquiries || []).filter((e) =>
-    e && e.operatorId === actorId && ["new", "quoted", "cold"].includes(e.status) &&
+    e && e.operatorId === actorId && ["new", "quoted", "cold", "lost"].includes(e.status) &&
     (!e.followUpOn || e.followUpOn <= todayStr)).length;
 
   const openProfile = (talentId) => setOverlay({ type: "profile", talentId });
@@ -1238,7 +1238,7 @@ function Shell({ user, posts, jobs, trips, listings, enquiries, actions, engagem
             {tab === "trips" && <TripsTab user={user} trips={trips} actions={actions} />}
             {tab === "chats" && <ChatsTab user={user} me={actorId} dm={dm} trips={trips} actions={actions} posts={posts} dirTick={dirTick} onOpenPost={setSharedPost} openWith={dmWith} onOpened={() => setDmWith(null)} onOpenProfile={openProfile} />}
             {tab === "profile" && <TalentProfile talent={talentById(user.talentId)} posts={posts} eng={eng} self onSetAvailability={actions.setAvailability} onOpenProfile={openProfile} onBack={null} />}
-            {tab === "enquiries" && <EnquiriesTab user={user} enquiries={enquiries} actions={actions} onOpenTrips={() => setTab("trips")} />}
+            {tab === "bookings" && <BookingsTab user={user} enquiries={enquiries} trips={trips} actions={actions} onOpenProfile={openProfile} />}
             {tab === "discover" && <Discover onOpen={openProfile} initialQuery={searchTerm} dirTick={dirTick} />}
             {tab === "requests" && <OperatorJobs user={user} jobs={jobs} listings={listings} posts={posts} actions={actions} eng={eng} onOpen={openProfile} />}
             {tab === "feed" && <Feed posts={posts} eng={eng} admin={user.kind === "admin"} onDelete={actions.deletePost} onOpenProfile={openProfile} following={myFollowing} />}
@@ -1274,13 +1274,13 @@ function Shell({ user, posts, jobs, trips, listings, enquiries, actions, engagem
           onOpenProfile={(id) => { setAlertsOpen(false); openProfile(id); }}
           onOpenMessages={() => { setAlertsOpen(false); setTab("chats"); }}
           onOpenJobs={() => { setAlertsOpen(false); setTab(user.kind === "operator" ? "requests" : "jobs"); }}
-          onOpenTrips={() => { setAlertsOpen(false); setTab("trips"); }}
+          onOpenTrips={() => { setAlertsOpen(false); setTab(user.kind === "operator" ? "bookings" : "trips"); }}
           onOpenSelf={() => { setAlertsOpen(false); setTab(user.kind === "operator" || user.kind === "admin" ? "discover" : "profile"); }} />
       )}
 
       <BottomNav nav={nav} tab={tab}
         setTab={(t) => { setOverlay(null); setSharedPost(null); setTab(t); }}
-        badges={{ jobs: jobsBadge, review: pendingModCount, chats: unreadDm, enquiries: enquiryBadge }} />
+        badges={{ jobs: jobsBadge, review: pendingModCount, chats: unreadDm, bookings: enquiryBadge }} />
     </>
   );
 }
@@ -6689,99 +6689,6 @@ const ENQ_STATUS = {
 const ENQ_SOURCES = ["Website", "Email", "WhatsApp", "Phone", "Referral", "Agent", "Repeat client", "Social media", "Walk-in", "Other"];
 const LOST_REASONS = ["Price too high", "Dates unavailable", "Chose another operator", "Trip postponed", "No reply", "Other"];
 
-function EnquiriesTab({ user, enquiries, actions, onOpenTrips }) {
-  const [filter, setFilter] = useState("open");
-  const [editing, setEditing] = useState(null);   // enquiry object or {} for new
-  const [note, setNote] = useState(null);
-
-  const flash = (m) => { setNote(m); setTimeout(() => setNote(null), 3000); };
-  const mine = (enquiries || []).filter((e) => e && e.operatorId === (user.talentId || user.id));
-
-  const today = new Date().toISOString().slice(0, 10);
-  // a lost enquiry is not dead — this year's "too expensive" is next year's booking
-  const needsChase = mine.filter((e) =>
-    ["new", "quoted", "cold", "lost"].includes(e.status) &&
-    (!e.followUpOn || e.followUpOn <= today));
-
-  const shown =
-    filter === "open"  ? mine.filter((e) => ["new", "quoted"].includes(e.status))
-    : filter === "chase" ? needsChase
-    : filter === "won"   ? mine.filter((e) => e.status === "won")
-    : filter === "lost"  ? mine.filter((e) => ["lost", "cold"].includes(e.status))
-    : mine;
-
-  const won = mine.filter((e) => e.status === "won").length;
-  const closed = mine.filter((e) => ["won", "lost"].includes(e.status)).length;
-  const rate = closed ? Math.round((won / closed) * 100) : null;
-
-  if (editing) {
-    return <EnquiryForm user={user} enquiry={editing} actions={actions}
-      onBack={() => setEditing(null)}
-      onSaved={(msg) => { setEditing(null); flash(msg); }} />;
-  }
-
-  return (
-    <div className="px-5 py-4">
-      <div className="flex items-center justify-between mb-3">
-        <div className="text-[12px] font-semibold tracking-[.14em] uppercase" style={{ color: C.gold }}>Enquiries</div>
-        {rate !== null && (
-          <span className="text-[12px]" style={{ color: C.muted }}>{rate}% converted</span>
-        )}
-      </div>
-
-      <button onClick={() => setEditing({})}
-        className="tap w-full h-12 rounded-xl text-[14.5px] font-semibold inline-flex items-center justify-center gap-2 mb-3"
-        style={{ background: C.pine, color: "#fff", boxShadow: `0 6px 16px ${C.pine}33` }}>
-        <Plus size={17} strokeWidth={3} /> New enquiry
-      </button>
-
-      {note && <div className="rounded-xl px-3.5 py-2.5 mb-3 text-[13px]" style={{ background: C.pineSoft, color: C.pine }}>{note}</div>}
-
-      {needsChase.length > 0 && filter !== "chase" && (
-        <button onClick={() => setFilter("chase")}
-          className="tap w-full rounded-xl px-3.5 py-3 mb-3 flex items-center gap-3 text-left"
-          style={{ background: C.goldSoft, border: `1px solid ${C.gold}33` }}>
-          <Clock size={17} color={C.gold} className="shrink-0" />
-          <div className="flex-1">
-            <div className="text-[13.5px] font-semibold" style={{ color: "#7a5a1e" }}>
-              {needsChase.length} {needsChase.length === 1 ? "enquiry needs" : "enquiries need"} a follow-up
-            </div>
-            <div className="text-[12px] mt-0.5" style={{ color: "#7a5a1e", opacity: .85 }}>
-              Includes failed enquiries worth revisiting. Most lost work is simply never chased.
-            </div>
-          </div>
-        </button>
-      )}
-
-      <div className="flex gap-2 overflow-x-auto hidescroll pb-1 mb-4" style={{ scrollbarWidth: "none" }}>
-        {[["open", `Open · ${mine.filter((e) => ["new","quoted"].includes(e.status)).length}`],
-          ["chase", `To chase · ${needsChase.length}`],
-          ["won", `Won · ${won}`],
-          ["lost", `Failed · ${mine.filter((e) => ["lost","cold"].includes(e.status)).length}`],
-          ["all", "All"]].map(([k, l]) => (
-          <Chip key={k} on={filter === k} onClick={() => setFilter(k)}>{l}</Chip>
-        ))}
-      </div>
-
-      {shown.length === 0 ? (
-        <Empty Icon={Inbox} title={filter === "chase" ? "Nothing to chase" : "No enquiries here"}
-          body={filter === "chase"
-            ? "Everything open has a follow-up date in the future."
-            : "Record every enquiry, even the ones that look unlikely. The pattern in what you lose is worth knowing."} />
-      ) : (
-        <div className="space-y-3">
-          {shown.map((e) => (
-            <EnquiryCard key={e.id} enq={e} actions={actions}
-              onEdit={() => setEditing(e)}
-              onFlash={flash}
-              onOpenTrips={onOpenTrips} />
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
 function EnquiryCard({ enq, actions, onEdit, onFlash, onOpenTrips }) {
   const [busy, setBusy] = useState(false);
   const [confirming, setConfirming] = useState(false);
@@ -6827,6 +6734,21 @@ function EnquiryCard({ enq, actions, onEdit, onFlash, onOpenTrips }) {
         </button>
         <span className="text-[11.5px] font-semibold rounded-full px-2.5 py-1 shrink-0" style={{ background: st.bg, color: st.fg }}>{st.label}</span>
       </div>
+
+      {/* where this sits in the journey */}
+      {["new", "quoted"].includes(enq.status) && (
+        <div className="flex items-center gap-1.5 mt-2.5">
+          {[["Enquiry", true], ["Quoted", enq.status === "quoted"], ["Trip", false]].map(([label, done], i) => (
+            <React.Fragment key={label}>
+              {i > 0 && <div style={{ flex: 1, height: 1.5, background: done ? C.pine : C.line }} />}
+              <span className="text-[10px] font-semibold rounded-full px-2 py-0.5 shrink-0"
+                style={{ background: done ? C.pineSoft : C.bg, color: done ? C.pine : C.muted, border: `1px solid ${done ? "transparent" : C.line}` }}>
+                {label}
+              </span>
+            </React.Fragment>
+          ))}
+        </div>
+      )}
 
       <div className="flex flex-wrap gap-2 mt-2.5">
         {enq.start && <Pill Icon={CalendarCheck}>{fmtDate(enq.start)}{enq.end ? ` – ${fmtDate(enq.end)}` : ""}</Pill>}
@@ -6899,9 +6821,9 @@ function EnquiryCard({ enq, actions, onEdit, onFlash, onOpenTrips }) {
         <div className="rounded-xl p-3.5 mt-3 fade" style={{ background: C.pineSoft }}>
           <div className="text-[13.5px] font-semibold mb-1" style={{ color: C.pine }}>Make this a trip?</div>
           <p className="text-[12.5px] mb-3" style={{ color: C.pine, opacity: .85 }}>
-            {enq.start
-              ? `A trip will be created for ${fmtDate(enq.start)}${enq.end ? ` – ${fmtDate(enq.end)}` : ""}, and you can hire your crew onto it.`
-              : "Add the dates first — a trip needs a start and end date."}
+            {enq.start && enq.end
+              ? `A trip will be created for ${fmtDate(enq.start)} – ${fmtDate(enq.end)}. You can then hire your crew onto it and build the itinerary.`
+              : "This enquiry has no dates yet. Tap the name above to add them, then come back."}
           </p>
           <div className="flex gap-2">
             <button onClick={() => setConfirming(false)} className="tap flex-1 h-10 rounded-lg text-[13px] font-semibold"
@@ -7211,6 +7133,171 @@ function ItineraryBuilder({ trip, canEdit, onChanged }) {
           <Plus size={15} strokeWidth={3} /> Add {days.length ? "another day" : "the first day"}
         </button>
       ))}
+    </div>
+  );
+}
+
+/* ========================================================================== */
+/*  BOOKINGS — one page, the whole lifecycle                                  */
+/*                                                                            */
+/*    Enquiry  →  Confirmed  →  Past                                          */
+/*       ↓                                                                    */
+/*    Follow up  (and back to Enquiry if it revives)                          */
+/*                                                                            */
+/*  An operator shouldn't have to remember which tab a booking lives in.      */
+/*  It moves through stages; the page follows it.                             */
+/* ========================================================================== */
+function BookingsTab({ user, enquiries, trips, actions, onOpenProfile }) {
+  const [stage, setStage] = useState("enquiries");
+  const [editing, setEditing] = useState(null);
+  const [openTripId, setOpenTripId] = useState(null);
+  const [note, setNote] = useState(null);
+
+  const meId = user.talentId || user.id;
+  const flash = (m) => { setNote(m); setTimeout(() => setNote(null), 3200); };
+  const today = new Date().toISOString().slice(0, 10);
+
+  const myEnq = (enquiries || []).filter((e) => e && e.operatorId === meId);
+  const myTrips = (trips || []).filter((tr) => tr && ((tr.members || []).some((m) => m && m.id === meId) || tr.operatorId === meId));
+
+  const live     = myEnq.filter((e) => ["new", "quoted"].includes(e.status));
+  const upcoming = myTrips.filter((tr) => tripStateNow(tr) !== "completed").sort((a, b) => new Date(a.start) - new Date(b.start));
+  const past     = myTrips.filter((tr) => tripStateNow(tr) === "completed").sort((a, b) => new Date(b.end) - new Date(a.end));
+  const followUp = myEnq.filter((e) => ["lost", "cold"].includes(e.status));
+
+  const dueNow = myEnq.filter((e) =>
+    ["new", "quoted", "cold", "lost"].includes(e.status) && (!e.followUpOn || e.followUpOn <= today));
+
+  // open views take over the whole page
+  if (editing) {
+    return <EnquiryForm user={user} enquiry={editing} actions={actions}
+      onBack={() => setEditing(null)}
+      onSaved={(m) => { setEditing(null); flash(m); }} />;
+  }
+  const openTrip = myTrips.find((tr) => tr.id === openTripId);
+  if (openTrip) {
+    return <TripHub user={user} meId={meId} trip={openTrip} actions={actions} onBack={() => setOpenTripId(null)} />;
+  }
+
+  const STAGES = [
+    { id: "enquiries", label: "Enquiries", count: live.length,     Icon: Inbox },
+    { id: "confirmed", label: "Confirmed", count: upcoming.length, Icon: CalendarCheck },
+    { id: "past",      label: "Past",      count: past.length,     Icon: Check },
+    { id: "followup",  label: "Follow up", count: followUp.length, Icon: RefreshCw },
+  ];
+
+  return (
+    <div className="px-5 py-4">
+      {/* the pipeline, always visible — you can see where everything stands */}
+      <div className="flex items-center justify-between mb-3">
+        <div className="text-[12px] font-semibold tracking-[.14em] uppercase" style={{ color: C.gold }}>Bookings</div>
+        {dueNow.length > 0 && (
+          <button onClick={() => setStage(followUp.some((e) => dueNow.includes(e)) && !live.some((e) => dueNow.includes(e)) ? "followup" : "enquiries")}
+            className="tap inline-flex items-center gap-1.5 text-[12px] font-semibold rounded-full px-2.5 py-1"
+            style={{ background: C.goldSoft, color: "#7a5a1e" }}>
+            <Clock size={12} /> {dueNow.length} to chase
+          </button>
+        )}
+      </div>
+
+      <div className="flex gap-1.5 mb-4">
+        {STAGES.map((st, i) => {
+          const on = stage === st.id;
+          return (
+            <button key={st.id} onClick={() => setStage(st.id)}
+              className="tap flex-1 rounded-xl py-2.5 flex flex-col items-center gap-1"
+              style={{
+                background: on ? C.pine : C.card,
+                border: `1px solid ${on ? C.pine : C.line}`,
+                opacity: st.id === "past" && !on ? 0.72 : 1,
+              }}>
+              <st.Icon size={15} color={on ? C.goldSoft : C.muted} strokeWidth={on ? 2.4 : 2} />
+              <span className="text-[10.5px] font-semibold leading-none" style={{ color: on ? "#fff" : C.ink }}>{st.label}</span>
+              <span className="text-[13px] font-bold leading-none" style={{ color: on ? C.goldSoft : C.muted }}>{st.count}</span>
+            </button>
+          );
+        })}
+      </div>
+
+      {note && <div className="rounded-xl px-3.5 py-2.5 mb-3 text-[13px]" style={{ background: C.pineSoft, color: C.pine }}>{note}</div>}
+
+      {/* ENQUIRIES — work that hasn't been won yet */}
+      {stage === "enquiries" && (
+        <>
+          <button onClick={() => setEditing({})}
+            className="tap w-full h-12 rounded-xl text-[14.5px] font-semibold inline-flex items-center justify-center gap-2 mb-3"
+            style={{ background: C.pine, color: "#fff", boxShadow: `0 6px 16px ${C.pine}33` }}>
+            <Plus size={17} strokeWidth={3} /> New enquiry
+          </button>
+
+          {live.length === 0 ? (
+            <Empty Icon={Inbox} title="No open enquiries"
+              body="Record every enquiry as it arrives — even the unlikely ones. What you lose is as worth knowing as what you win." />
+          ) : (
+            <div className="space-y-3">
+              {live.map((e) => (
+                <EnquiryCard key={e.id} enq={e} actions={actions}
+                  onEdit={() => setEditing(e)} onFlash={flash}
+                  onOpenTrips={() => setStage("confirmed")} />
+              ))}
+            </div>
+          )}
+        </>
+      )}
+
+      {/* CONFIRMED — real trips, soonest first */}
+      {stage === "confirmed" && (
+        upcoming.length === 0 ? (
+          <Empty Icon={CalendarCheck} title="No confirmed trips"
+            body="When an enquiry is won, tap Make a Trip and it appears here with its crew chat." />
+        ) : (
+          <div className="space-y-3">
+            {upcoming.map((tr) => <TripCard key={tr.id} trip={tr} onOpen={() => setOpenTripId(tr.id)} />)}
+          </div>
+        )
+      )}
+
+      {/* PAST — the record, dimmed */}
+      {stage === "past" && (
+        past.length === 0 ? (
+          <Empty Icon={Check} title="No completed trips yet"
+            body="Finished trips move here automatically, so your list stays focused on what's ahead." />
+        ) : (
+          <>
+            <div className="space-y-3" style={{ opacity: 0.74 }}>
+              {past.map((tr) => <TripCard key={tr.id} trip={tr} past onOpen={() => setOpenTripId(tr.id)} />)}
+            </div>
+            <p className="text-[11.5px] text-center mt-4 leading-snug" style={{ color: C.muted }}>
+              Open a past trip to ask its guests for a review — it's never too late, but sooner is better.
+            </p>
+          </>
+        )
+      )}
+
+      {/* FOLLOW UP — not dead, just not now */}
+      {stage === "followup" && (
+        followUp.length === 0 ? (
+          <Empty Icon={RefreshCw} title="Nothing to revisit"
+            body="Enquiries that don't go ahead are kept here and resurface when it's worth asking again." />
+        ) : (
+          <>
+            <div className="rounded-xl px-3.5 py-3 mb-3 flex gap-2.5" style={{ background: C.bg, border: `1px solid ${C.line}` }}>
+              <RefreshCw size={15} color={C.gold} className="shrink-0 mt-0.5" />
+              <p className="text-[12px] leading-snug" style={{ color: C.muted }}>
+                This year's "too expensive" is often next year's booking. These come back into your
+                follow-ups automatically — six months for a failed enquiry, one month for one that went quiet.
+              </p>
+            </div>
+            <div className="space-y-3">
+              {followUp.map((e) => (
+                <EnquiryCard key={e.id} enq={e} actions={actions}
+                  onEdit={() => setEditing(e)} onFlash={flash}
+                  onOpenTrips={() => setStage("confirmed")} />
+              ))}
+            </div>
+          </>
+        )
+      )}
     </div>
   );
 }
