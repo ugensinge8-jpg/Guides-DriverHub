@@ -14,9 +14,11 @@ import { supabase } from "./supabase.js";
 
 /* Bhutan Tourism Hub design system — paper, pine forest, temple gold, kemar red. */
 const C = {
-  bg: "#F4F5F1", card: "#FFFFFF", ink: "#1A241E", muted: "#6E7A72",
+  bg: "#F4F5F1", card: "#FFFFFF", ink: "#1A241E", muted: "#5E6963",
   line: "#E4E7E0", lineSoft: "#EEF0EB", pine: "#21402F", pineDeep: "#16281E",
   gold: "#C0872B", goldSoft: "#F3E8CF", maroon: "#7A2E2E", maroonSoft: "#F7E9E7", pineSoft: "#E4EFE7",
+  // gold is for icons and accents; goldText is gold you READ — deep enough to pass WCAG AA
+  goldText: "#8A5F1C",
 };
 
 /* ------------------------------ Seed data -------------------------------- */
@@ -47,7 +49,7 @@ const sysMsg = (text) => ({ id: uid(), senderId: null, kind: "system", body: tex
 /* ── Cloud (Supabase) ── posts are global when configured; everything falls back to local demo mode when not. */
 const CLOUD = Boolean(supabase);
 const DEMO_MODE = false;   // set true only for local demos without a database
-const BUILD = "BUILD 18 — 15 Aug";   // bump every deploy; shown at the top of the welcome screen
+const BUILD = "BUILD 19 — 3 Oct";   // bump every deploy; shown at the top of the welcome screen
 // which device someone is on — shown beside the build so a screenshot tells us both
 const DEVICE = (() => {
   try {
@@ -171,10 +173,10 @@ class ErrorBoundary extends React.Component {
       <div style={{ padding: 20, fontFamily: "system-ui", background: "#F4F5F1", minHeight: "100dvh" }}>
         <div style={{ background: "#fff", border: "1px solid #E4E7E0", borderRadius: 16, padding: 18 }}>
           <div style={{ fontSize: 17, fontWeight: 600, color: "#7A2E2E", marginBottom: 8 }}>Something went wrong</div>
-          <p style={{ fontSize: 13.5, color: "#6E7A72", marginBottom: 12 }}>
+          <p style={{ fontSize: 14, color: "#6E7A72", marginBottom: 12 }}>
             Please screenshot this and send it to support — it tells us exactly what to fix.
           </p>
-          <div style={{ background: "#F7E9E7", borderRadius: 10, padding: 12, fontSize: 12.5, color: "#7A2E2E", wordBreak: "break-word", fontFamily: "monospace" }}>
+          <div style={{ background: "#F7E9E7", borderRadius: 10, padding: 12, fontSize: 13, color: "#7A2E2E", wordBreak: "break-word", fontFamily: "monospace" }}>
             {msg}
           </div>
           {stack && (
@@ -695,7 +697,15 @@ export default function App() {
     if (!T) return;
     setTrips(T.map((tr) => ({
       id: tr.id, operatorId: tr.operator_id, operator: tr.operator_name, title: tr.title,
-      start: tr.start_date, end: tr.end_date, meetingPoint: tr.meeting_point || "To be set by operator",
+      start: tr.start_date, end: tr.end_date, meetingPoint: tr.meeting_point || null,
+      arrivalFlight: tr.arrival_flight || null, arrivalAt: tr.arrival_at || null,
+      departureFlight: tr.departure_flight || null, departureAt: tr.departure_at || null,
+      arrivalPoint: tr.arrival_point || null,
+      visaStatus: tr.visa_status || "not_started", sdfStatus: tr.sdf_status || "not_started",
+      permitsStatus: tr.permits_status || "not_needed", hotelsStatus: tr.hotels_status || "not_started",
+      insuranceOk: !!tr.insurance_ok,
+      guestCount: tr.guest_count || null, guestNotes: tr.guest_notes || null,
+      emergencyName: tr.emergency_name || null, emergencyPhone: tr.emergency_phone || null,
       members: (M || []).filter((m) => m.trip_id === tr.id).map((m) => {
         const p = talentById(m.user_id);
         return { id: m.user_id, name: p?.name || m.display_name || "Member", initials: p?.initials || initialsOf(m.display_name || "?"), roleInTrip: m.role_in_trip };
@@ -722,6 +732,14 @@ export default function App() {
       .subscribe();
     return () => { supabase.removeChannel(ch); };
   }, [dirTick]);
+
+  const saveTripDetails = async (tripId, patch) => {
+    if (!CLOUD) return { ok: false };
+    const { error } = await supabase.from("trips").update(patch).eq("id", tripId);
+    if (error) { console.error("saveTripDetails failed:", error.message); return { ok: false, reason: error.message }; }
+    fetchTrips();
+    return { ok: true };
+  };
 
   const createTripCloud = async (job) => {
     const opId = job.operatorId || realUserRef.current;
@@ -916,14 +934,39 @@ export default function App() {
         .fade{ animation-duration:.2s; }
         textarea:focus, input:focus{ outline:none; border-color:${C.pine}!important; box-shadow:0 0 0 3px ${C.pine}1f; }
         textarea::placeholder, input::placeholder{ color:${C.muted}; opacity:.7; }
+
+        /* phone first: a single column */
+        .app-shell{ max-width: 28rem; }
+        .side-rail{ display:none; }
+
+        /* desktop: a side rail appears and the bottom bar steps aside */
+        @media (min-width: 900px){
+          .app-shell{
+            max-width: 1180px;
+            flex-direction: row !important;
+            gap: 0;
+            background: ${C.bg};
+          }
+          .side-rail{
+            display:flex; flex-direction:column;
+            width: 232px; flex: 0 0 232px;
+            background: ${C.card};
+            border-right: 1px solid ${C.line};
+            padding: 18px 12px;
+            overflow-y: auto;
+          }
+          .main-col{ flex:1; min-width:0; display:flex; flex-direction:column; }
+          .bottom-bar{ display:none !important; }
+          .content-pad{ max-width: 720px; margin: 0 auto; width: 100%; }
+        }
       `}</style>
 
-      <div className="w-full max-w-md flex flex-col" style={{ height: "100dvh", color: C.ink }}>
+      <div className="w-full app-shell flex flex-col" style={{ height: "100dvh", color: C.ink }}>
         {!user ? (
           <Login onPick={setAccountId} session={session} myProfile={myProfile} onAuthed={reloadMe} onBusy={setAuthBusy} />
         ) : (
           <Shell key={user.id} user={user} posts={posts} jobs={jobs} trips={trips} listings={listings} enquiries={enquiries} dirTick={dirTick}
-            actions={{ addPost, approve, reject, deletePost, reloadDirectory: loadProfiles, setAvailability, toggleFollow, sendJob, setJobStatus, postChat, openChat, postListing, applyToListing, setApplicant, hireApplicant, saveEnquiry, setEnquiryStatus, convertEnquiry, reloadTrips: fetchTrips, binListing, destroyListing, binRequest, destroyRequest }} engagement={{ likes, comments, toggleLike, addComment, deleteComment, follows, toggleFollow, stories, addStory, deleteStory }} dm={{ dms, sendDm, markRead, sharePostTo }} onLogout={() => { if (session) supabase.auth.signOut(); setAccountId(null); }} />
+            actions={{ addPost, approve, reject, deletePost, reloadDirectory: loadProfiles, setAvailability, toggleFollow, sendJob, setJobStatus, postChat, openChat, postListing, applyToListing, setApplicant, hireApplicant, saveEnquiry, setEnquiryStatus, convertEnquiry, reloadTrips: fetchTrips, binListing, destroyListing, binRequest, destroyRequest, saveTripDetails }} engagement={{ likes, comments, toggleLike, addComment, deleteComment, follows, toggleFollow, stories, addStory, deleteStory }} dm={{ dms, sendDm, markRead, sharePostTo }} onLogout={() => { if (session) supabase.auth.signOut(); setAccountId(null); }} />
         )}
       </div>
     </div>
@@ -947,134 +990,70 @@ function Login({ onPick, session, myProfile, onAuthed, onBusy }) {
 
   return (
     <div className="flex-1 overflow-y-auto hidescroll fade" style={{ scrollbarWidth: "none" }}>
-      {/* brand */}
-      <div className="px-6 pt-3">
-        <div className="rounded-lg px-2.5 py-1 inline-block text-[10px] font-bold tracking-[.1em]"
-          style={{ background: C.pineSoft, color: C.pine }}>{BUILD} · {DEVICE}</div>
-      </div>
-
-      <div className="px-6 pt-3 flex items-center gap-2.5">
-        <div className="w-10 h-10 rounded-xl flex items-center justify-center" style={{ background: C.pine, boxShadow: `0 6px 14px ${C.pine}33` }}>
-          <Compass size={20} color={C.goldSoft} strokeWidth={1.9} />
-        </div>
-        <div>
-          <div className="text-[17px] font-semibold tracking-[-0.01em] leading-none" style={{ color: C.ink }}>Bhutan Tourism Hub</div>
-          <div className="text-[10px] font-semibold tracking-[.14em] uppercase mt-1" style={{ color: C.gold }}>Guides · Drivers · Operators</div>
-        </div>
-      </div>
-
-      {/* prototype badge */}
-      <div className="px-6 mt-4">
-        <div className="inline-flex items-center gap-2 rounded-full pl-2.5 pr-3 py-1.5" style={{ background: C.goldSoft }}>
-          <span className="w-2 h-2 rounded-full" style={{ background: C.gold }} />
-          <span className="text-[11.5px] font-bold tracking-[.08em] uppercase" style={{ color: "#7a5a1e" }}>Early access · Prototype</span>
-        </div>
-      </div>
-
-      {/* hero */}
-      <div className="px-6 mt-4">
-        <h1 className="text-[30px] leading-[1.12] font-semibold tracking-[-0.02em]" style={{ color: C.ink }}>
-          Be one of the first<br />guides on the hub.
-        </h1>
-        <p className="mt-3 text-[14.5px] leading-relaxed" style={{ color: C.muted }}>
-          We're building Bhutan's verified marketplace for licensed guides and drivers — where
-          tour operators find you by your <b style={{ color: C.ink }}>skills</b>, not by who they
-          already know.
-        </p>
-      </div>
-
-      {/* map — its own block, whole image visible, fixed gap below */}
-      <div className="px-6" style={{ marginTop: 28, marginBottom: 32 }}>
-        <div className="relative w-full rounded-2xl overflow-hidden flex items-center justify-center"
-          style={{ aspectRatio: "16 / 9", background: C.card, border: `1px solid ${C.lineSoft}` }}>
-          <img src={mapImg} alt="Relief map of Bhutan"
-            style={{ width: "100%", height: "100%", objectFit: "contain", padding: 8 }} />
-        </div>
-      </div>
-
-      {/* actions — separate block, never overlapped */}
-      <div className="px-6">
-        <button onClick={() => setAuthView("signup")}
-          className="tap w-full rounded-2xl flex items-center justify-center gap-2 text-[16.5px] font-semibold"
-          style={{ height: 56, background: C.pine, color: "#fff", boxShadow: `0 10px 24px ${C.pine}40` }}>
-          Join the hub <ArrowRight size={19} strokeWidth={2.4} />
-        </button>
-
-        <button onClick={() => setAuthView("signin")}
-          className="tap w-full rounded-2xl text-[15px] font-semibold mt-3"
-          style={{ height: 52, background: C.card, border: `1.5px solid ${C.pine}`, color: C.pine }}>
-          I already have an account
-        </button>
-
-        <p className="text-center text-[12.5px] mt-4" style={{ color: C.muted }}>
-          Free for licensed guides, drivers and tour operators.
-        </p>
-      </div>
-
-      {/* onboarding in batches — honest framing */}
-      <div className="px-6 mt-6">
-        <div className="rounded-2xl p-4" style={{ background: C.card, border: `1px solid ${C.line}` }}>
-          <div className="flex items-start gap-3">
-            <div className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0" style={{ background: C.goldSoft }}>
-              <Clock size={17} color={C.gold} />
-            </div>
-            <div>
-              <div className="text-[14px] font-semibold" style={{ color: C.ink }}>We're onboarding in small batches</div>
-              <p className="text-[13px] leading-snug mt-1" style={{ color: C.muted }}>
-                Only <b style={{ color: C.ink }}>30 verification codes</b> are sent each hour while we
-                grow carefully. If your code doesn't arrive, wait an hour and try again — your place
-                isn't lost. The earlier you build your profile, the more jobs you'll be matched to.
-              </p>
-            </div>
+      <div className="min-h-full flex flex-col px-6 pt-6 pb-6">
+        {/* brand */}
+        <div className="flex items-center gap-3">
+          <BrandMark size={44} />
+          <div>
+            <div className="text-[17px] font-semibold tracking-[-0.01em] leading-none" style={{ color: C.ink }}>Bhutan Tourism Hub</div>
+            <div className="text-[10px] font-semibold tracking-[.14em] uppercase mt-1.5" style={{ color: C.goldText }}>Guides · Drivers · Operators</div>
           </div>
         </div>
-      </div>
 
-      {/* what you get */}
-      <div className="px-6 mt-7">
-        <div className="text-[11.5px] font-semibold tracking-[.14em] uppercase mb-3.5" style={{ color: C.gold }}>What you get</div>
-        <div className="space-y-4">
-          <WelcomeBullet Icon={BadgeCheck} title="Verified, not just listed"
-            body="Every licence is checked before anyone can be booked. Operators know exactly who they're hiring." />
-          <WelcomeBullet Icon={Award} title="A profile that proves your skill"
-            body="Culture and dzong, alpine trekking, birding, spiritual routes — plus languages and years of experience." />
-          <WelcomeBullet Icon={Star} title="A trip record you own"
-            body="Reliability, punctuality and awareness, graded by operators after every trip. It follows you through your career." />
-          <WelcomeBullet Icon={MapPin} title="Proof of where you've worked"
-            body="Photos pinned to the exact spot in Bhutan. Your portfolio, not a line on a list." />
-          <WelcomeBullet Icon={Briefcase} title="Work that finds you"
-            body="Operators post jobs and you apply — including short-notice work when someone drops out." />
+        <div className="mt-5">
+          <div className="inline-flex items-center gap-2 rounded-full pl-2.5 pr-3 py-1.5" style={{ background: C.goldSoft }}>
+            <span className="w-[7px] h-[7px] rounded-full" style={{ background: C.goldText }} />
+            <span className="text-[11px] font-bold tracking-[.08em] uppercase" style={{ color: C.goldText }}>Early access</span>
+          </div>
         </div>
-      </div>
 
-      {/* honest about the stage */}
-      <div className="px-6 mt-7 pb-16">
-        <div className="rounded-2xl p-4" style={{ background: C.pineSoft }}>
-          <div className="text-[13.5px] font-semibold mb-1.5" style={{ color: C.pine }}>Built in Bhutan, for Bhutan</div>
-          <p className="text-[12.5px] leading-snug" style={{ color: C.pine, opacity: .9 }}>
-            This is an early version, and it will grow with the people who use it. We're working
-            towards recognition with the Department of Tourism and the Guides Association so that a
-            profile here becomes a trusted mark of a licensed professional. Tell us what you need —
-            we'll build it.
+        {/* the story — what every role shares */}
+        <figure className="mt-5">
+          <img src="/four-friends.png" draggable="false"
+            alt="The Four Harmonious Friends: an elephant carries a monkey, a rabbit and a bird, and the bird reaches the fruit of a tree"
+            className="w-full rounded-2xl block"
+            style={{ aspectRatio: "3 / 2", objectFit: "cover", background: C.pine }} />
+          <figcaption className="text-[12px] font-semibold mt-2" style={{ color: C.goldText }}>
+            Thuenpa Puen Zhi — the Four Harmonious Friends
+          </figcaption>
+        </figure>
+
+        <h1 className="mt-4 text-[30px] leading-[1.12] font-semibold tracking-[-0.02em]" style={{ color: C.ink }}>
+          No one reaches it alone.
+        </h1>
+        <p className="mt-2.5 text-[15px] leading-relaxed" style={{ color: C.muted }}>
+          Like the four friends beneath the tree, guides, drivers and operators each bring what
+          the others can't — so every visitor reaches the best of Bhutan.
+        </p>
+
+        {/* actions — anchored low on tall screens, within thumb reach */}
+        <div className="mt-auto pt-7">
+          <button onClick={() => setAuthView("signup")}
+            className="tap w-full rounded-2xl flex items-center justify-center gap-2 text-[16px] font-semibold"
+            style={{ height: 56, background: C.pine, color: "#fff", boxShadow: `0 10px 24px ${C.pine}40` }}>
+            Join the hub <ArrowRight size={19} strokeWidth={2.4} />
+          </button>
+          <button onClick={() => setAuthView("signin")}
+            className="tap w-full rounded-2xl text-[15px] font-semibold mt-3"
+            style={{ height: 52, background: C.card, border: `1.5px solid ${C.pine}`, color: C.pine }}>
+            I already have an account
+          </button>
+          <p className="text-center text-[13px] mt-4" style={{ color: C.muted }}>
+            Free for licensed guides, drivers and tour operators.
           </p>
+          <p className="text-center text-[10px] mt-3" style={{ color: C.muted }}>{BUILD} · {DEVICE}</p>
         </div>
-        <p className="text-center text-[10px] mt-4" style={{ color: C.line }}>{BUILD} · {DEVICE}</p>
       </div>
     </div>
   );
 }
 
-function WelcomeBullet({ Icon, title, body }) {
+/* The dzong mark — one source for the logo, wherever it appears */
+function BrandMark({ size = 40, label = "", className = "" }) {
   return (
-    <div className="flex gap-3.5">
-      <div className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0 mt-0.5" style={{ background: C.goldSoft }}>
-        <Icon size={17} color={C.gold} strokeWidth={2} />
-      </div>
-      <div>
-        <div className="text-[14px] font-semibold" style={{ color: C.ink }}>{title}</div>
-        <div className="text-[13px] leading-snug" style={{ color: C.muted }}>{body}</div>
-      </div>
-    </div>
+    <img src="/icon-192.png" alt={label} width={size} height={size} draggable="false"
+      className={`shrink-0 select-none ${className}`}
+      style={{ width: size, height: size, display: "block" }} />
   );
 }
 
@@ -1082,7 +1061,7 @@ function WelcomeBullet({ Icon, title, body }) {
 const NAV = {
   guide: [{ id: "post", label: "Feed", Icon: Newspaper }, { id: "jobs", label: "Jobs", Icon: Briefcase }, { id: "trips", label: "Trips", Icon: MapIcon }, { id: "chats", label: "Messages", Icon: MessageSquare }, { id: "profile", label: "Profile", Icon: User }],
   driver: [{ id: "post", label: "Feed", Icon: Newspaper }, { id: "jobs", label: "Jobs", Icon: Briefcase }, { id: "trips", label: "Trips", Icon: MapIcon }, { id: "chats", label: "Messages", Icon: MessageSquare }, { id: "profile", label: "Profile", Icon: User }],
-  operator: [{ id: "bookings", label: "Bookings", Icon: CalendarCheck }, { id: "discover", label: "Crew", Icon: Search }, { id: "requests", label: "Jobs", Icon: Briefcase }, { id: "chats", label: "Messages", Icon: MessageSquare }, { id: "feed", label: "Feed", Icon: Newspaper }],
+  operator: [{ id: "bookings", label: "Bookings", Icon: CalendarCheck }, { id: "itinerary", label: "Itinerary", Icon: CalendarDays }, { id: "discover", label: "Crew", Icon: Search }, { id: "requests", label: "Jobs", Icon: Briefcase }, { id: "chats", label: "Messages", Icon: MessageSquare }, { id: "feed", label: "Feed", Icon: Newspaper }],
   admin: [{ id: "review", label: "Review", Icon: ShieldCheck }, { id: "users", label: "Users", Icon: Users }, { id: "feed", label: "Feed", Icon: Newspaper }, { id: "discover", label: "Discover", Icon: Search }, { id: "chats", label: "Messages", Icon: MessageSquare }],
 };
 const DEFAULT_TAB = { guide: "post", driver: "post", operator: "bookings", admin: "review" };
@@ -1186,6 +1165,17 @@ function Shell({ user, posts, jobs, trips, listings, enquiries, actions, engagem
       }
     }
 
+    // the profile is thin — operators filter on exactly these fields
+    if ((user.kind === "guide" || user.kind === "driver") && me) {
+      if (!(me.tags || []).length) {
+        add({ id: `prof-tags-${actorId}`, kind: "profileThin", who: actorId,
+          text: "Add your specialities — operators filter by them", ts: Date.now() });
+      } else if (!(me.languages || []).length) {
+        add({ id: `prof-langs-${actorId}`, kind: "profileThin", who: actorId,
+          text: "Add your languages — operators search by them", ts: Date.now() });
+      }
+    }
+
     // your licence needs attention
     if (user.licenseStatus === "rejected") {
       add({ id: `lic-rejected-${actorId}`, kind: "licenceRejected", who: actorId,
@@ -1193,6 +1183,20 @@ function Shell({ user, posts, jobs, trips, listings, enquiries, actions, engagem
     } else if (user.licenseStatus === "none") {
       add({ id: `lic-missing-${actorId}`, kind: "licenceMissing", who: actorId,
         text: "Operators prioritise verified crew", ts: Date.now() });
+    }
+
+    // a trip you're crewing has no flight details yet — you can't plan your day
+    if (user.kind === "guide" || user.kind === "driver") {
+      (trips || []).forEach((tr) => {
+        if (!tr || !tr.start) return;
+        if (!(tr.members || []).some((m) => m && m.id === actorId)) return;
+        const d = Math.ceil((new Date(tr.start + "T00:00") - Date.now()) / DAY);
+        if (d >= 0 && d <= 7 && !tr.arrivalFlight) {
+          add({ id: `noflight-${tr.id}`, kind: "briefMissing", who: null,
+            text: `${tr.title} — ask the operator for the arrival flight`,
+            ts: Date.now(), urgent: d <= 2, tripId: tr.id });
+        }
+      });
     }
 
     // a trip of yours starts soon
@@ -1256,10 +1260,17 @@ function Shell({ user, posts, jobs, trips, listings, enquiries, actions, engagem
 
   return (
     <>
+      <SideRail user={user} nav={nav} tab={tab}
+        setTab={(t) => { setOverlay(null); setSharedPost(null); setTab(t); }}
+        badges={{ jobs: jobsBadge, review: pendingModCount, chats: unreadDm, bookings: enquiryBadge }}
+        alerts={alertItems.length} onOpenAlerts={() => setAlertsOpen(true)} onLogout={onLogout} />
+
+      <div className="main-col">
       <TopBar user={user} onLogout={onLogout} alerts={alertItems.length} onOpenAlerts={() => setAlertsOpen(true)}
         onSearch={(term) => { setOverlay(null); setTab(user.kind === "operator" ? "discover" : "post"); setSearchTerm(term); }} />
 
       <div className="flex-1 overflow-y-auto hidescroll" style={{ scrollbarWidth: "none" }}>
+        <div className="content-pad">
         <VerifyBanner user={user} />
         {overlay ? (
           overlay.type === "profile" ? (
@@ -1282,6 +1293,7 @@ function Shell({ user, posts, jobs, trips, listings, enquiries, actions, engagem
             {tab === "chats" && <ChatsTab user={user} me={actorId} dm={dm} trips={trips} actions={actions} posts={posts} dirTick={dirTick} onOpenPost={setSharedPost} openWith={dmWith} onOpened={() => setDmWith(null)} onOpenProfile={openProfile} />}
             {tab === "profile" && <TalentProfile talent={talentById(user.talentId)} posts={posts} eng={eng} self onSetAvailability={actions.setAvailability} onOpenProfile={openProfile} onBack={null} />}
             {tab === "bookings" && <BookingsTab user={user} enquiries={enquiries} trips={trips} actions={actions} onOpenProfile={openProfile} />}
+            {tab === "itinerary" && <QuickItinerary user={user} trips={trips} actions={actions} />}
             {tab === "discover" && <Discover onOpen={openProfile} initialQuery={searchTerm} dirTick={dirTick} />}
             {tab === "requests" && <OperatorJobs user={user} jobs={jobs} listings={listings} posts={posts} actions={actions} eng={eng} onOpen={openProfile} />}
             {tab === "feed" && <Feed posts={posts} eng={eng} admin={user.kind === "admin"} onDelete={actions.deletePost} onOpenProfile={openProfile} following={myFollowing} />}
@@ -1289,6 +1301,7 @@ function Shell({ user, posts, jobs, trips, listings, enquiries, actions, engagem
             {tab === "users" && <AdminUsers onChanged={actions.reloadDirectory} currentAdminId={actorId} />}
           </div>
         )}
+        </div>
       </div>
 
       {sharedPost && (
@@ -1324,6 +1337,7 @@ function Shell({ user, posts, jobs, trips, listings, enquiries, actions, engagem
       <BottomNav nav={nav} tab={tab}
         setTab={(t) => { setOverlay(null); setSharedPost(null); setTab(t); }}
         badges={{ jobs: jobsBadge, review: pendingModCount, chats: unreadDm, bookings: enquiryBadge }} />
+      </div>
     </>
   );
 }
@@ -1334,15 +1348,13 @@ function TopBar({ user, onLogout, onSearch, alerts, onOpenAlerts }) {
 
   return (
     <div className="shrink-0 flex items-center gap-2 px-2.5" style={{ height: "calc(56px + var(--sa-top))", paddingTop: "var(--sa-top)", background: C.bg, borderBottom: `1px solid ${C.lineSoft}` }}>
-      <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0" style={{ background: C.pine }}>
-        <Compass size={16} color={C.goldSoft} />
-      </div>
+      <BrandMark size={34} label="Bhutan Tourism Hub" />
 
       <div className="relative flex-1 min-w-0">
         <Search size={15} color={C.muted} className="absolute left-3 top-1/2 -translate-y-1/2" />
         <input value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()}
           placeholder="Search people or add friends"
-          className="w-full h-9 pl-9 pr-3 rounded-full text-[13.5px]"
+          className="w-full h-9 pl-9 pr-3 rounded-full text-[14px]"
           style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }} />
       </div>
 
@@ -1350,7 +1362,7 @@ function TopBar({ user, onLogout, onSearch, alerts, onOpenAlerts }) {
         style={{ border: `1px solid ${C.line}`, background: C.card }} aria-label="Notifications">
         <Bell size={16} color={C.ink} />
         {alerts > 0 && (
-          <span className="absolute -top-1 -right-1 min-w-[17px] h-[17px] px-1 rounded-full flex items-center justify-center text-[9.5px] font-bold text-white"
+          <span className="absolute -top-1 -right-1 min-w-[17px] h-[17px] px-1 rounded-full flex items-center justify-center text-[10px] font-bold text-white"
             style={{ background: C.maroon }}>{alerts > 9 ? "9+" : alerts}</span>
         )}
       </button>
@@ -1364,23 +1376,48 @@ function TopBar({ user, onLogout, onSearch, alerts, onOpenAlerts }) {
 }
 
 function BottomNav({ nav, tab, setTab, badges }) {
+  const ref = useRef(null);
+
+  // keep the active tab in view when the bar scrolls
+  useEffect(() => {
+    const el = ref.current?.querySelector('[data-on="1"]');
+    if (el && el.scrollIntoView) {
+      try { el.scrollIntoView({ inline: "center", block: "nearest", behavior: "smooth" }); } catch (e) {}
+    }
+  }, [tab]);
+
+  // scrolls sideways once there are more tabs than fit comfortably
+  const scrolls = nav.length > 5;
+
   return (
-    <div className="shrink-0 flex safe-bottom" style={{ background: C.card, borderTop: `1px solid ${C.line}`, position: "relative", zIndex: 240 }}>
-      {nav.map((n) => {
-        const on = tab === n.id;
-        const badge = badges[n.id] || 0;
-        return (
-          <button key={n.id} onClick={() => setTab(n.id)} className="tap flex-1 py-2.5 flex flex-col items-center gap-1 relative">
-            <div className="relative">
-              <n.Icon size={21} color={on ? C.pine : C.muted} strokeWidth={on ? 2.4 : 2} />
-              {badge > 0 && (
-                <span className="absolute -top-1.5 -right-2 min-w-[16px] h-[16px] px-1 rounded-full flex items-center justify-center text-[9px] font-bold text-white" style={{ background: C.maroon }}>{badge}</span>
-              )}
-            </div>
-            <span className="text-[11px] font-semibold" style={{ color: on ? C.pine : C.muted }}>{n.label}</span>
-          </button>
-        );
-      })}
+    <div className="shrink-0 safe-bottom" style={{ background: C.card, borderTop: `1px solid ${C.line}`, position: "relative", zIndex: 240 }}>
+      <div ref={ref}
+        className={scrolls ? "flex overflow-x-auto hidescroll" : "flex"}
+        style={{ scrollbarWidth: "none", WebkitOverflowScrolling: "touch" }}>
+        {nav.map((n) => {
+          const on = tab === n.id;
+          const badge = badges[n.id] || 0;
+          return (
+            <button key={n.id} data-on={on ? "1" : "0"} onClick={() => setTab(n.id)}
+              className="tap py-2.5 flex flex-col items-center gap-1 relative shrink-0"
+              style={{ flex: scrolls ? "0 0 76px" : "1 1 0", minWidth: scrolls ? 76 : 0 }}>
+              <div className="relative">
+                <n.Icon size={21} color={on ? C.pine : C.muted} strokeWidth={on ? 2.4 : 2} />
+                {badge > 0 && (
+                  <span className="absolute -top-1.5 -right-2 min-w-[16px] h-[16px] px-1 rounded-full flex items-center justify-center text-[10px] font-bold text-white" style={{ background: C.maroon }}>{badge}</span>
+                )}
+              </div>
+              <span className="text-[11px] font-semibold whitespace-nowrap" style={{ color: on ? C.pine : C.muted }}>{n.label}</span>
+            </button>
+          );
+        })}
+      </div>
+      {scrolls && (
+        <div className="absolute pointer-events-none" style={{
+          right: 0, top: 0, bottom: 0, width: 24,
+          background: `linear-gradient(to right, transparent, ${C.card})`,
+        }} />
+      )}
     </div>
   );
 }
@@ -1415,14 +1452,14 @@ function Stars({ score, light }) {
 function SectionLabel({ children, trailing }) {
   return (
     <div className="flex items-center justify-between mb-3">
-      <div className="text-[12px] font-semibold tracking-[.14em] uppercase" style={{ color: C.gold }}>{children}</div>
-      {trailing && <div className="text-[12.5px]" style={{ color: C.muted }}>{trailing}</div>}
+      <div className="text-[12px] font-semibold tracking-[.14em] uppercase" style={{ color: C.goldText }}>{children}</div>
+      {trailing && <div className="text-[13px]" style={{ color: C.muted }}>{trailing}</div>}
     </div>
   );
 }
 function StatusBadge({ status, reason }) {
   const m = {
-    pending: { bg: C.goldSoft, fg: "#7a5a1e", Icon: Clock, label: "Pending review" },
+    pending: { bg: C.goldSoft, fg: C.goldText, Icon: Clock, label: "Pending review" },
     approved: { bg: C.pineSoft, fg: C.pine, Icon: Check, label: "Live" },
     rejected: { bg: C.maroonSoft, fg: C.maroon, Icon: X, label: "Not approved" },
     accepted: { bg: C.pineSoft, fg: C.pine, Icon: Check, label: "Accepted" },
@@ -1448,7 +1485,7 @@ function Empty({ Icon, title, body }) {
     <div className="rounded-2xl px-6 py-10 flex flex-col items-center text-center" style={{ background: C.card, border: `1px dashed ${C.line}` }}>
       <div className="w-12 h-12 rounded-2xl flex items-center justify-center mb-3" style={{ background: C.goldSoft }}><Icon size={22} color={C.gold} /></div>
       <div className="text-[15px] font-semibold" style={{ color: C.ink }}>{title}</div>
-      <p className="text-[13.5px] mt-1 max-w-[240px]" style={{ color: C.muted }}>{body}</p>
+      <p className="text-[14px] mt-1 max-w-[240px]" style={{ color: C.muted }}>{body}</p>
     </div>
   );
 }
@@ -1494,7 +1531,7 @@ function PostTab({ user, posts, onAdd, eng, onOpenProfile }) {
                   <Avatar initials={author?.initials || "?"} size={40} />
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-1.5">
-                      <span className="text-[14.5px] font-semibold" style={{ color: C.ink }}>{mine ? "You" : (author?.name || "Member")}</span>
+                      <span className="text-[15px] font-semibold" style={{ color: C.ink }}>{mine ? "You" : (author?.name || "Member")}</span>
                       {author?.verified && <BadgeCheck size={15} color={C.pine} />}
                     </div>
                     <div className="flex items-center gap-1 text-[12px]" style={{ color: C.muted }}>
@@ -1626,22 +1663,22 @@ function Composer({ talent, onAdd }) {
                       <X size={12} color="#fff" />
                     </button>
                     {i === 0 && (media.slides || []).length > 1 && (
-                      <span className="absolute left-1 bottom-1 text-[9.5px] font-bold rounded px-1.5 py-0.5" style={{ background: "rgba(0,0,0,.6)", color: "#fff" }}>COVER</span>
+                      <span className="absolute left-1 bottom-1 text-[10px] font-bold rounded px-1.5 py-0.5" style={{ background: "rgba(0,0,0,.6)", color: "#fff" }}>COVER</span>
                     )}
                   </div>
                 ))}
                 <button onClick={() => inputRef.current?.click()} className="tap shrink-0 rounded-xl flex flex-col items-center justify-center"
                   style={{ width: 104, height: 104, background: C.bg, border: `1.5px dashed ${C.line}` }}>
                   <Plus size={20} color={C.gold} strokeWidth={2.6} />
-                  <span className="text-[10.5px] mt-1 font-semibold" style={{ color: C.ink }}>Add more</span>
-                  <span className="text-[9.5px]" style={{ color: C.muted }}>up to 10</span>
+                  <span className="text-[11px] mt-1 font-semibold" style={{ color: C.ink }}>Add more</span>
+                  <span className="text-[10px]" style={{ color: C.muted }}>up to 10</span>
                 </button>
               </div>
               <div className="mt-3">
                 <div className="flex items-center justify-between mb-1.5">
-                  <span className="text-[11.5px] font-semibold tracking-[.1em] uppercase" style={{ color: C.gold }}>Shape</span>
+                  <span className="text-[12px] font-semibold tracking-[.1em] uppercase" style={{ color: C.goldText }}>Shape</span>
                   {(media.slides || []).length > 1 && (
-                    <span className="text-[11.5px]" style={{ color: C.muted }}>{media.slides.length} photos · swipeable</span>
+                    <span className="text-[12px]" style={{ color: C.muted }}>{media.slides.length} photos · swipeable</span>
                   )}
                 </div>
                 <div className="flex gap-2">
@@ -1655,14 +1692,14 @@ function Composer({ talent, onAdd }) {
                           width: r.w >= r.h ? 20 : 20 * (r.w / r.h), height: r.h >= r.w ? 20 : 20 * (r.h / r.w),
                           border: `1.5px solid ${on ? "#fff" : C.muted}`,
                         }} />
-                        <span className="text-[10.5px] font-semibold" style={{ color: on ? "#fff" : C.ink }}>{r.label}</span>
+                        <span className="text-[11px] font-semibold" style={{ color: on ? "#fff" : C.ink }}>{r.label}</span>
                       </button>
                     );
                   })}
                 </div>
                 <button onClick={() => setCropping(media.slides || [media.dataUri])}
                   className="tap w-full h-10 rounded-xl mt-2 inline-flex items-center justify-center gap-1.5 text-[13px] font-semibold"
-                  style={{ background: C.goldSoft, color: "#7a5a1e" }}>
+                  style={{ background: C.goldSoft, color: C.goldText }}>
                   <Maximize2 size={14} /> Crop & reposition
                 </button>
               </div>
@@ -1680,18 +1717,18 @@ function Composer({ talent, onAdd }) {
           }} />
       )}
 
-      {note && <div className="mt-2 inline-flex items-center gap-1.5 text-[12.5px] font-medium rounded-full px-2.5 py-1" style={{ background: C.pineSoft, color: C.pine }}><MapPin size={12} color={C.pine} /> {note}</div>}
+      {note && <div className="mt-2 inline-flex items-center gap-1.5 text-[13px] font-medium rounded-full px-2.5 py-1" style={{ background: C.pineSoft, color: C.pine }}><MapPin size={12} color={C.pine} /> {note}</div>}
 
       {location && !picking && (
         <div className="mt-3">
           <div className="flex items-center gap-2">
-            <span className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1.5 text-[13px] font-semibold" style={{ background: C.goldSoft, color: "#7a5a1e" }}>
+            <span className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1.5 text-[13px] font-semibold" style={{ background: C.goldSoft, color: C.goldText }}>
               <MapPin size={14} color={C.gold} /> {chipLabel}
             </span>
-            <button onClick={() => setPicking(true)} className="text-[12.5px] font-semibold" style={{ color: C.pine }}>Change</button>
-            <button onClick={() => setLocation(null)} className="text-[12.5px] font-semibold" style={{ color: C.muted }}>Remove</button>
+            <button onClick={() => setPicking(true)} className="text-[13px] font-semibold" style={{ color: C.pine }}>Change</button>
+            <button onClick={() => setLocation(null)} className="text-[13px] font-semibold" style={{ color: C.muted }}>Remove</button>
           </div>
-          {location.description && <p className="text-[12.5px] leading-snug mt-1.5" style={{ color: C.muted }}>{location.description}</p>}
+          {location.description && <p className="text-[13px] leading-snug mt-1.5" style={{ color: C.muted }}>{location.description}</p>}
         </div>
       )}
 
@@ -1705,23 +1742,23 @@ function Composer({ talent, onAdd }) {
           {location && location.source === "viewpoint" && !manual ? (
             <>
               <MapCinema key={location.place} location={location} />
-              <button onClick={() => setManual(true)} className="tap text-[12.5px] font-semibold mt-2" style={{ color: C.pine }}>Adjust on the map</button>
+              <button onClick={() => setManual(true)} className="tap text-[13px] font-semibold mt-2" style={{ color: C.pine }}>Adjust on the map</button>
             </>
           ) : (
             <>
-              <div className="text-[12.5px] mb-2" style={{ color: C.muted }}>…or tap the map for a custom spot.</div>
+              <div className="text-[13px] mb-2" style={{ color: C.muted }}>…or tap the map for a custom spot.</div>
               <BhutanMap value={location} onPick={(loc) => setLocation({ ...loc, source: "map" })} />
             </>
           )}
-          {location && location.description && <p className="text-[12.5px] leading-snug mt-2" style={{ color: C.ink }}>{location.description}</p>}
+          {location && location.description && <p className="text-[13px] leading-snug mt-2" style={{ color: C.ink }}>{location.description}</p>}
           <div className="flex items-center justify-between mt-2">
-            <span className="text-[12.5px]" style={{ color: C.muted }}>{location ? `${location.lat}, ${location.lng}${location.source === "map" ? " · approx." : ""}` : "No pin yet"}</span>
+            <span className="text-[13px]" style={{ color: C.muted }}>{location ? `${location.lat}, ${location.lng}${location.source === "map" ? " · approx." : ""}` : "No pin yet"}</span>
             <button onClick={() => setPicking(false)} className="tap text-[13px] font-semibold rounded-full px-3 py-1.5" style={{ background: C.pine, color: "#fff" }}>Done</button>
           </div>
         </div>
       )}
 
-      {error && <p className="text-[12.5px] mt-2" style={{ color: C.maroon }}>{error}</p>}
+      {error && <p className="text-[13px] mt-2" style={{ color: C.maroon }}>{error}</p>}
 
       {!media && (
         <div className="rounded-xl px-3.5 py-2.5 mt-3 flex items-start gap-2.5" style={{ background: C.bg, border: `1px dashed ${C.line}` }}>
@@ -1735,7 +1772,7 @@ function Composer({ talent, onAdd }) {
       )}
 
       <div className="flex items-center gap-2 mt-3">
-        <button onClick={() => inputRef.current?.click()} className="tap inline-flex items-center gap-1.5 rounded-xl px-3 py-2 text-[13px] font-semibold" style={{ background: C.goldSoft, color: "#7a5a1e" }}>
+        <button onClick={() => inputRef.current?.click()} className="tap inline-flex items-center gap-1.5 rounded-xl px-3 py-2 text-[13px] font-semibold" style={{ background: C.goldSoft, color: C.goldText }}>
           <ImagePlus size={16} /> {media && media.kind === "photo" ? "Add another" : media ? "Change" : "Add photos"}
         </button>
         <input ref={inputRef} type="file" accept="image/*,video/*" multiple onChange={pick} className="hidden" />
@@ -1777,7 +1814,7 @@ function JobsInbox({ user, jobs, onSet }) {
                 <Pill Icon={CalendarCheck}>{fmtDate(j.start)} – {fmtDate(j.end)}</Pill>
                 {j.languages?.map((l) => <Pill key={l}>{l}</Pill>)}
               </div>
-              {j.notes && <p className="text-[13.5px] leading-snug mt-3" style={{ color: C.ink }}>{j.notes}</p>}
+              {j.notes && <p className="text-[14px] leading-snug mt-3" style={{ color: C.ink }}>{j.notes}</p>}
               {j.status === "pending" && (
                 <div className="flex gap-2.5 mt-3.5">
                   <button onClick={() => onSet(j.id, "declined")} className="tap flex-1 h-11 rounded-xl text-[14px] font-semibold inline-flex items-center justify-center gap-2" style={{ background: C.card, border: `1.5px solid ${C.maroon}`, color: C.maroon }}><X size={17} /> Decline</button>
@@ -1792,7 +1829,7 @@ function JobsInbox({ user, jobs, onSet }) {
   );
 }
 function Pill({ Icon, children }) {
-  return <span className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[12.5px] font-medium" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }}>{Icon && <Icon size={13} color={C.gold} />}{children}</span>;
+  return <span className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[13px] font-medium" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }}>{Icon && <Icon size={13} color={C.gold} />}{children}</span>;
 }
 
 /* ============================ Discover (operator) ========================= */
@@ -1855,22 +1892,22 @@ function TalentCard({ t, onOpen }) {
         <Avatar initials={t.initials} size={48} />
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-1.5">
-            <span className="text-[15.5px] font-semibold truncate" style={{ color: C.ink }}>{t.name}</span>
+            <span className="text-[15px] font-semibold truncate" style={{ color: C.ink }}>{t.name}</span>
             {t.verified && <BadgeCheck size={15} color={C.pine} />}
           </div>
-          <div className="flex items-center gap-1 text-[12.5px]" style={{ color: C.muted }}><MapPin size={12} /> {roleLabel(t.role)} · {t.base}</div>
+          <div className="flex items-center gap-1 text-[13px]" style={{ color: C.muted }}><MapPin size={12} /> {roleLabel(t.role)} · {t.base}</div>
         </div>
         <div className="text-right shrink-0">
           <div className="inline-flex items-center gap-1 rounded-full px-2 py-1" style={{ background: C.goldSoft }}>
-            <Star size={12} color={C.gold} fill={C.gold} /><span className="text-[12.5px] font-semibold" style={{ color: "#7a5a1e" }}>{typeof t.rating === "number" ? t.rating.toFixed(1) : "New"}</span>
+            <Star size={12} color={C.gold} fill={C.gold} /><span className="text-[13px] font-semibold" style={{ color: C.goldText }}>{typeof t.rating === "number" ? t.rating.toFixed(1) : "New"}</span>
           </div>
-          <div className="text-[11.5px] mt-1" style={{ color: C.muted }}>{t.years} yrs</div>
+          <div className="text-[12px] mt-1" style={{ color: C.muted }}>{t.years} yrs</div>
         </div>
       </div>
       <div className="flex flex-wrap items-center gap-1.5 mt-3">
         <AvailabilityChip talent={t} />
         {(t.languages || []).slice(0, 3).map((l) => (
-          <span key={l.n} className="text-[11.5px] rounded-md px-1.5 py-0.5" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.muted }}>{l.n}</span>
+          <span key={l.n} className="text-[12px] rounded-md px-1.5 py-0.5" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.muted }}>{l.n}</span>
         ))}
       </div>
     </button>
@@ -1895,7 +1932,7 @@ function SentRequests({ operator, operatorId, jobs, actions, onOpen }) {
                   <button onClick={() => onOpen(j.toTalentId)} className="flex items-center gap-2.5 text-left">
                     <Avatar initials={t.initials} size={38} />
                     <div>
-                      <div className="text-[14.5px] font-semibold" style={{ color: C.ink }}>{t.name}</div>
+                      <div className="text-[15px] font-semibold" style={{ color: C.ink }}>{t.name}</div>
                       <div className="text-[12px]" style={{ color: C.muted }}>{roleLabel(t.role)} · {t.base}</div>
                     </div>
                   </button>
@@ -1905,7 +1942,7 @@ function SentRequests({ operator, operatorId, jobs, actions, onOpen }) {
                 <div className="flex flex-wrap gap-2 mt-2"><Pill Icon={CalendarCheck}>{fmtDate(j.start)} – {fmtDate(j.end)}</Pill>{(j.languages || []).map((l) => <Pill key={l}>{l}</Pill>)}</div>
                 {actions?.binRequest && j.status !== "accepted" && (
                   <button onClick={() => actions.binRequest(j.id)}
-                    className="tap w-full mt-3 pt-2.5 text-[12.5px] font-semibold inline-flex items-center justify-center gap-1.5"
+                    className="tap w-full mt-3 pt-2.5 text-[13px] font-semibold inline-flex items-center justify-center gap-1.5"
                     style={{ borderTop: `1px solid ${C.lineSoft}`, color: C.muted }}>
                     <Trash2 size={13} /> Withdraw this request
                   </button>
@@ -1945,7 +1982,7 @@ function Feed({ posts, eng, admin, onDelete, onOpenProfile, following }) {
                   <button onClick={() => onOpenProfile(p.talentId)} className="tap flex items-center gap-3 flex-1 min-w-0 text-left">
                   <Avatar initials={t?.initials || "?"} size={40} />
                   <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-1.5"><span className="text-[14.5px] font-semibold" style={{ color: C.ink }}>{t?.name || "Member"}</span>{t?.verified && <BadgeCheck size={15} color={C.pine} />}</div>
+                    <div className="flex items-center gap-1.5"><span className="text-[15px] font-semibold" style={{ color: C.ink }}>{t?.name || "Member"}</span>{t?.verified && <BadgeCheck size={15} color={C.pine} />}</div>
                     <div className="flex items-center gap-1 text-[12px]" style={{ color: C.muted }}><MapPin size={11} /> {t?.base || ""} · {relTime(p.createdAt)}</div>
                   </div>
                   </button>
@@ -2016,11 +2053,11 @@ function ModCard({ post, onApprove, onReject, eng }) {
     <div className="rounded-2xl p-4" style={{ background: C.card, border: `1px solid ${C.line}` }}>
       <div className="flex items-center gap-3">
         <Avatar initials={t.initials} size={40} />
-        <div className="flex-1"><div className="text-[14.5px] font-semibold" style={{ color: C.ink }}>{t.name}</div>
+        <div className="flex-1"><div className="text-[15px] font-semibold" style={{ color: C.ink }}>{t.name}</div>
           <div className="text-[12px]" style={{ color: C.muted }}>{roleLabel(t.role)} · {relTime(post.createdAt)}</div></div>
         {!pending && <StatusBadge status={post.status} reason={post.reason} />}
       </div>
-      {post.text && <p className="text-[14.5px] leading-snug mt-3" style={{ color: C.ink }}>{post.text}</p>}
+      {post.text && <p className="text-[15px] leading-snug mt-3" style={{ color: C.ink }}>{post.text}</p>}
       <PostMedia media={post.media} />
       <PostLocation location={post.location} showMap />
       <PostEngagement post={post} eng={eng} />
@@ -2045,7 +2082,7 @@ function ModCard({ post, onApprove, onReject, eng }) {
       )}
       {pending && rejecting && (
         <div className="mt-3.5 fade">
-          <div className="text-[12.5px] font-medium mb-2" style={{ color: C.ink }}>Reason for rejecting</div>
+          <div className="text-[13px] font-medium mb-2" style={{ color: C.ink }}>Reason for rejecting</div>
           <div className="flex flex-wrap gap-2">
             {REASONS.map((r) => <button key={r} onClick={() => onReject(post.id, r)} className="tap rounded-full px-3 py-1.5 text-[13px] font-medium" style={{ background: C.maroonSoft, color: C.maroon, border: `1px solid ${C.maroon}22` }}>{r}</button>)}
           </div>
@@ -2086,15 +2123,15 @@ function TalentProfile({ talent, posts, canRequest, self, contactOnly, eng, onRe
             <button onClick={() => myStories.length && setViewStories(true)} className="relative" style={{ cursor: myStories.length ? "pointer" : "default" }}>
               <div className="rounded-2xl flex items-center justify-center" style={{ width: 72, height: 72, background: C.pine, border: `3px solid ${C.bg}`,
                 boxShadow: myStories.length ? `0 0 0 3px ${C.gold}` : "none" }}>
-                <span className="text-[23px] font-semibold" style={{ color: C.goldSoft }}>{t.initials}</span>
+                <span className="text-[22px] font-semibold" style={{ color: C.goldSoft }}>{t.initials}</span>
               </div>
               {myStories.length > 0 && (
                 <span className="absolute -bottom-1 -right-1 rounded-full px-1.5 py-0.5 text-[10px] font-bold" style={{ background: C.gold, color: "#fff" }}>{myStories.length}</span>
               )}
             </button>
             {self && (
-              <button onClick={() => setAddStory(true)} className="tap mb-1 inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[12.5px] font-semibold"
-                style={{ background: C.goldSoft, color: "#7a5a1e" }}>
+              <button onClick={() => setAddStory(true)} className="tap mb-1 inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[13px] font-semibold"
+                style={{ background: C.goldSoft, color: C.goldText }}>
                 <Plus size={14} strokeWidth={3} /> Add story
               </button>
             )}
@@ -2105,7 +2142,7 @@ function TalentProfile({ talent, posts, canRequest, self, contactOnly, eng, onRe
                 <h1 className="text-[22px] font-semibold leading-tight tracking-[-0.01em]" style={{ color: C.ink, wordBreak: "break-word" }}>{t.name}</h1>
                 {t.verified && <BadgeCheck size={17} color={C.pine} className="shrink-0 mt-1" />}
               </div>
-              <div className="flex items-center gap-1 text-[13.5px] mt-1" style={{ color: C.muted }}><MapPin size={13} /> {roleLabel(t.role)}{t.base ? ` · ${t.base}` : ""}</div>
+              <div className="flex items-center gap-1 text-[14px] mt-1" style={{ color: C.muted }}><MapPin size={13} /> {roleLabel(t.role)}{t.base ? ` · ${t.base}` : ""}</div>
               {t.role !== "operator" && <div className="mt-2"><AvailabilityChip talent={t} /></div>}
             </div>
           </div>
@@ -2154,14 +2191,14 @@ function TalentProfile({ talent, posts, canRequest, self, contactOnly, eng, onRe
               <div className="rounded-2xl overflow-hidden" style={{ border: `1px solid ${C.line}` }}>
                 <div className="px-4 py-3.5 flex items-center justify-between" style={{ background: C.pine }}>
                   <div><div className="text-[11px] font-semibold tracking-[.14em] uppercase" style={{ color: C.goldSoft }}>Trip record</div>
-                    <div className="text-[12.5px] mt-0.5" style={{ color: "#ffffffcc" }}>Graded by operators</div></div>
+                    <div className="text-[13px] mt-0.5" style={{ color: "#ffffffcc" }}>Graded by operators</div></div>
                   <div className="text-right"><div className="text-[26px] font-semibold leading-none text-white">{typeof t.rating === "number" ? t.rating.toFixed(1) : "New"}</div><div className="mt-1 flex justify-end"><Stars score={t.rating || 0} light /></div></div>
                 </div>
                 <div className="px-4 py-4 space-y-3.5" style={{ background: C.card }}>
                   {Object.keys(t.grades || {}).length === 0 ? (
-                    <p className="text-[13.5px]" style={{ color: C.muted }}>No trips graded yet — the record fills in after the first completed trip.</p>
+                    <p className="text-[14px]" style={{ color: C.muted }}>No trips graded yet — the record fills in after the first completed trip.</p>
                   ) : Object.entries(t.grades).map(([kk, v]) => (
-                    <div key={kk}><div className="flex items-baseline justify-between mb-1.5"><span className="text-[13.5px] font-medium" style={{ color: C.ink }}>{kk}</span><span className="text-[13px] font-semibold" style={{ color: C.pine }}>{typeof v === "number" ? v.toFixed(1) : "—"}</span></div>
+                    <div key={kk}><div className="flex items-baseline justify-between mb-1.5"><span className="text-[14px] font-medium" style={{ color: C.ink }}>{kk}</span><span className="text-[13px] font-semibold" style={{ color: C.pine }}>{typeof v === "number" ? v.toFixed(1) : "—"}</span></div>
                       <div className="h-2 rounded-full overflow-hidden" style={{ background: C.lineSoft }}><div className="h-full rounded-full" style={{ width: `${(v / 5) * 100}%`, background: `linear-gradient(90deg, ${C.gold}, #D9A94E)` }} /></div></div>
                   ))}
                 </div>
@@ -2171,15 +2208,15 @@ function TalentProfile({ talent, posts, canRequest, self, contactOnly, eng, onRe
 
               {t.tags && t.tags.length > 0 && (
                 <div className="mt-6"><SectionLabel>{t.role === "guide" ? "Specialities" : "Drives"}</SectionLabel>
-                  <div className="flex flex-wrap gap-2">{(t.tags || []).map((x) => <span key={x} className="rounded-full px-3 py-1.5 text-[13.5px] font-medium" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }}>{x}</span>)}</div>
-                  {t.vehicle && <div className="mt-2.5 text-[13.5px]" style={{ color: C.muted }}><Car size={14} color={C.gold} className="inline mr-1" /> {t.vehicle}</div>}
+                  <div className="flex flex-wrap gap-2">{(t.tags || []).map((x) => <span key={x} className="rounded-full px-3 py-1.5 text-[14px] font-medium" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }}>{x}</span>)}</div>
+                  {t.vehicle && <div className="mt-2.5 text-[14px]" style={{ color: C.muted }}><Car size={14} color={C.gold} className="inline mr-1" /> {t.vehicle}</div>}
                 </div>
               )}
 
               {t.languages && t.languages.length > 0 && (
                 <div className="mt-6"><SectionLabel>Languages</SectionLabel>
                   <div className="flex flex-wrap gap-2">{(t.languages || []).map((l) => (
-                    <span key={l.n} className="inline-flex items-center gap-2 rounded-full pl-3.5 pr-2 py-1.5 text-[13.5px] font-medium" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }}>{l.n}<span className="text-[11px] px-1.5 py-0.5 rounded-full" style={{ background: C.goldSoft, color: "#7a5a1e" }}>{l.l}</span></span>
+                    <span key={l.n} className="inline-flex items-center gap-2 rounded-full pl-3.5 pr-2 py-1.5 text-[14px] font-medium" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }}>{l.n}<span className="text-[11px] px-1.5 py-0.5 rounded-full" style={{ background: C.goldSoft, color: C.goldText }}>{l.l}</span></span>
                   ))}</div>
                 </div>
               )}
@@ -2208,7 +2245,7 @@ function TalentProfile({ talent, posts, canRequest, self, contactOnly, eng, onRe
                     <div className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0" style={{ background: C.goldSoft }}><Phone size={17} color={C.gold} /></div>
                     <div className="flex-1 min-w-0">
                       <div className="text-[15px] font-semibold tracking-[0.01em]" style={{ color: C.ink }}>{prettyNumber(t.phone)}</div>
-                      <div className="text-[11.5px]" style={{ color: C.muted }}>Bhutan · +975</div>
+                      <div className="text-[12px]" style={{ color: C.muted }}>Bhutan · +975</div>
                     </div>
                   </div>
                   <div className="flex gap-2 px-4 pb-3.5">
@@ -2240,7 +2277,7 @@ function TalentProfile({ talent, posts, canRequest, self, contactOnly, eng, onRe
 
       {canRequest && !contactOnly && (
         <div className="px-5 mt-6 flex gap-3">
-          <button onClick={() => onMessage && onMessage(t.id)} className="tap h-12 px-5 rounded-xl flex items-center justify-center gap-2 text-[14.5px] font-semibold" style={{ background: C.card, border: `1.5px solid ${C.pine}`, color: C.pine }}><MessageCircle size={18} /> Message</button>
+          <button onClick={() => onMessage && onMessage(t.id)} className="tap h-12 px-5 rounded-xl flex items-center justify-center gap-2 text-[15px] font-semibold" style={{ background: C.card, border: `1.5px solid ${C.pine}`, color: C.pine }}><MessageCircle size={18} /> Message</button>
           <button onClick={onRequest} className="tap flex-1 h-12 rounded-xl flex items-center justify-center gap-2 text-[15px] font-semibold" style={{ background: C.pine, color: "#fff", boxShadow: `0 6px 16px ${C.pine}33` }}><Briefcase size={18} /> Send job request</button>
         </div>
       )}
@@ -2252,8 +2289,8 @@ function TalentProfile({ talent, posts, canRequest, self, contactOnly, eng, onRe
               <Lock size={16} color={C.gold} />
             </div>
             <div className="flex-1">
-              <div className="text-[13.5px] font-semibold" style={{ color: C.ink }}>Contact details are for operators</div>
-              <p className="text-[12.5px] leading-snug mt-1" style={{ color: C.muted }}>
+              <div className="text-[14px] font-semibold" style={{ color: C.ink }}>Contact details are for operators</div>
+              <p className="text-[13px] leading-snug mt-1" style={{ color: C.muted }}>
                 Phone numbers are shown to tour operators booking crew. You can message {String(t.name || "them").split(" ")[0]} here instead.
               </p>
               <button onClick={() => onMessage && onMessage(t.id)}
@@ -2268,7 +2305,7 @@ function TalentProfile({ talent, posts, canRequest, self, contactOnly, eng, onRe
 
       {self && (
         <>
-          <div className="px-5 mt-6"><div className="rounded-xl px-4 py-3 text-[13px] text-center" style={{ background: C.goldSoft, color: "#7a5a1e" }}>This is how operators see your profile.</div></div>
+          <div className="px-5 mt-6"><div className="rounded-xl px-4 py-3 text-[13px] text-center" style={{ background: C.goldSoft, color: C.goldText }}>This is how operators see your profile.</div></div>
           <div className="px-5 mt-4"><PrivacyPanel talent={t} /></div>
         </>
       )}
@@ -2312,7 +2349,7 @@ function RequestForm({ talent, operator, onBack, onSend }) {
       <div className="px-5 py-4">
         <div className="rounded-2xl p-3.5 flex items-center gap-3 mb-5" style={{ background: C.card, border: `1px solid ${C.line}` }}>
           <Avatar initials={talent.initials} size={42} />
-          <div><div className="text-[14.5px] font-semibold" style={{ color: C.ink }}>{talent.name}</div><div className="text-[12.5px]" style={{ color: C.muted }}>{roleLabel(talent.role)} · {talent.base}</div></div>
+          <div><div className="text-[15px] font-semibold" style={{ color: C.ink }}>{talent.name}</div><div className="text-[13px]" style={{ color: C.muted }}>{roleLabel(talent.role)} · {talent.base}</div></div>
         </div>
 
         <Label>Trip title</Label>
@@ -2347,11 +2384,11 @@ function tripStateNow(trip) {
 }
 function TripStateBadge({ state }) {
   const m = {
-    scheduled: { bg: C.goldSoft, fg: "#7a5a1e", label: "Opens soon" },
+    scheduled: { bg: C.goldSoft, fg: C.goldText, label: "Opens soon" },
     active: { bg: C.pineSoft, fg: C.pine, label: "Live" },
     completed: { bg: C.bg, fg: C.muted, label: "Completed" },
   }[state];
-  return <span className="rounded-full px-2.5 py-1 text-[11.5px] font-semibold" style={{ background: m.bg, color: m.fg }}>{m.label}</span>;
+  return <span className="rounded-full px-2.5 py-1 text-[12px] font-semibold" style={{ background: m.bg, color: m.fg }}>{m.label}</span>;
 }
 function CrewAvatars({ members, size = 26 }) {
   return (
@@ -2400,7 +2437,7 @@ function TripsTab({ user, trips, actions }) {
       )}
 
       {view === "past" && past.length > 0 && (
-        <p className="text-[11.5px] text-center mt-4 leading-snug" style={{ color: C.muted }}>
+        <p className="text-[12px] text-center mt-4 leading-snug" style={{ color: C.muted }}>
           Past trips stay here as your record. Crew chats are archived and read-only.
         </p>
       )}
@@ -2417,10 +2454,10 @@ function TripCard({ trip, onOpen, past }) {
         <div className="text-[15px] font-semibold leading-snug" style={{ color: C.ink }}>{trip.title}</div>
         <TripStateBadge state={tripStateNow(trip)} />
       </div>
-      <div className="flex items-center gap-1 text-[12.5px] mt-1" style={{ color: C.muted }}><CalendarCheck size={12} /> {fmtDate(trip.start)} – {fmtDate(trip.end)}</div>
+      <div className="flex items-center gap-1 text-[13px] mt-1" style={{ color: C.muted }}><CalendarCheck size={12} /> {fmtDate(trip.start)} – {fmtDate(trip.end)}</div>
       <div className="flex items-center justify-between mt-3">
         <CrewAvatars members={trip.members} />
-        <div className="flex items-center gap-1 text-[12.5px]" style={{ color: C.muted }}><MessageSquare size={13} /> {msgs.length}</div>
+        <div className="flex items-center gap-1 text-[13px]" style={{ color: C.muted }}><MessageSquare size={13} /> {msgs.length}</div>
       </div>
     </button>
   );
@@ -2443,10 +2480,9 @@ function TripHub({ user, meId, trip, actions, onBack }) {
       </div>
 
       <div className="px-5 py-4">
-        <div className="rounded-2xl p-4 mb-4" style={{ background: C.card, border: `1px solid ${C.line}` }}>
-          <div className="flex items-center gap-2 text-[13px] font-medium" style={{ color: C.ink }}><MapPin size={15} color={C.gold} /> Meeting point</div>
-          <div className="text-[13.5px] mt-1" style={{ color: C.muted }}>{trip.meetingPoint}</div>
-        </div>
+        {isTalent
+          ? <CrewBrief trip={trip} user={user} />
+          : <TripEssentials trip={trip} canEdit actions={actions} />}
 
         {canInvite && (
           <button onClick={() => setInviting(true)}
@@ -2457,7 +2493,7 @@ function TripHub({ user, meId, trip, actions, onBack }) {
             </div>
             <div className="flex-1">
               <div className="text-[14px] font-semibold" style={{ color: C.pine }}>Ask a guest for a review</div>
-              <div className="text-[12.5px] mt-0.5" style={{ color: C.pine, opacity: .8 }}>
+              <div className="text-[13px] mt-0.5" style={{ color: C.pine, opacity: .8 }}>
                 Creates a one-time link. Best shared face to face on the last day.
               </div>
             </div>
@@ -2473,12 +2509,12 @@ function TripHub({ user, meId, trip, actions, onBack }) {
               <Star size={18} color="#fff" fill="#fff" />
             </div>
             <div className="flex-1">
-              <div className="text-[14px] font-semibold" style={{ color: "#7a5a1e" }}>Get a review for this trip</div>
-              <div className="text-[12.5px] mt-0.5 leading-snug" style={{ color: "#7a5a1e", opacity: .85 }}>
+              <div className="text-[14px] font-semibold" style={{ color: C.goldText }}>Get a review for this trip</div>
+              <div className="text-[13px] mt-0.5 leading-snug" style={{ color: C.goldText, opacity: .85 }}>
                 Ask {trip.operator || "your operator"} to send your guests a review link.
               </div>
             </div>
-            <ChevronLeft size={17} color="#7a5a1e" style={{ transform: "rotate(180deg)" }} />
+            <ChevronLeft size={17} color={C.goldText} style={{ transform: "rotate(180deg)" }} />
           </button>
         )}
 
@@ -2492,20 +2528,21 @@ function TripHub({ user, meId, trip, actions, onBack }) {
               <Avatar initials={m.initials} size={36} />
               <div className="flex-1"><div className="text-[14px] font-semibold" style={{ color: C.ink }}>{m.name}</div>
                 <div className="text-[12px] capitalize" style={{ color: C.muted }}>{String(m.roleInTrip || "crew").replace("_", " ")}</div></div>
-              {m.id === meId && <span className="text-[11px] font-semibold rounded-full px-2 py-0.5" style={{ background: C.goldSoft, color: "#7a5a1e" }}>You</span>}
+              {m.id === meId && <span className="text-[11px] font-semibold rounded-full px-2 py-0.5" style={{ background: C.goldSoft, color: C.goldText }}>You</span>}
             </div>
           ))}
         </div>
 
-        <div className="mb-5">
-          <ItineraryBuilder trip={trip} canEdit={user.kind === "operator" || user.kind === "admin"}
-            onChanged={actions.reloadTrips} />
-        </div>
+        {!isTalent && (
+          <div className="mb-5">
+            <ItineraryBuilder trip={trip} canEdit onChanged={actions.reloadTrips} />
+          </div>
+        )}
 
         <SectionLabel>Group chat</SectionLabel>
         <div className="rounded-xl px-4 py-3.5 flex items-center gap-3" style={{ background: C.card, border: `1px solid ${C.line}` }}>
           <div className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0" style={{ background: C.pine }}><MessageSquare size={17} color={C.goldSoft} /></div>
-          <div className="flex-1 text-[13.5px]" style={{ color: C.muted }}>Crew chat for this trip lives in <b style={{ color: C.ink }}>Messages</b>.</div>
+          <div className="flex-1 text-[14px]" style={{ color: C.muted }}>Crew chat for this trip lives in <b style={{ color: C.ink }}>Messages</b>.</div>
         </div>
       </div>
     </div>
@@ -2539,7 +2576,7 @@ function Chat({ user, meId, trip, state, actions }) {
   const exportChat = () => {
     const keep = (trip.chat?.messages || []).filter((m) => m.kind === "text" || m.kind === "photo");
     const bundle = {
-      trip: { title: trip.title, start: trip.start, end: trip.end, meetingPoint: trip.meetingPoint },
+      trip: { title: trip.title, start: trip.start, end: trip.end, arrival: trip.arrivalFlight || null, departure: trip.departureFlight || null },
       crew: (trip.members || []).map((m) => ({ name: m.name, role: m.roleInTrip })),
       exportedAt: new Date().toISOString(),
       note: "Text and photos only. Voice and video are shared live and never saved.",
@@ -2561,18 +2598,18 @@ function Chat({ user, meId, trip, state, actions }) {
     <div className="rounded-2xl overflow-hidden" style={{ border: `1px solid ${C.line}` }}>
       {state === "scheduled" && (
         <div className="px-4 py-3 flex items-center justify-between gap-3" style={{ background: C.goldSoft }}>
-          <div className="flex items-center gap-2 text-[12.5px]" style={{ color: "#7a5a1e" }}><Clock size={14} /> Chat opens 3 days before departure.</div>
+          <div className="flex items-center gap-2 text-[13px]" style={{ color: C.goldText }}><Clock size={14} /> Chat opens 3 days before departure.</div>
           <button onClick={() => actions.openChat(trip.id)} className="tap text-[12px] font-semibold rounded-full px-2.5 py-1" style={{ background: C.pine, color: "#fff" }}>Open now</button>
         </div>
       )}
       {state === "completed" && (
-        <div className="px-4 py-3 flex items-center gap-2 text-[12.5px]" style={{ background: C.bg, color: C.muted }}><Clock size={14} /> Trip complete — chat is read-only. Export it to keep it.</div>
+        <div className="px-4 py-3 flex items-center gap-2 text-[13px]" style={{ background: C.bg, color: C.muted }}><Clock size={14} /> Trip complete — chat is read-only. Export it to keep it.</div>
       )}
 
       {/* messages */}
       <div ref={scrollRef} className="hidescroll px-3.5 py-3 space-y-2.5 overflow-y-auto" style={{ background: C.bg, maxHeight: "44vh", scrollbarWidth: "none" }}>
         {(trip.chat?.messages || []).map((m) => {
-          if (m.kind === "system") return <div key={m.id} className="text-center"><span className="text-[11.5px] rounded-full px-2.5 py-1" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.muted }}>{m.body}</span></div>;
+          if (m.kind === "system") return <div key={m.id} className="text-center"><span className="text-[12px] rounded-full px-2.5 py-1" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.muted }}>{m.body}</span></div>;
           const mine = m.senderId === meId;
           const who = member(m.senderId);
           return (
@@ -2584,7 +2621,7 @@ function Chat({ user, meId, trip, state, actions }) {
                     ? <img src={m.photo} alt="" className="rounded-lg block" style={{ maxHeight: 200, objectFit: "cover" }} />
                     : <span className="text-[14px] leading-snug" style={{ color: mine ? "#fff" : C.ink }}>{m.body}</span>}
                 </div>
-                <div className={`text-[10.5px] mt-0.5 ${mine ? "text-right mr-1" : "ml-1"}`} style={{ color: C.muted }}>{relTime(m.ts)}</div>
+                <div className={`text-[11px] mt-0.5 ${mine ? "text-right mr-1" : "ml-1"}`} style={{ color: C.muted }}>{relTime(m.ts)}</div>
               </div>
             </div>
           );
@@ -2606,8 +2643,8 @@ function Chat({ user, meId, trip, state, actions }) {
 
       {/* footer */}
       <div className="px-4 py-2.5 flex items-center justify-between" style={{ background: C.card, borderTop: `1px solid ${C.lineSoft}` }}>
-        <span className="text-[11.5px]" style={{ color: C.muted }}>Photos kept · voice & video live-only</span>
-        <button onClick={exportChat} className="tap inline-flex items-center gap-1.5 text-[12.5px] font-semibold" style={{ color: C.pine }}><Download size={14} /> Export</button>
+        <span className="text-[12px]" style={{ color: C.muted }}>Photos kept · voice & video live-only</span>
+        <button onClick={exportChat} className="tap inline-flex items-center gap-1.5 text-[13px] font-semibold" style={{ color: C.pine }}><Download size={14} /> Export</button>
       </div>
     </div>
   );
@@ -2634,7 +2671,7 @@ function ShortNotice() {
 
 function AppStatusBadge({ status }) {
   const m = {
-    applied: { bg: C.goldSoft, fg: "#7a5a1e", label: "Applied" },
+    applied: { bg: C.goldSoft, fg: C.goldText, label: "Applied" },
     shortlisted: { bg: "#E7EEF6", fg: "#2b5a8a", label: "Shortlisted" },
     hired: { bg: C.pineSoft, fg: C.pine, label: "Hired" },
     declined: { bg: C.maroonSoft, fg: C.maroon, label: "Not selected" },
@@ -2687,7 +2724,7 @@ function ListingCard({ listing, talent, onApply }) {
         <Pill Icon={CalendarCheck}>{fmtDate(listing.start)} – {fmtDate(listing.end)}</Pill>
         {(listing.languages || []).map((l) => <Pill key={l}>{l}</Pill>)}
       </div>
-      {listing.notes && <p className="text-[13.5px] leading-snug mt-3" style={{ color: C.ink }}>{listing.notes}</p>}
+      {listing.notes && <p className="text-[14px] leading-snug mt-3" style={{ color: C.ink }}>{listing.notes}</p>}
 
       {applied ? (
         <div className="mt-3.5 inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[13px] font-semibold" style={{ background: C.pineSoft, color: C.pine }}><Check size={15} strokeWidth={2.6} /> Applied</div>
@@ -2696,7 +2733,7 @@ function ListingCard({ listing, talent, onApply }) {
           <textarea value={msg} onChange={(e) => setMsg(e.target.value)} rows={2} maxLength={200} placeholder="Add a short note (optional)"
             className="w-full px-3.5 py-2.5 rounded-xl text-[14px] resize-none" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
           <div className="flex gap-2 mt-2">
-            <button onClick={() => setApplying(false)} className="tap flex-1 h-10 rounded-xl text-[13.5px] font-semibold" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.muted }}>Cancel</button>
+            <button onClick={() => setApplying(false)} className="tap flex-1 h-10 rounded-xl text-[14px] font-semibold" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.muted }}>Cancel</button>
             <button onClick={() => onApply(listing.id, { talentId: talent.id, name: talent.name, initials: talent.initials, rating: talent.rating, message: msg.trim() })}
               className="tap flex-[2] h-10 rounded-xl text-[14px] font-semibold inline-flex items-center justify-center gap-2" style={{ background: C.pine, color: "#fff" }}><Send size={15} /> Apply now</button>
           </div>
@@ -2717,8 +2754,8 @@ function MyApplications({ talent, listings }) {
         return (
           <div key={l.id} className="rounded-2xl p-4" style={{ background: C.card, border: `1px solid ${C.line}` }}>
             <div className="flex items-start justify-between gap-3">
-              <div><div className="text-[14.5px] font-semibold leading-snug" style={{ color: C.ink }}>{l.title}</div>
-                <div className="text-[12.5px] mt-0.5" style={{ color: C.muted }}>{l.operator}</div></div>
+              <div><div className="text-[15px] font-semibold leading-snug" style={{ color: C.ink }}>{l.title}</div>
+                <div className="text-[13px] mt-0.5" style={{ color: C.muted }}>{l.operator}</div></div>
               <AppStatusBadge status={a.status} />
             </div>
             <div className="flex flex-wrap gap-2 mt-2.5"><Pill Icon={CalendarCheck}>{fmtDate(l.start)} – {fmtDate(l.end)}</Pill></div>
@@ -2765,8 +2802,8 @@ function OperatorJobs({ user, jobs, listings, posts, actions, eng, onOpen }) {
 function OperatorListings({ listings, actions, onPost, onManage }) {
   return (
     <div className="px-5 pt-3 pb-4">
-      <button onClick={onPost} className="tap w-full h-12 rounded-xl text-[14.5px] font-semibold inline-flex items-center justify-center gap-2 mb-4" style={{ background: C.pine, color: "#fff", boxShadow: `0 6px 16px ${C.pine}33` }}>
-        <span className="text-[18px] leading-none">+</span> Post a job
+      <button onClick={onPost} className="tap w-full h-12 rounded-xl text-[15px] font-semibold inline-flex items-center justify-center gap-2 mb-4" style={{ background: C.pine, color: "#fff", boxShadow: `0 6px 16px ${C.pine}33` }}>
+        <span className="text-[17px] leading-none">+</span> Post a job
       </button>
       {listings.length === 0 ? (
         <Empty Icon={Briefcase} title="No open jobs" body="Post a job and any qualified guide or driver can apply." />
@@ -2818,10 +2855,10 @@ function ManageApplicants({ listing, actions, onViewProfile, onBack }) {
                 <div className="flex items-center gap-3">
                   <Avatar initials={a.initials} size={44} />
                   <div className="flex-1 min-w-0"><div className="text-[15px] font-semibold" style={{ color: C.ink }}>{a.name}</div>
-                    <div className="inline-flex items-center gap-1 mt-0.5"><Star size={12} color={C.gold} fill={C.gold} /><span className="text-[12.5px] font-semibold" style={{ color: "#7a5a1e" }}>{typeof a.rating === "number" ? a.rating.toFixed(1) : "New"}</span></div></div>
+                    <div className="inline-flex items-center gap-1 mt-0.5"><Star size={12} color={C.gold} fill={C.gold} /><span className="text-[13px] font-semibold" style={{ color: C.goldText }}>{typeof a.rating === "number" ? a.rating.toFixed(1) : "New"}</span></div></div>
                   {a.status !== "applied" && <AppStatusBadge status={a.status} />}
                 </div>
-                {a.message && <p className="text-[13.5px] leading-snug mt-3" style={{ color: C.ink }}>“{a.message}”</p>}
+                {a.message && <p className="text-[14px] leading-snug mt-3" style={{ color: C.ink }}>“{a.message}”</p>}
                 {(() => {
                   const p = talentById(a.talentId);
                   if (!p) return null;
@@ -2829,16 +2866,16 @@ function ManageApplicants({ listing, actions, onViewProfile, onBack }) {
                     <div className="mt-3">
                       <div className="flex flex-wrap items-center gap-2 mb-2.5">
                         <AvailabilityChip talent={p} />
-                        {p.verified && <span className="inline-flex items-center gap-1 text-[11.5px] font-semibold rounded-full px-2 py-1" style={{ background: C.pineSoft, color: C.pine }}><BadgeCheck size={12} /> Verified</span>}
-                        {p.years > 0 && <span className="text-[11.5px] rounded-full px-2 py-1" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.muted }}>{p.years} yrs</span>}
-                        {p.base && <span className="text-[11.5px] rounded-full px-2 py-1" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.muted }}>{p.base}</span>}
+                        {p.verified && <span className="inline-flex items-center gap-1 text-[12px] font-semibold rounded-full px-2 py-1" style={{ background: C.pineSoft, color: C.pine }}><BadgeCheck size={12} /> Verified</span>}
+                        {p.years > 0 && <span className="text-[12px] rounded-full px-2 py-1" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.muted }}>{p.years} yrs</span>}
+                        {p.base && <span className="text-[12px] rounded-full px-2 py-1" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.muted }}>{p.base}</span>}
                       </div>
                       {p.languages?.length > 0 && (
                         <div className="flex flex-wrap gap-1.5 mb-2.5">
                           {(p.languages || []).slice(0, 4).map((l) => <span key={l.n} className="text-[11px] rounded-md px-1.5 py-0.5" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.muted }}>{l.n}</span>)}
                         </div>
                       )}
-                      <button onClick={() => onViewProfile(a.talentId)} className="tap w-full h-10 rounded-xl text-[13.5px] font-semibold inline-flex items-center justify-center gap-1.5"
+                      <button onClick={() => onViewProfile(a.talentId)} className="tap w-full h-10 rounded-xl text-[14px] font-semibold inline-flex items-center justify-center gap-1.5"
                         style={{ background: C.card, border: `1.5px solid ${C.pine}`, color: C.pine }}>
                         <User size={15} /> View full profile & reviews
                       </button>
@@ -2901,7 +2938,7 @@ function ListingForm({ operator, onBack, onPost }) {
 
         <button onClick={() => setUrgent((u) => !u)} className="tap w-full rounded-xl p-3.5 flex items-center gap-3 mb-5" style={{ background: C.card, border: `1px solid ${urgent ? C.maroon : C.line}` }}>
           <div className="w-9 h-9 rounded-lg flex items-center justify-center" style={{ background: C.maroonSoft }}><Clock size={17} color={C.maroon} /></div>
-          <div className="flex-1 text-left"><div className="text-[14px] font-semibold" style={{ color: C.ink }}>Short notice</div><div className="text-[12.5px]" style={{ color: C.muted }}>Highlight to available talent. Auto-on within 3 days.</div></div>
+          <div className="flex-1 text-left"><div className="text-[14px] font-semibold" style={{ color: C.ink }}>Short notice</div><div className="text-[13px]" style={{ color: C.muted }}>Highlight to available talent. Auto-on within 3 days.</div></div>
           <div className="w-6 h-6 rounded-full flex items-center justify-center" style={{ background: urgent ? C.maroon : C.card, border: `1.5px solid ${urgent ? C.maroon : C.line}` }}>{urgent && <Check size={13} color="#fff" strokeWidth={3} />}</div>
         </button>
 
@@ -3124,10 +3161,10 @@ function BhutanMap({ value, onPick, readOnly, pins, showMeta }) {
             <NavIcon size={22} color={C.gold} />
           </div>
           <div className="text-[14px] font-semibold" style={{ color: C.ink }}>Outside Bhutan</div>
-          <p className="text-[12.5px] leading-snug mt-1 mb-3" style={{ color: C.muted }}>
+          <p className="text-[13px] leading-snug mt-1 mb-3" style={{ color: C.muted }}>
             This location isn't on the Bhutan map. View it on Google Maps instead.
           </p>
-          <div className="text-[11.5px] font-mono mb-3" style={{ color: C.muted }}>
+          <div className="text-[12px] font-mono mb-3" style={{ color: C.muted }}>
             {Number(pt.lat).toFixed(5)}, {Number(pt.lng).toFixed(5)}
           </div>
           <a href={`https://www.google.com/maps/search/?api=1&query=${pt.lat},${pt.lng}`} target="_blank" rel="noreferrer"
@@ -3180,11 +3217,11 @@ function BhutanMap({ value, onPick, readOnly, pins, showMeta }) {
         )}
 
         {!zoomed && !readOnly && (
-          <span className="absolute bottom-2 left-2 rounded-full px-2 py-1 text-[10.5px]"
+          <span className="absolute bottom-2 left-2 rounded-full px-2 py-1 text-[11px]"
             style={{ background: "rgba(0,0,0,.45)", color: "#fff" }}>Tap to pin · long press to zoom</span>
         )}
         {!zoomed && readOnly && points.length > 0 && (
-          <span className="absolute bottom-2 left-2 rounded-full px-2 py-1 text-[10.5px]"
+          <span className="absolute bottom-2 left-2 rounded-full px-2 py-1 text-[11px]"
             style={{ background: "rgba(0,0,0,.45)", color: "#fff" }}>Long press or pinch to zoom</span>
         )}
       </div>
@@ -3217,7 +3254,7 @@ function LocationMeta({ loc }) {
         </div>
       ))}
       <a href={`https://www.google.com/maps/search/?api=1&query=${loc.lat},${loc.lng}`} target="_blank" rel="noreferrer"
-        className="tap flex items-center justify-center gap-1.5 py-2.5 text-[12.5px] font-semibold"
+        className="tap flex items-center justify-center gap-1.5 py-2.5 text-[13px] font-semibold"
         style={{ borderTop: `1px solid ${C.lineSoft}`, color: C.pine }}>
         <ExternalLink size={13} /> Open in Google Maps
       </a>
@@ -3234,10 +3271,10 @@ function PostLocation({ location, showMap }) {
   if (!location) return null;
   return (
     <div className="mt-2.5">
-      <span className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[12.5px] font-medium" style={{ background: C.goldSoft, color: "#7a5a1e" }}>
+      <span className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[13px] font-medium" style={{ background: C.goldSoft, color: C.goldText }}>
         <MapPin size={13} color={C.gold} /> {placeLabel(location)}
       </span>
-      {location.description && <p className="text-[12.5px] leading-snug mt-1.5" style={{ color: C.muted }}>{location.description}</p>}
+      {location.description && <p className="text-[13px] leading-snug mt-1.5" style={{ color: C.muted }}>{location.description}</p>}
       {showMap && <div className="mt-2.5"><BhutanMap readOnly value={location} showMeta /></div>}
     </div>
   );
@@ -3294,21 +3331,21 @@ function PostEngagement({ post, eng }) {
               <Avatar initials={actorInitials(c.author_id)} size={28} />
               <div className="flex-1 rounded-xl px-3 py-2" style={{ background: C.bg }}>
                 <div className="flex items-baseline gap-2">
-                  <span className="text-[12.5px] font-semibold" style={{ color: C.ink }}>{actorName(c.author_id)}</span>
-                  <span className="text-[10.5px]" style={{ color: C.muted }}>{relTime(c.ts)}</span>
+                  <span className="text-[13px] font-semibold" style={{ color: C.ink }}>{actorName(c.author_id)}</span>
+                  <span className="text-[11px]" style={{ color: C.muted }}>{relTime(c.ts)}</span>
                   {isAdmin && (
                     <button onClick={() => deleteComment(c.id)} className="ml-auto tap" aria-label="Delete comment">
                       <Trash2 size={13} color={C.maroon} />
                     </button>
                   )}
                 </div>
-                <p className="text-[13.5px] leading-snug mt-0.5" style={{ color: C.ink }}>{c.body}</p>
+                <p className="text-[14px] leading-snug mt-0.5" style={{ color: C.ink }}>{c.body}</p>
               </div>
             </div>
           ))}
           <div className="flex items-center gap-2">
             <input value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => e.key === "Enter" && send()} maxLength={240}
-              placeholder={"Reply…"} className="flex-1 h-10 px-3.5 rounded-full text-[13.5px]" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
+              placeholder={"Reply…"} className="flex-1 h-10 px-3.5 rounded-full text-[14px]" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
             <button onClick={send} disabled={!text.trim()} className="tap w-9 h-9 rounded-full flex items-center justify-center shrink-0" style={{ background: text.trim() ? C.pine : "#C7CEC7" }} aria-label="Send reply">
               <Send size={15} color="#fff" />
             </button>
@@ -3376,7 +3413,7 @@ function MapCinema({ location, photo }) {
         <div className="absolute left-2.5 bottom-2.5 flex items-center gap-1.5 rounded-full px-2.5 py-1"
           style={{ background: "rgba(0,0,0,.45)", backdropFilter: "blur(4px)", WebkitBackdropFilter: "blur(4px)", opacity: zoomed ? 1 : 0, transition: "opacity .6s .5s" }}>
           <MapPin size={12} color="#fff" />
-          <span className="text-[11.5px] font-semibold text-white">{location.place ? (location.source === "viewpoint" ? location.place : `Near ${location.place}`) : "Bhutan"}</span>
+          <span className="text-[12px] font-semibold text-white">{location.place ? (location.source === "viewpoint" ? location.place : `Near ${location.place}`) : "Bhutan"}</span>
         </div>
 
         {photo && showPhoto && (
@@ -3426,14 +3463,14 @@ function PhotoGrid({ items, author, eng, onShareStory }) {
                   </span>
                 )}
                 {p.media?.slides?.length > 1 && (
-                  <span className="absolute right-1 top-1 text-[9.5px] font-bold rounded px-1.5 py-0.5" style={{ background: "rgba(0,0,0,.5)", color: "#fff" }}>
+                  <span className="absolute right-1 top-1 text-[10px] font-bold rounded px-1.5 py-0.5" style={{ background: "rgba(0,0,0,.5)", color: "#fff" }}>
                     {p.media.slides.length}
                   </span>
                 )}
                 {(likes > 0 || comments > 0) && (
                   <span className="absolute left-1 right-1 bottom-1 flex items-center justify-center gap-2.5 rounded-md py-0.5" style={{ background: "rgba(0,0,0,.42)" }}>
-                    {likes > 0 && <span className="inline-flex items-center gap-1 text-[10.5px] font-bold text-white"><Heart size={10} color="#fff" fill="#fff" /> {likes}</span>}
-                    {comments > 0 && <span className="inline-flex items-center gap-1 text-[10.5px] font-bold text-white"><MessageCircle size={10} color="#fff" /> {comments}</span>}
+                    {likes > 0 && <span className="inline-flex items-center gap-1 text-[11px] font-bold text-white"><Heart size={10} color="#fff" fill="#fff" /> {likes}</span>}
+                    {comments > 0 && <span className="inline-flex items-center gap-1 text-[11px] font-bold text-white"><MessageCircle size={10} color="#fff" /> {comments}</span>}
                   </span>
                 )}
               </button>
@@ -3474,7 +3511,7 @@ function PostDetail({ items, index, author, eng, onShareStory, onClose }) {
           </button>
           <div className="flex-1">
             <div className="text-[15px] font-semibold" style={{ color: C.ink }}>Posts</div>
-            <div className="text-[11.5px]" style={{ color: C.muted }}>{author?.name || "Member"} · {items.length}</div>
+            <div className="text-[12px]" style={{ color: C.muted }}>{author?.name || "Member"} · {items.length}</div>
           </div>
         </div>
         {items.map((p) => (
@@ -3482,7 +3519,7 @@ function PostDetail({ items, index, author, eng, onShareStory, onClose }) {
             <WallPost post={p} author={author} eng={eng} onShareStory={onShareStory} onClose={onClose} />
           </div>
         ))}
-        <div className="py-10 text-center text-[12.5px]" style={{ color: C.muted }}>You're all caught up</div>
+        <div className="py-10 text-center text-[13px]" style={{ color: C.muted }}>You're all caught up</div>
       </div>
     </div>
   ), document.body);
@@ -3500,7 +3537,7 @@ function WallPost({ post: p, author, eng, onShareStory, onClose }) {
             <span className="text-[14px] font-semibold" style={{ color: C.ink }}>{author?.name || "Member"}</span>
             {author?.verified && <BadgeCheck size={14} color={C.pine} />}
           </div>
-          <div className="text-[11.5px]" style={{ color: C.muted }}>{relTime(p.createdAt)}</div>
+          <div className="text-[12px]" style={{ color: C.muted }}>{relTime(p.createdAt)}</div>
         </div>
       </div>
 
@@ -3511,24 +3548,24 @@ function WallPost({ post: p, author, eng, onShareStory, onClose }) {
 
         {p.location && (
           <div className="mt-2.5">
-            <button onClick={() => setShowMap((v) => !v)} className="tap inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[12.5px] font-semibold" style={{ background: C.goldSoft, color: "#7a5a1e" }}>
+            <button onClick={() => setShowMap((v) => !v)} className="tap inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[13px] font-semibold" style={{ background: C.goldSoft, color: C.goldText }}>
               <MapPin size={13} color={C.gold} />
               {placeLabel(p.location)}
             </button>
-            {p.location.description && <p className="text-[12.5px] leading-snug mt-2" style={{ color: C.muted }}>{p.location.description}</p>}
+            {p.location.description && <p className="text-[13px] leading-snug mt-2" style={{ color: C.muted }}>{p.location.description}</p>}
             {showMap && <div className="mt-2.5"><BhutanMap readOnly value={p.location} showMeta /></div>}
           </div>
         )}
 
         {onShareStory && (
           <button onClick={() => { onShareStory(p); onClose && onClose(); }} className="tap w-full h-10 rounded-xl text-[13px] font-semibold inline-flex items-center justify-center gap-2 mt-3"
-            style={{ background: C.goldSoft, color: "#7a5a1e" }}>
+            style={{ background: C.goldSoft, color: C.goldText }}>
             <Plus size={14} strokeWidth={3} /> Share to your story
           </button>
         )}
 
         {eng ? <PostEngagement post={p} eng={eng} /> : (
-          <div className="mt-3 pt-3 text-[12.5px]" style={{ borderTop: `1px solid ${C.lineSoft}`, color: C.muted }}>Sign in to like, comment or share.</div>
+          <div className="mt-3 pt-3 text-[13px]" style={{ borderTop: `1px solid ${C.lineSoft}`, color: C.muted }}>Sign in to like, comment or share.</div>
         )}
       </div>
     </div>
@@ -3675,7 +3712,7 @@ function AdminUsers({ onChanged, currentAdminId }) {
         <Chip on={filter === "operator"} onClick={() => setFilter("operator")}>Operators</Chip>
       </div>
 
-      {note && <div className="rounded-xl px-3 py-2 text-[12.5px] mb-3" style={{ background: C.pineSoft, color: C.pine }}>{note}</div>}
+      {note && <div className="rounded-xl px-3 py-2 text-[13px] mb-3" style={{ background: C.pineSoft, color: C.pine }}>{note}</div>}
 
       {rows === null ? (
         <div className="flex items-center gap-2 text-[14px] py-6 justify-center" style={{ color: C.muted }}><Loader2 size={17} className="animate-spin" /> Loading…</div>
@@ -3688,7 +3725,7 @@ function AdminUsers({ onChanged, currentAdminId }) {
             const st = u.license_status || "none";
             const stMap = {
               verified: { bg: C.pineSoft, fg: C.pine, label: "Verified" },
-              submitted: { bg: C.goldSoft, fg: "#7a5a1e", label: "Pending review" },
+              submitted: { bg: C.goldSoft, fg: C.goldText, label: "Pending review" },
               rejected: { bg: C.maroonSoft, fg: C.maroon, label: "Rejected" },
               none: { bg: C.bg, fg: C.muted, label: "No license" },
             }[st];
@@ -3698,20 +3735,20 @@ function AdminUsers({ onChanged, currentAdminId }) {
                   <Avatar initials={initialsOf(u.full_name)} size={42} />
                   <div className="flex-1 min-w-0">
                     <div className="text-[15px] font-semibold" style={{ color: C.ink }}>{u.full_name || "Unnamed"}</div>
-                    <div className="text-[12.5px]" style={{ color: C.muted }}>{roleLabel(u.role)}{u.base ? ` · ${u.base}` : ""}</div>
+                    <div className="text-[13px]" style={{ color: C.muted }}>{roleLabel(u.role)}{u.base ? ` · ${u.base}` : ""}</div>
                   </div>
-                  <span className="text-[11.5px] font-semibold rounded-full px-2.5 py-1 shrink-0" style={{ background: stMap.bg, color: stMap.fg }}>{stMap.label}</span>
+                  <span className="text-[12px] font-semibold rounded-full px-2.5 py-1 shrink-0" style={{ background: stMap.bg, color: stMap.fg }}>{stMap.label}</span>
                 </div>
 
-                <div className="text-[12.5px] mt-2 break-all" style={{ color: C.muted }}>{u.email}</div>
-                {u.phone && <div className="text-[12.5px] mt-0.5" style={{ color: C.muted }}>{prettyNumber(u.phone)}</div>}
+                <div className="text-[13px] mt-2 break-all" style={{ color: C.muted }}>{u.email}</div>
+                {u.phone && <div className="text-[13px] mt-0.5" style={{ color: C.muted }}>{prettyNumber(u.phone)}</div>}
 
                 {(u.license_number || u.license_expiry) && (
                   <div className="rounded-xl px-3 py-2.5 mt-2.5" style={{ background: C.bg, border: `1px solid ${C.line}` }}>
                     {u.license_number && (
                       <div className="flex items-center justify-between">
-                        <span className="text-[11.5px]" style={{ color: C.muted }}>Licence no.</span>
-                        <span className="text-[12.5px] font-semibold" style={{ color: C.ink, fontFamily: "monospace", letterSpacing: ".04em" }}>{u.license_number}</span>
+                        <span className="text-[12px]" style={{ color: C.muted }}>Licence no.</span>
+                        <span className="text-[13px] font-semibold" style={{ color: C.ink, fontFamily: "monospace", letterSpacing: ".04em" }}>{u.license_number}</span>
                       </div>
                     )}
                     {u.license_expiry && (() => {
@@ -3720,8 +3757,8 @@ function AdminUsers({ onChanged, currentAdminId }) {
                       const bad = days < 0, soon = days >= 0 && days < 60;
                       return (
                         <div className="flex items-center justify-between mt-1">
-                          <span className="text-[11.5px]" style={{ color: C.muted }}>Valid until</span>
-                          <span className="text-[12.5px] font-semibold" style={{ color: bad ? C.maroon : soon ? "#7a5a1e" : C.ink }}>
+                          <span className="text-[12px]" style={{ color: C.muted }}>Valid until</span>
+                          <span className="text-[13px] font-semibold" style={{ color: bad ? C.maroon : soon ? C.goldText : C.ink }}>
                             {fmtDate(u.license_expiry)}{bad ? " · EXPIRED" : soon ? ` · ${days}d left` : ""}
                           </span>
                         </div>
@@ -3760,13 +3797,13 @@ function AdminUsers({ onChanged, currentAdminId }) {
                 {open && (
                   <div className="mt-3 pt-3 fade" style={{ borderTop: `1px solid ${C.lineSoft}` }}>
                     {st !== "rejected" && (
-                      <button onClick={() => setStatus(u.id, "rejected")} className="tap w-full h-10 rounded-xl text-[13.5px] font-semibold mb-2" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.maroon }}>
+                      <button onClick={() => setStatus(u.id, "rejected")} className="tap w-full h-10 rounded-xl text-[14px] font-semibold mb-2" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.maroon }}>
                         Reject license
                       </button>
                     )}
                     <ConfirmDelete onConfirm={() => removeUser(u)} busy={busyId === u.id} />
                     <a href={`${SUPA_PROJECT_URL}/auth/users`} target="_blank" rel="noreferrer"
-                      className="tap w-full h-10 rounded-xl text-[12.5px] font-medium inline-flex items-center justify-center gap-1.5 mt-2" style={{ background: C.bg, color: C.muted }}>
+                      className="tap w-full h-10 rounded-xl text-[13px] font-medium inline-flex items-center justify-center gap-1.5 mt-2" style={{ background: C.bg, color: C.muted }}>
                       <ExternalLink size={13} /> Remove login in Supabase
                     </a>
                   </div>
@@ -3789,12 +3826,12 @@ function AdminUsers({ onChanged, currentAdminId }) {
           {[["Table editor", "/editor"], ["SQL editor", "/sql/new"], ["Auth users", "/auth/users"], ["Storage", "/storage/buckets"]].map(([label, path]) => (
             <a key={label} href={`${SUPA_PROJECT_URL}${path}`} target="_blank" rel="noreferrer"
               className="tap flex items-center justify-between rounded-xl px-3.5 py-2.5" style={{ background: C.bg }}>
-              <span className="text-[13.5px] font-medium" style={{ color: C.ink }}>{label}</span>
+              <span className="text-[14px] font-medium" style={{ color: C.ink }}>{label}</span>
               <ExternalLink size={14} color={C.muted} />
             </a>
           ))}
         </div>
-        <p className="text-[11.5px] mt-3" style={{ color: C.muted }}>Deleting here removes the profile, posts, likes, comments and license file. The login itself is removed in Supabase → Auth users.</p>
+        <p className="text-[12px] mt-3" style={{ color: C.muted }}>Deleting here removes the profile, posts, likes, comments and license file. The login itself is removed in Supabase → Auth users.</p>
       </div>
     </div>
   );
@@ -3803,14 +3840,14 @@ function AdminUsers({ onChanged, currentAdminId }) {
 function ConfirmDelete({ onConfirm, busy }) {
   const [arm, setArm] = useState(false);
   if (!arm) return (
-    <button onClick={() => setArm(true)} className="tap w-full h-10 rounded-xl text-[13.5px] font-semibold inline-flex items-center justify-center gap-1.5"
+    <button onClick={() => setArm(true)} className="tap w-full h-10 rounded-xl text-[14px] font-semibold inline-flex items-center justify-center gap-1.5"
       style={{ background: C.maroonSoft, color: C.maroon }}>
       <UserX size={15} /> Delete user & content
     </button>
   );
   return (
     <div className="rounded-xl p-3" style={{ background: C.maroonSoft }}>
-      <p className="text-[12.5px] mb-2.5" style={{ color: "#6b4a46" }}>This removes their profile, posts, likes, comments and license file. It can't be undone.</p>
+      <p className="text-[13px] mb-2.5" style={{ color: "#6b4a46" }}>This removes their profile, posts, likes, comments and license file. It can't be undone.</p>
       <div className="flex gap-2">
         <button onClick={() => setArm(false)} className="tap flex-1 h-9 rounded-lg text-[13px] font-semibold" style={{ background: C.card, color: C.muted }}>Cancel</button>
         <button onClick={onConfirm} disabled={busy} className="tap flex-1 h-9 rounded-lg text-[13px] font-bold inline-flex items-center justify-center gap-1.5" style={{ background: C.maroon, color: "#fff" }}>
@@ -3922,7 +3959,7 @@ function Onboard({ mode: initialMode, session, onBack, onDone }) {
     if (error) { setErr(error.message); return; }
     try { localStorage.setItem("bth_email", email.trim()); } catch (e) {}
     setSaved(true);
-    setTimeout(() => { if (reset) onDone(); else setStep("license"); }, 1200);
+    setTimeout(() => { if (reset) onDone(); else finish(null); }, 1200);
   };
 
   const verify = async () => {
@@ -3988,7 +4025,7 @@ function Onboard({ mode: initialMode, session, onBack, onDone }) {
     }
   };
 
-  const ORDER = signin ? ["auth", "code", "password"] : ["role", "about", "details", "email", "code", "password", "license"];
+  const ORDER = signin ? ["auth", "code", "password"] : ["role", "about", "email", "code", "password"];
   const backStep = () => {
     const i = ORDER.indexOf(step);
     if (i <= 0 || step === "code") { if (step === "code") setStep("email"); else onBack(); return; }
@@ -4012,20 +4049,20 @@ function Onboard({ mode: initialMode, session, onBack, onDone }) {
         <div className="fade">
           <div className="relative flex rounded-2xl p-1 mb-6" style={{ background: C.lineSoft }}>
             <div className="absolute top-1 bottom-1 rounded-xl" style={{ width: "calc(50% - 4px)", left: "50%", background: C.card, boxShadow: "0 1px 3px rgba(0,0,0,.08)" }} />
-            <button onClick={() => { setMode("signin"); setStep("auth"); setErr(null); }} className="relative flex-1 py-2.5 text-[14.5px] font-semibold" style={{ color: C.muted }}>Sign in</button>
-            <button className="relative flex-1 py-2.5 text-[14.5px] font-semibold" style={{ color: C.ink }}>Create account</button>
+            <button onClick={() => { setMode("signin"); setStep("auth"); setErr(null); }} className="relative flex-1 py-2.5 text-[15px] font-semibold" style={{ color: C.muted }}>Sign in</button>
+            <button className="relative flex-1 py-2.5 text-[15px] font-semibold" style={{ color: C.ink }}>Create account</button>
           </div>
 
           <h2 className="text-[26px] font-semibold tracking-[-0.02em] mb-1" style={{ color: C.ink }}>How do you work with tours?</h2>
-          <p className="text-[14.5px] mb-5" style={{ color: C.muted }}>This shapes your whole profile — pick the one that fits.</p>
+          <p className="text-[15px] mb-5" style={{ color: C.muted }}>This shapes your whole profile — pick the one that fits.</p>
 
           {[
             { id: "guide", label: "Guide", sub: "I lead trips and share Bhutan", Icon: Compass,
-              points: ["Show your specialities and languages", "Build a trip record operators trust", "Apply for jobs and short-notice work"] },
+              points: ["Apply for jobs, including short-notice work", "Get a brief for every trip: flights, guest notes, the plan", "Build a record of guest reviews and trip photos"] },
             { id: "driver", label: "Driver", sub: "I drive guests on tour", Icon: Car,
-              points: ["List your vehicle and the routes you know", "Get found for airport runs and long hauls", "Freelance owner-drivers welcome"] },
+              points: ["Pick up trips that need a driver", "See arrival flights and the day plan in your brief", "Freelance owner-drivers welcome"] },
             { id: "operator", label: "Tour Operator", sub: "I book guides and drivers", Icon: Building2,
-              points: ["Search verified guides and drivers", "Post jobs and hire in minutes", "Run every trip in one place"] },
+              points: ["Turn enquiries into confirmed trips", "Find verified guides and drivers by skill and language", "Plan itineraries and request guest reviews"] },
           ].map(({ id, label, sub: subT, Icon, points }) => (
             <button key={id} onClick={() => { setRole(id); setStep("about"); }} className="tap w-full text-left rounded-2xl p-4 mb-3"
               style={{ background: C.card, border: `1.5px solid ${role === id ? C.pine : C.line}` }}>
@@ -4043,7 +4080,7 @@ function Onboard({ mode: initialMode, session, onBack, onDone }) {
                 {points.map((p) => (
                   <div key={p} className="flex items-start gap-2">
                     <Check size={13} color={C.gold} strokeWidth={3} className="shrink-0 mt-[3px]" />
-                    <span className="text-[12.5px] leading-snug" style={{ color: C.muted }}>{p}</span>
+                    <span className="text-[13px] leading-snug" style={{ color: C.muted }}>{p}</span>
                   </div>
                 ))}
               </div>
@@ -4052,8 +4089,8 @@ function Onboard({ mode: initialMode, session, onBack, onDone }) {
 
           <div className="rounded-xl p-3.5 flex gap-2.5 mt-1" style={{ background: C.goldSoft }}>
             <ShieldCheck size={16} color={C.maroon} className="shrink-0 mt-0.5" />
-            <p className="text-[12px] leading-snug" style={{ color: "#5a4a2e" }}>
-              You'll upload your licence at the end. Nothing is visible to operators until our team verifies it.
+            <p className="text-[12px] leading-snug" style={{ color: C.goldText }}>
+              You'll add your licence from your profile after you join. No badge appears until our team has checked it.
             </p>
           </div>
         </div>
@@ -4061,7 +4098,7 @@ function Onboard({ mode: initialMode, session, onBack, onDone }) {
 
       {step === "about" && (
         <div className="fade">
-          <h2 className="text-[24px] font-semibold tracking-[-0.01em] mb-5" style={{ color: C.ink }}>Tell us who you are</h2>
+          <h2 className="text-[22px] font-semibold tracking-[-0.01em] mb-5" style={{ color: C.ink }}>Tell us who you are</h2>
           <OLabel>{role === "operator" ? "Your name" : "Full name"}</OLabel>
           <OInput value={name} onChange={(e) => setName(e.target.value)} placeholder="Your full name" />
           {role === "operator" && (<><OLabel>Agency name</OLabel><OInput value={company} onChange={(e) => setCompany(e.target.value)} placeholder="Your agency name" /></>)}
@@ -4075,13 +4112,13 @@ function Onboard({ mode: initialMode, session, onBack, onDone }) {
           </div>
           <p className="text-[12px] -mt-2 mb-4" style={{ color: C.muted }}>Operators call this number directly — make sure it's right.</p>
           {role !== "operator" && (<><OLabel>Home base</OLabel><OInput value={base} onChange={(e) => setBase(e.target.value)} placeholder="Paro" /></>)}
-          <OCta disabled={name.trim().length < 2} onClick={() => setStep("details")}>Continue</OCta>
+          <OCta disabled={name.trim().length < 2} onClick={() => (effUid ? finish(null) : setStep("email"))}>Continue</OCta>
         </div>
       )}
 
       {step === "details" && (
         <div className="fade">
-          <h2 className="text-[24px] font-semibold tracking-[-0.01em] mb-5" style={{ color: C.ink }}>{role === "guide" ? "Your specialities" : role === "driver" ? "What you drive" : "About your agency"}</h2>
+          <h2 className="text-[22px] font-semibold tracking-[-0.01em] mb-5" style={{ color: C.ink }}>{role === "guide" ? "Your specialities" : role === "driver" ? "What you drive" : "About your agency"}</h2>
           <OLabel>Years of experience</OLabel>
           <div className="flex flex-wrap gap-2 mb-5">{ONB_YEARS.map(([l, v]) => <Chip key={l} on={years === v} onClick={() => setYears(v)}>{l}</Chip>)}</div>
           {role === "guide" && (<>
@@ -4122,12 +4159,12 @@ function Onboard({ mode: initialMode, session, onBack, onDone }) {
           {/* segmented toggle */}
           <div className="relative flex rounded-2xl p-1 mb-6" style={{ background: C.lineSoft }}>
             <div className="absolute top-1 bottom-1 rounded-xl" style={{ width: "calc(50% - 4px)", left: signin ? 4 : "50%", background: C.card, boxShadow: "0 1px 3px rgba(0,0,0,.08)", transition: "left .26s cubic-bezier(.22,.61,.36,1)" }} />
-            <button onClick={() => { setMode("signin"); setStep("auth"); setErr(null); }} className="relative flex-1 py-2.5 text-[14.5px] font-semibold" style={{ color: signin ? C.ink : C.muted }}>Sign in</button>
-            <button onClick={() => { setMode("signup"); setStep("role"); setErr(null); }} className="relative flex-1 py-2.5 text-[14.5px] font-semibold" style={{ color: signin ? C.muted : C.ink }}>Create account</button>
+            <button onClick={() => { setMode("signin"); setStep("auth"); setErr(null); }} className="relative flex-1 py-2.5 text-[15px] font-semibold" style={{ color: signin ? C.ink : C.muted }}>Sign in</button>
+            <button onClick={() => { setMode("signup"); setStep("role"); setErr(null); }} className="relative flex-1 py-2.5 text-[15px] font-semibold" style={{ color: signin ? C.muted : C.ink }}>Create account</button>
           </div>
 
           <h2 className="text-[26px] font-semibold tracking-[-0.02em] mb-1" style={{ color: C.ink }}>Welcome back</h2>
-          <p className="text-[14.5px] mb-6" style={{ color: C.muted }}>Sign in to your account.</p>
+          <p className="text-[15px] mb-6" style={{ color: C.muted }}>Sign in to your account.</p>
 
           <OLabel>Email</OLabel>
           <div className="relative mb-4">
@@ -4153,10 +4190,10 @@ function Onboard({ mode: initialMode, session, onBack, onDone }) {
               <span className="w-5 h-5 rounded-md flex items-center justify-center" style={{ background: remember ? C.pine : C.card, border: `1.5px solid ${remember ? C.pine : C.line}` }}>
                 {remember && <Check size={12} color="#fff" strokeWidth={3.2} />}
               </span>
-              <span className="text-[13.5px]" style={{ color: C.ink }}>Remember me</span>
+              <span className="text-[14px]" style={{ color: C.ink }}>Remember me</span>
             </button>
             <button onClick={() => { if (!/\S+@\S+\.\S+/.test(email)) { setErr("Enter your email first."); return; } setReset(true); setErr(null); setPw(""); setPw2(""); sendCode(); }}
-              className="tap text-[13.5px] font-semibold" style={{ color: C.pine }}>Forgot password?</button>
+              className="tap text-[14px] font-semibold" style={{ color: C.pine }}>Forgot password?</button>
           </div>
 
           {err && <p className="text-[13px] mb-3" style={{ color: C.maroon }}>{err}</p>}
@@ -4171,7 +4208,7 @@ function Onboard({ mode: initialMode, session, onBack, onDone }) {
       {step === "email" && (
         <div className="fade">
           <h2 className="text-[26px] font-semibold tracking-[-0.02em] mb-1" style={{ color: C.ink }}>Verify your email</h2>
-          <p className="text-[14.5px] mb-6" style={{ color: C.muted }}>We'll send a code to confirm it's you.</p>
+          <p className="text-[15px] mb-6" style={{ color: C.muted }}>We'll send a code to confirm it's you.</p>
           <OLabel>Email</OLabel>
           <div className="relative mb-4">
             <Mail size={16} color={C.muted} className="absolute left-4 top-1/2 -translate-y-1/2" />
@@ -4185,13 +4222,17 @@ function Onboard({ mode: initialMode, session, onBack, onDone }) {
 
       {step === "code" && (
         <div className="fade">
-          <h2 className="text-[24px] font-semibold tracking-[-0.01em] mb-1" style={{ color: C.ink }}>Enter your code</h2>
+          <h2 className="text-[22px] font-semibold tracking-[-0.01em] mb-1" style={{ color: C.ink }}>Enter your code</h2>
           <p className="text-[14px] mb-5" style={{ color: C.muted }}>Sent to <b style={{ color: C.ink }}>{email}</b> — check spam too.</p>
           <input value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 8))} inputMode="numeric" placeholder="000000"
             className="w-full h-14 rounded-xl text-center text-[26px] font-semibold mb-4" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink, letterSpacing: "0.4em" }} />
           {err && <p className="text-[13px] mb-3" style={{ color: C.maroon }}>{err}</p>}
           <OCta disabled={code.length < 6} busy={busy} onClick={verify}>Verify</OCta>
-          <button onClick={sendCode} className="tap w-full text-[13.5px] font-medium mt-3" style={{ color: C.muted }}>Resend code</button>
+          <button onClick={sendCode} className="tap w-full text-[14px] font-medium mt-3" style={{ color: C.muted }}>Resend code</button>
+          <p className="text-[12px] leading-snug text-center mt-4" style={{ color: C.muted }}>
+            Codes go out in small batches while we grow. If yours hasn't arrived in a few minutes,
+            try again in an hour — your place isn't lost.
+          </p>
         </div>
       )}
 
@@ -4202,13 +4243,13 @@ function Onboard({ mode: initialMode, session, onBack, onDone }) {
               <div className="w-16 h-16 rounded-full flex items-center justify-center mb-4" style={{ background: C.pine }}>
                 <Check size={30} color="#fff" strokeWidth={3} />
               </div>
-              <div className="text-[18px] font-semibold" style={{ color: C.ink }}>Password saved</div>
+              <div className="text-[17px] font-semibold" style={{ color: C.ink }}>Password saved</div>
               <p className="text-[14px] mt-1.5" style={{ color: C.muted }}>Use it next time you sign in.</p>
             </div>
           ) : (
             <>
               <h2 className="text-[26px] font-semibold tracking-[-0.02em] mb-1" style={{ color: C.ink }}>{reset ? "Set a new password" : "Create a password"}</h2>
-              <p className="text-[14.5px] mb-6" style={{ color: C.muted }}>
+              <p className="text-[15px] mb-6" style={{ color: C.muted }}>
                 {reset ? "Your code checked out. Choose a new password for your account." : "So you can sign in quickly next time — no code needed."}
               </p>
 
@@ -4231,7 +4272,7 @@ function Onboard({ mode: initialMode, session, onBack, onDone }) {
                   placeholder="Type it again" className="w-full pl-11 pr-4 rounded-2xl text-[16px]"
                   style={{ height: 52, background: C.card, border: `1px solid ${pw2 && pw !== pw2 ? C.maroon : C.line}`, color: C.ink }} />
               </div>
-              <p className="text-[12.5px] mb-4" style={{ color: pwStrength(pw).ok && pw === pw2 ? C.pine : C.muted }}>
+              <p className="text-[13px] mb-4" style={{ color: pwStrength(pw).ok && pw === pw2 ? C.pine : C.muted }}>
                 {!pwStrength(pw).ok ? pwStrength(pw).msg : pw2 && pw !== pw2 ? "Passwords don't match yet." : pw === pw2 && pw2 ? "Strong enough." : "Type it again to confirm."}
               </p>
 
@@ -4244,7 +4285,7 @@ function Onboard({ mode: initialMode, session, onBack, onDone }) {
 
       {step === "license" && (
         <div className="fade">
-          <h2 className="text-[24px] font-semibold tracking-[-0.01em] mb-1" style={{ color: C.ink }}>Verify your license</h2>
+          <h2 className="text-[22px] font-semibold tracking-[-0.01em] mb-1" style={{ color: C.ink }}>Verify your license</h2>
           <p className="text-[14px] mb-5" style={{ color: C.muted }}>{LICENSE_LABEL[role] || "Your license"} — our team checks it, and your Verified badge appears once it clears.</p>
           {licPreview ? (
             <div className="relative rounded-xl overflow-hidden mb-4" style={{ border: `1px solid ${C.line}` }}>
@@ -4274,7 +4315,7 @@ function Onboard({ mode: initialMode, session, onBack, onDone }) {
             placeholder="Exactly as printed on the licence"
             className="w-full h-12 px-4 rounded-xl text-[15px] mb-1.5"
             style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink, letterSpacing: "0.04em" }} />
-          <p className="text-[11.5px] mb-4" style={{ color: C.muted }}>
+          <p className="text-[12px] mb-4" style={{ color: C.muted }}>
             We check this against the {role === "driver" ? "RSTA" : "Department of Tourism"} record. Private — never shown to other users.
           </p>
 
@@ -4282,13 +4323,13 @@ function Onboard({ mode: initialMode, session, onBack, onDone }) {
           <input type="date" value={licExpiry} onChange={(e) => setLicExpiry(e.target.value)}
             className="w-full h-12 px-3.5 rounded-xl text-[14px] mb-1.5"
             style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }} />
-          <p className="text-[11.5px] mb-5" style={{ color: C.muted }}>
+          <p className="text-[12px] mb-5" style={{ color: C.muted }}>
             We'll remind you before it expires, so your Verified badge never lapses mid-season.
           </p>
 
           {err && <p className="text-[13px] mb-3" style={{ color: C.maroon }}>{err}</p>}
           <OCta disabled={!licPreview || !licNumber.trim()} busy={busy} onClick={submitLicense}>Submit & enter the hub</OCta>
-          <button onClick={() => finish(null)} disabled={busy} className="tap w-full text-[13.5px] font-medium mt-3" style={{ color: C.muted }}>Skip for now — I’ll add it later</button>
+          <button onClick={() => finish(null)} disabled={busy} className="tap w-full text-[14px] font-medium mt-3" style={{ color: C.muted }}>Skip for now — I’ll add it later</button>
           <div className="rounded-xl p-3 flex gap-2.5 mt-4" style={{ background: C.goldSoft }}>
             <ShieldCheck size={16} color={C.maroon} className="shrink-0 mt-0.5" />
             <p className="text-[12px] leading-snug" style={{ color: "#5a4a2e" }}>Your license is stored privately and never shown to other users — only our review team sees it.</p>
@@ -4335,8 +4376,8 @@ function ChatsTab({ user, me, dm, trips, actions, posts, dirTick, onOpenPost, op
     <div className="px-5 py-4">
       {/* TRIP CHANNELS */}
       <div className="flex items-center justify-between mb-2.5">
-        <div className="text-[11.5px] font-semibold tracking-[.14em] uppercase" style={{ color: C.gold }}>Trip channels</div>
-        <span className="text-[11.5px]" style={{ color: C.muted }}>{myTrips.length}</span>
+        <div className="text-[12px] font-semibold tracking-[.14em] uppercase" style={{ color: C.goldText }}>Trip channels</div>
+        <span className="text-[12px]" style={{ color: C.muted }}>{myTrips.length}</span>
       </div>
       {myTrips.length === 0 ? (
         <div className="rounded-xl px-4 py-3 mb-6 text-[13px]" style={{ background: C.card, border: `1px dashed ${C.line}`, color: C.muted }}>
@@ -4355,7 +4396,7 @@ function ChatsTab({ user, me, dm, trips, actions, posts, dirTick, onOpenPost, op
                   <span className="text-[15px] font-bold" style={{ color: live ? C.goldSoft : C.muted }}>#</span>
                 </div>
                 <div className="flex-1 min-w-0">
-                  <div className="text-[14.5px] font-semibold truncate" style={{ color: C.ink }}>{tr.title}</div>
+                  <div className="text-[15px] font-semibold truncate" style={{ color: C.ink }}>{tr.title}</div>
                   <div className="text-[12px] truncate" style={{ color: C.muted }}>
                     {last ? `${last.senderId === me ? "You: " : ""}${last.kind === "photo" ? "Photo" : last.body}` : `${fmtDate(tr.start)} – ${fmtDate(tr.end)}`}
                   </div>
@@ -4372,8 +4413,8 @@ function ChatsTab({ user, me, dm, trips, actions, posts, dirTick, onOpenPost, op
 
       {/* DIRECT MESSAGES */}
       <div className="flex items-center justify-between mb-2.5">
-        <div className="text-[11.5px] font-semibold tracking-[.14em] uppercase" style={{ color: C.gold }}>Direct messages</div>
-        <button onClick={() => setFind(true)} className="tap inline-flex items-center gap-1.5 text-[12.5px] font-semibold" style={{ color: C.pine }}>
+        <div className="text-[12px] font-semibold tracking-[.14em] uppercase" style={{ color: C.goldText }}>Direct messages</div>
+        <button onClick={() => setFind(true)} className="tap inline-flex items-center gap-1.5 text-[13px] font-semibold" style={{ color: C.pine }}>
           <UserPlus size={14} /> New
         </button>
       </div>
@@ -4381,7 +4422,7 @@ function ChatsTab({ user, me, dm, trips, actions, posts, dirTick, onOpenPost, op
       {threads.length === 0 ? (
         <button onClick={() => setFind(true)} className="tap w-full rounded-2xl px-6 py-8 flex flex-col items-center text-center" style={{ background: C.card, border: `1px dashed ${C.line}` }}>
           <div className="w-12 h-12 rounded-2xl flex items-center justify-center mb-3" style={{ background: C.goldSoft }}><MessageCircle size={22} color={C.gold} /></div>
-          <div className="text-[14.5px] font-semibold" style={{ color: C.ink }}>No messages yet</div>
+          <div className="text-[15px] font-semibold" style={{ color: C.ink }}>No messages yet</div>
           <p className="text-[13px] mt-1" style={{ color: C.muted }}>Tap to message a guide, driver or operator.</p>
         </button>
       ) : (
@@ -4394,10 +4435,10 @@ function ChatsTab({ user, me, dm, trips, actions, posts, dirTick, onOpenPost, op
                 <Avatar initials={p?.initials || "?"} size={40} />
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-1.5">
-                    <span className="text-[14.5px] font-semibold" style={{ color: C.ink }}>{p?.name || "Member"}</span>
+                    <span className="text-[15px] font-semibold" style={{ color: C.ink }}>{p?.name || "Member"}</span>
                     {p?.verified && <BadgeCheck size={14} color={C.pine} />}
                   </div>
-                  <div className="text-[12.5px] truncate" style={{ color: t.unread ? C.ink : C.muted, fontWeight: t.unread ? 600 : 400 }}>{t.fromMe ? "You: " : ""}{t.body}</div>
+                  <div className="text-[13px] truncate" style={{ color: t.unread ? C.ink : C.muted, fontWeight: t.unread ? 600 : 400 }}>{t.fromMe ? "You: " : ""}{t.body}</div>
                 </div>
                 <div className="text-right shrink-0">
                   <div className="text-[11px]" style={{ color: C.muted }}>{relTime(t.ts)}</div>
@@ -4422,7 +4463,7 @@ function TripChatView({ user, meId, trip, actions, onBack }) {
         <button onClick={onBack} className="tap w-9 h-9 rounded-full flex items-center justify-center" style={{ border: `1px solid ${C.line}` }}><ChevronLeft size={19} color={C.ink} /></button>
         <div className="flex-1 min-w-0">
           <div className="text-[15px] font-semibold truncate" style={{ color: C.ink }}># {trip.title}</div>
-          <div className="text-[11.5px]" style={{ color: C.muted }}>{trip.members.length} in crew · {fmtDate(trip.start)} – {fmtDate(trip.end)}</div>
+          <div className="text-[12px]" style={{ color: C.muted }}>{trip.members.length} in crew · {fmtDate(trip.start)} – {fmtDate(trip.end)}</div>
         </div>
         <TripStateBadge state={state} />
         <button onClick={() => setShowDetails((v) => !v)} className="tap w-9 h-9 rounded-full flex items-center justify-center" style={{ border: `1px solid ${C.line}` }} aria-label="Trip details">
@@ -4432,17 +4473,22 @@ function TripChatView({ user, meId, trip, actions, onBack }) {
 
       {showDetails && (
         <div className="px-5 py-4 fade" style={{ borderBottom: `1px solid ${C.lineSoft}` }}>
-          <div className="rounded-xl p-3.5 mb-3" style={{ background: C.card, border: `1px solid ${C.line}` }}>
-            <div className="flex items-center gap-2 text-[13px] font-medium" style={{ color: C.ink }}><MapPin size={14} color={C.gold} /> Meeting point</div>
-            <div className="text-[13px] mt-1" style={{ color: C.muted }}>{trip.meetingPoint}</div>
-          </div>
+          {(trip.arrivalFlight || trip.departureFlight) && (
+            <div className="rounded-xl p-3.5 mb-3" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+              <div className="flex items-center gap-2 text-[13px] font-medium mb-1.5" style={{ color: C.ink }}>
+                <CalendarDays size={14} color={C.gold} /> Flights
+              </div>
+              {trip.arrivalFlight && <div className="text-[13px]" style={{ color: C.muted }}>In · {trip.arrivalFlight}{trip.arrivalPoint ? ` to ${trip.arrivalPoint}` : ""}</div>}
+              {trip.departureFlight && <div className="text-[13px]" style={{ color: C.muted }}>Out · {trip.departureFlight}</div>}
+            </div>
+          )}
           <div className="rounded-xl divide-y mb-3" style={{ background: C.card, border: `1px solid ${C.line}`, borderColor: C.line }}>
             {(trip.members || []).map((m) => (
               <div key={m.id} className="flex items-center gap-3 px-3.5 py-2.5">
                 <Avatar initials={m.initials} size={32} />
-                <div className="flex-1"><div className="text-[13.5px] font-semibold" style={{ color: C.ink }}>{m.name}</div>
-                  <div className="text-[11.5px] capitalize" style={{ color: C.muted }}>{String(m.roleInTrip || "crew").replace("_", " ")}</div></div>
-                {m.id === meId && <span className="text-[10.5px] font-semibold rounded-full px-2 py-0.5" style={{ background: C.goldSoft, color: "#7a5a1e" }}>You</span>}
+                <div className="flex-1"><div className="text-[14px] font-semibold" style={{ color: C.ink }}>{m.name}</div>
+                  <div className="text-[12px] capitalize" style={{ color: C.muted }}>{String(m.roleInTrip || "crew").replace("_", " ")}</div></div>
+                {m.id === meId && <span className="text-[11px] font-semibold rounded-full px-2 py-0.5" style={{ background: C.goldSoft, color: C.goldText }}>You</span>}
               </div>
             ))}
           </div>
@@ -4451,7 +4497,7 @@ function TripChatView({ user, meId, trip, actions, onBack }) {
               {(trip.itinerary || []).map((it) => (
                 <div key={it.day} className="flex items-center gap-3 rounded-xl px-3.5 py-2.5" style={{ background: C.card, border: `1px solid ${C.line}` }}>
                   <div className="w-6 h-6 rounded-md flex items-center justify-center shrink-0" style={{ background: C.pine }}><span className="text-[11px] font-bold" style={{ color: C.goldSoft }}>{it.day}</span></div>
-                  <span className="text-[13.5px] font-medium" style={{ color: C.ink }}>{it.title}</span>
+                  <span className="text-[14px] font-medium" style={{ color: C.ink }}>{it.title}</span>
                 </div>
               ))}
             </div>
@@ -4521,10 +4567,10 @@ function PickContact({ me, dirTick, onPick, onBack }) {
                 <Avatar initials={p.initials} size={42} />
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-1.5">
-                    <span className="text-[14.5px] font-semibold" style={{ color: C.ink }}>{p.name}</span>
+                    <span className="text-[15px] font-semibold" style={{ color: C.ink }}>{p.name}</span>
                     {p.verified && <BadgeCheck size={14} color={C.pine} />}
                   </div>
-                  <div className="text-[12.5px]" style={{ color: C.muted }}>{roleLabel(p.role)}{p.base ? ` · ${p.base}` : ""}</div>
+                  <div className="text-[13px]" style={{ color: C.muted }}>{roleLabel(p.role)}{p.base ? ` · ${p.base}` : ""}</div>
                 </div>
                 <MessageCircle size={17} color={C.muted} />
               </button>
@@ -4626,10 +4672,10 @@ function DmThread({ me, otherId, dm, posts, onOpenPost, onBack, onOpenProfile })
           <Avatar initials={p?.initials || "?"} size={36} />
           <div className="min-w-0">
             <div className="flex items-center gap-1.5">
-              <span className="text-[14.5px] font-semibold" style={{ color: C.ink }}>{p?.name || "Member"}</span>
+              <span className="text-[15px] font-semibold" style={{ color: C.ink }}>{p?.name || "Member"}</span>
               {p?.verified && <BadgeCheck size={14} color={C.pine} />}
             </div>
-            <div className="text-[11.5px]" style={{ color: C.muted }}>{p ? roleLabel(p.role) : ""}{p?.base ? ` · ${p.base}` : ""}</div>
+            <div className="text-[12px]" style={{ color: C.muted }}>{p ? roleLabel(p.role) : ""}{p?.base ? ` · ${p.base}` : ""}</div>
           </div>
         </button>
       </div>
@@ -4676,14 +4722,14 @@ function DmThread({ me, otherId, dm, posts, onOpenPost, onBack, onOpenProfile })
                   }}>
                     {m.sharedPostId && (() => {
                       const sp = (posts || []).find((x) => x.id === m.sharedPostId);
-                      if (!sp) return <div className="px-3.5 pt-2.5 text-[12.5px]" style={{ color: mine ? "#ffffffcc" : C.muted }}>Shared post unavailable</div>;
+                      if (!sp) return <div className="px-3.5 pt-2.5 text-[13px]" style={{ color: mine ? "#ffffffcc" : C.muted }}>Shared post unavailable</div>;
                       const a = talentById(sp.talentId);
                       return (
                         <button onClick={() => onOpenPost && onOpenPost(sp)} className="tap block w-full text-left">
                           {sp.media?.dataUri && <img src={sp.media.dataUri} alt="" className="w-full block" style={{ maxHeight: 190, objectFit: "cover" }} />}
                           <div className="px-3 py-2" style={{ background: mine ? "rgba(255,255,255,.12)" : C.bg }}>
                             <div className="text-[12px] font-semibold" style={{ color: mine ? "#fff" : C.ink }}>{a?.name || "Member"}</div>
-                            {sp.text && <div className="text-[11.5px] truncate" style={{ color: mine ? "#ffffffcc" : C.muted }}>{sp.text}</div>}
+                            {sp.text && <div className="text-[12px] truncate" style={{ color: mine ? "#ffffffcc" : C.muted }}>{sp.text}</div>}
                           </div>
                         </button>
                       );
@@ -4695,9 +4741,9 @@ function DmThread({ me, otherId, dm, posts, onOpenPost, onBack, onOpenProfile })
                       <div className="px-3.5 py-2.5">
                         <div className="flex items-center gap-2">
                           <NavIcon size={15} color={mine ? "#fff" : C.gold} />
-                          <span className="text-[13.5px] font-semibold" style={{ color: mine ? "#fff" : C.ink }}>Location shared</span>
+                          <span className="text-[14px] font-semibold" style={{ color: mine ? "#fff" : C.ink }}>Location shared</span>
                         </div>
-                        <div className="text-[11.5px] mt-0.5 font-mono" style={{ color: mine ? "#ffffffcc" : C.muted }}>{m.lat}, {m.lng}</div>
+                        <div className="text-[12px] mt-0.5 font-mono" style={{ color: mine ? "#ffffffcc" : C.muted }}>{m.lat}, {m.lng}</div>
                         <div className="text-[11px] mt-0.5" style={{ color: mine ? "#ffffffaa" : C.muted }}>
                           {m.accuracy != null ? `±${m.accuracy}m` : "accuracy unknown"}{m.altitude != null ? ` · ${m.altitude}m elevation` : ""}
                         </div>
@@ -4710,20 +4756,20 @@ function DmThread({ me, otherId, dm, posts, onOpenPost, onBack, onOpenProfile })
                             style={{ background: mine ? "rgba(255,255,255,.16)" : C.bg, color: mine ? "#fff" : C.ink }}>Directions</a>
                         </div>
                         <button onClick={() => { navigator.clipboard?.writeText(`${m.lat}, ${m.lng}`); }}
-                          className="tap w-full h-8 rounded-lg text-[11.5px] font-medium mt-1.5"
+                          className="tap w-full h-8 rounded-lg text-[12px] font-medium mt-1.5"
                           style={{ background: "transparent", color: mine ? "#ffffffaa" : C.muted }}>Copy coordinates</button>
                       </div>
                     )}
 
                     {m.body && !(m.photo && m.body === "Photo") && !(m.lat != null && m.body === "Shared a location") && (
                       <div className="px-3.5 py-2.5">
-                        <span className="text-[14.5px] leading-snug" style={{ color: mine ? "#fff" : C.ink }}>{m.body}</span>
+                        <span className="text-[15px] leading-snug" style={{ color: mine ? "#fff" : C.ink }}>{m.body}</span>
                       </div>
                     )}
                   </div>
 
                   {lastOfGroup && (
-                    <div className={`flex items-center gap-1 text-[10.5px] mt-0.5 ${mine ? "justify-end mr-1" : "ml-1"}`} style={{ color: C.muted }}>
+                    <div className={`flex items-center gap-1 text-[11px] mt-0.5 ${mine ? "justify-end mr-1" : "ml-1"}`} style={{ color: C.muted }}>
                       {relTime(m.ts || Date.now())}
                       {mine && (m.sending ? <Clock size={11} /> : m.read ? <CheckCheck size={12} color={C.pine} /> : <Check size={11} />)}
                     </div>
@@ -4812,7 +4858,7 @@ function SharePostSheet({ post, eng, onExternal, onClose, onSent }) {
       <Avatar initials={p.initials} size={40} />
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-1.5">
-          <span className="text-[14.5px] font-semibold" style={{ color: C.ink }}>{p.name}</span>
+          <span className="text-[15px] font-semibold" style={{ color: C.ink }}>{p.name}</span>
           {p.verified && <BadgeCheck size={14} color={C.pine} />}
         </div>
         <div className="text-[12px]" style={{ color: C.muted }}>{roleLabel(p.role)}{p.base ? ` · ${p.base}` : ""}</div>
@@ -4841,18 +4887,18 @@ function SharePostSheet({ post, eng, onExternal, onClose, onSent }) {
         <div className="flex-1 overflow-y-auto hidescroll px-4" style={{ scrollbarWidth: "none" }}>
           {inCircle.filter(match).length > 0 && (
             <>
-              <div className="text-[11.5px] font-semibold tracking-[.12em] uppercase mt-1 mb-1" style={{ color: C.gold }}>Followers & following</div>
+              <div className="text-[12px] font-semibold tracking-[.12em] uppercase mt-1 mb-1" style={{ color: C.goldText }}>Followers & following</div>
               {inCircle.filter(match).map((p) => <Row key={p.id} p={p} />)}
             </>
           )}
           {others.filter(match).length > 0 && (
             <>
-              <div className="text-[11.5px] font-semibold tracking-[.12em] uppercase mt-3 mb-1" style={{ color: C.gold }}>Everyone else</div>
+              <div className="text-[12px] font-semibold tracking-[.12em] uppercase mt-3 mb-1" style={{ color: C.goldText }}>Everyone else</div>
               {others.filter(match).map((p) => <Row key={p.id} p={p} />)}
             </>
           )}
           {unique.filter(match).length === 0 && (
-            <p className="text-[13.5px] text-center py-8" style={{ color: C.muted }}>Nobody found.</p>
+            <p className="text-[14px] text-center py-8" style={{ color: C.muted }}>Nobody found.</p>
           )}
         </div>
 
@@ -4864,7 +4910,7 @@ function SharePostSheet({ post, eng, onExternal, onClose, onSent }) {
             style={{ background: picked.length ? C.pine : "#C7CEC7", color: "#fff" }}>
             {busy ? <Loader2 size={18} className="animate-spin" /> : <><SendIcon size={17} /> Send{picked.length ? ` to ${picked.length}` : ""}</>}
           </button>
-          <button onClick={() => { onExternal(); onClose(); }} className="tap w-full h-11 rounded-xl text-[13.5px] font-semibold mt-2 inline-flex items-center justify-center gap-2"
+          <button onClick={() => { onExternal(); onClose(); }} className="tap w-full h-11 rounded-xl text-[14px] font-semibold mt-2 inline-flex items-center justify-center gap-2"
             style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }}>
             <Share2 size={15} /> Share outside the app
           </button>
@@ -4894,7 +4940,7 @@ function FollowListSheet({ mode, talent, eng, onClose, onOpenProfile }) {
         </div>
         <div className="flex-1 overflow-y-auto hidescroll px-4 pb-5" style={{ scrollbarWidth: "none" }}>
           {people.length === 0 ? (
-            <p className="text-[13.5px] text-center py-10" style={{ color: C.muted }}>
+            <p className="text-[14px] text-center py-10" style={{ color: C.muted }}>
               {mode === "followers" ? "No followers yet." : "Not following anyone yet."}
             </p>
           ) : people.map((p) => {
@@ -4905,7 +4951,7 @@ function FollowListSheet({ mode, talent, eng, onClose, onOpenProfile }) {
                   <Avatar initials={p.initials} size={42} />
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-1.5">
-                      <span className="text-[14.5px] font-semibold" style={{ color: C.ink }}>{p.name}</span>
+                      <span className="text-[15px] font-semibold" style={{ color: C.ink }}>{p.name}</span>
                       {p.verified && <BadgeCheck size={14} color={C.pine} />}
                     </div>
                     <div className="text-[12px]" style={{ color: C.muted }}>{roleLabel(p.role)}{p.base ? ` · ${p.base}` : ""}</div>
@@ -4932,13 +4978,13 @@ function VerifyBanner({ user }) {
   const st = user.licenseStatus;
   if (!st || st === "verified") return null;
   const map = {
-    submitted: { bg: C.goldSoft, fg: "#7a5a1e", Icon: Clock,
+    submitted: { bg: C.goldSoft, fg: C.goldText, Icon: Clock,
       title: "Verification pending",
       body: "Our team is checking your licence. You can use the app meanwhile — your Verified badge appears once it clears." },
     rejected: { bg: C.maroonSoft, fg: C.maroon, Icon: ShieldAlert,
       title: "Licence not approved",
       body: "We couldn't verify the document. Upload a clearer photo of a current licence from your profile." },
-    none: { bg: C.goldSoft, fg: "#7a5a1e", Icon: Upload,
+    none: { bg: C.goldSoft, fg: C.goldText, Icon: Upload,
       title: "Licence needed",
       body: "Add your licence to get verified — operators prioritise verified guides and drivers." },
   }[st];
@@ -4947,7 +4993,7 @@ function VerifyBanner({ user }) {
     <div className="shrink-0 px-4 py-2.5 flex items-start gap-2.5" style={{ background: map.bg }}>
       <map.Icon size={16} color={map.fg} className="shrink-0 mt-0.5" />
       <div>
-        <div className="text-[12.5px] font-semibold" style={{ color: map.fg }}>{map.title}</div>
+        <div className="text-[13px] font-semibold" style={{ color: map.fg }}>{map.title}</div>
         <div className="text-[12px] leading-snug" style={{ color: map.fg, opacity: .85 }}>{map.body}</div>
       </div>
     </div>
@@ -4957,7 +5003,7 @@ function VerifyBanner({ user }) {
 /* ========================= Availability (talent-set) ========================= */
 const AVAIL = {
   open:   { label: "Available for work", bg: "#E4EFE7", fg: "#21402F", dot: "#2E7D4F" },
-  busy:   { label: "On a trip",          bg: "#F3E8CF", fg: "#7a5a1e", dot: "#C0872B" },
+  busy:   { label: "On a trip",          bg: "#F3E8CF", fg: C.goldText, dot: "#C0872B" },
   closed: { label: "Not taking work",    bg: "#F7E9E7", fg: "#7A2E2E", dot: "#9C4B4B" },
 };
 
@@ -4996,7 +5042,7 @@ function AvailabilityEditor({ talent, onSet }) {
         <CalendarDays size={16} color={C.gold} />
         <span className="text-[14px] font-semibold" style={{ color: C.ink }}>Your availability</span>
       </div>
-      <p className="text-[12.5px] mb-3" style={{ color: C.muted }}>Operators see this before they book you.</p>
+      <p className="text-[13px] mb-3" style={{ color: C.muted }}>Operators see this before they book you.</p>
 
       <div className="space-y-2 mb-3">
         {Object.entries(AVAIL).map(([k, v]) => (
@@ -5011,7 +5057,7 @@ function AvailabilityEditor({ talent, onSet }) {
 
       {status === "busy" && (
         <div className="mb-3 fade">
-          <div className="text-[12.5px] font-medium mb-1.5" style={{ color: C.ink }}>Free again from</div>
+          <div className="text-[13px] font-medium mb-1.5" style={{ color: C.ink }}>Free again from</div>
           <input type="date" value={from} onChange={(e) => setFrom(e.target.value)}
             className="w-full h-11 px-3.5 rounded-xl text-[14px]" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
         </div>
@@ -5068,7 +5114,7 @@ function StoryViewer({ stories, author, canDelete, onDelete, onClose }) {
         <div className="px-4 py-3 flex items-center gap-2.5">
           <Avatar initials={author?.initials || "?"} size={32} />
           <div className="flex-1 min-w-0">
-            <div className="text-[13.5px] font-semibold text-white">{author?.name || "Member"}</div>
+            <div className="text-[14px] font-semibold text-white">{author?.name || "Member"}</div>
             <div className="text-[11px]" style={{ color: "rgba(255,255,255,.6)" }}>{relTime(st.ts)} · {hoursLeft}h left</div>
           </div>
           {canDelete && (
@@ -5146,8 +5192,8 @@ function AddStory({ onClose, onAdd }) {
         ) : (
           <button onClick={() => inputRef.current?.click()} className="tap w-full rounded-2xl p-8 flex flex-col items-center mb-3" style={{ background: C.bg, border: `1.5px dashed ${C.line}` }}>
             <div className="w-12 h-12 rounded-2xl flex items-center justify-center mb-2.5" style={{ background: C.goldSoft }}><ImagePlus size={22} color={C.gold} /></div>
-            <div className="text-[14.5px] font-semibold" style={{ color: C.ink }}>Choose photo or video</div>
-            <div className="text-[12.5px] mt-0.5" style={{ color: C.muted }}>Video up to 30 MB</div>
+            <div className="text-[15px] font-semibold" style={{ color: C.ink }}>Choose photo or video</div>
+            <div className="text-[13px] mt-0.5" style={{ color: C.muted }}>Video up to 30 MB</div>
           </button>
         )}
         <input ref={inputRef} type="file" accept="image/*,video/*" onChange={pick} className="hidden" />
@@ -5192,7 +5238,7 @@ function Stat({ n, label, onClick }) {
   return (
     <Tag onClick={onClick} className={`flex-1 text-center ${onClick ? "tap" : ""}`}>
       <div className="text-[17px] font-semibold leading-none" style={{ color: C.ink }}>{n}</div>
-      <div className="text-[11.5px] mt-1" style={{ color: onClick ? C.pine : C.muted }}>{label}</div>
+      <div className="text-[12px] mt-1" style={{ color: onClick ? C.pine : C.muted }}>{label}</div>
     </Tag>
   );
 }
@@ -5203,18 +5249,20 @@ function AlertsSheet({ items, onClose, onOpenProfile, onOpenMessages, onOpenJobs
     message:   { Icon: MessageCircle, bg: C.pineSoft,   fg: C.pine,     verb: "sent you a message" },
     share:     { Icon: Share2,        bg: C.pineSoft,   fg: C.pine,     verb: "shared a post with you" },
     like:      { Icon: Heart,         bg: C.maroonSoft, fg: C.maroon,   verb: "liked your post" },
-    comment:   { Icon: MessageSquare, bg: C.goldSoft,   fg: "#7a5a1e",  verb: "commented on your post" },
+    comment:   { Icon: MessageSquare, bg: C.goldSoft,   fg: C.goldText,  verb: "commented on your post" },
     follow:    { Icon: UserPlus,      bg: C.pineSoft,   fg: C.pine,     verb: "started following you" },
-    job:       { Icon: Briefcase,     bg: C.goldSoft,   fg: "#7a5a1e",  verb: "sent you a job request" },
-    listing:   { Icon: Briefcase,     bg: C.goldSoft,   fg: "#7a5a1e",  verb: "posted a job you can apply for" },
+    job:       { Icon: Briefcase,     bg: C.goldSoft,   fg: C.goldText,  verb: "sent you a job request" },
+    listing:   { Icon: Briefcase,     bg: C.goldSoft,   fg: C.goldText,  verb: "posted a job you can apply for" },
     applicant: { Icon: UserCheck,     bg: C.pineSoft,   fg: C.pine,     verb: "applied to your job" },
-    joined:    { Icon: UserPlus,      bg: C.goldSoft,   fg: "#7a5a1e",  verb: "joined Bhutan Tourism Hub" },
-    licenceSoon:     { Icon: Clock,       bg: C.goldSoft,   fg: "#7a5a1e", verb: "Your licence is expiring", self: true },
+    joined:    { Icon: UserPlus,      bg: C.goldSoft,   fg: C.goldText,  verb: "joined Bhutan Tourism Hub" },
+    licenceSoon:     { Icon: Clock,       bg: C.goldSoft,   fg: C.goldText, verb: "Your licence is expiring", self: true },
     licenceExpired:  { Icon: ShieldAlert, bg: C.maroonSoft, fg: C.maroon,  verb: "Your licence has expired", self: true },
     licenceRejected: { Icon: ShieldAlert, bg: C.maroonSoft, fg: C.maroon,  verb: "Your licence wasn't approved", self: true },
-    licenceMissing:  { Icon: Upload,      bg: C.goldSoft,   fg: "#7a5a1e", verb: "Add your licence to get verified", self: true },
+    licenceMissing:  { Icon: Upload,      bg: C.goldSoft,   fg: C.goldText, verb: "Add your licence to get verified", self: true },
     tripSoon:        { Icon: CalendarDays, bg: C.pineSoft,  fg: C.pine,    verb: "Trip starting soon", self: true },
-    askReview:       { Icon: Star,        bg: C.goldSoft,   fg: "#7a5a1e", verb: "Ask your guests for a review", self: true },
+    askReview:       { Icon: Star,        bg: C.goldSoft,   fg: C.goldText, verb: "Ask your guests for a review", self: true },
+    briefMissing:    { Icon: ShieldAlert, bg: C.goldSoft,   fg: C.goldText, verb: "Flight details not set yet", self: true },
+    profileThin:     { Icon: User,        bg: C.goldSoft,   fg: C.goldText, verb: "Finish your profile", self: true },
     official:        { Icon: ShieldCheck, bg: C.pineSoft,   fg: C.pine,    verb: "Message from Bhutan Tourism Hub" },
   };
 
@@ -5228,19 +5276,19 @@ function AlertsSheet({ items, onClose, onOpenProfile, onOpenMessages, onOpenJobs
           <div className="w-10 h-1 rounded-full mx-auto mb-4" style={{ background: C.line }} />
           <div className="flex items-center justify-between">
             <div className="text-[17px] font-semibold" style={{ color: C.ink }}>Notifications</div>
-            <span className="text-[12.5px]" style={{ color: C.muted }}>{items.length}</span>
+            <span className="text-[13px]" style={{ color: C.muted }}>{items.length}</span>
           </div>
           {!notifyOn && (isIOS() && !installed ? (
             <button onClick={onInstall} className="tap w-full rounded-xl px-3.5 py-2.5 mt-3 flex items-center gap-2.5 text-left" style={{ background: C.goldSoft }}>
               <Smartphone size={16} color={C.gold} className="shrink-0" />
-              <span className="text-[12.5px] leading-snug" style={{ color: "#7a5a1e" }}>
+              <span className="text-[13px] leading-snug" style={{ color: C.goldText }}>
                 <b>Add to Home Screen first</b> — on iPhone, alerts only work once the app is installed. Tap to see how.
               </span>
             </button>
           ) : (
             <button onClick={onEnableNotify} className="tap w-full rounded-xl px-3.5 py-2.5 mt-3 flex items-center gap-2.5 text-left" style={{ background: C.goldSoft }}>
               <Bell size={16} color={C.gold} className="shrink-0" />
-              <span className="text-[12.5px] leading-snug" style={{ color: "#7a5a1e" }}>
+              <span className="text-[13px] leading-snug" style={{ color: C.goldText }}>
                 <b>Turn on alerts</b> — get notified about jobs and messages even when the app isn't open.
               </span>
             </button>
@@ -5258,7 +5306,7 @@ function AlertsSheet({ items, onClose, onOpenProfile, onOpenMessages, onOpenJobs
             <>
               {[["New", today], ["Earlier", earlier]].map(([label, group]) => group.length === 0 ? null : (
                 <div key={label}>
-                  <div className="text-[11.5px] font-semibold tracking-[.12em] uppercase mt-3 mb-1" style={{ color: C.gold }}>{label}</div>
+                  <div className="text-[12px] font-semibold tracking-[.12em] uppercase mt-3 mb-1" style={{ color: C.goldText }}>{label}</div>
                   {group.map((a) => {
                     const m = meta[a.kind] || meta.message;
                     const p = m.self ? null : talentById(a.who);
@@ -5286,7 +5334,7 @@ function AlertsSheet({ items, onClose, onOpenProfile, onOpenMessages, onOpenJobs
                           )}
                         </div>
                         <div className="flex-1 min-w-0">
-                          <div className="text-[13.5px] leading-snug" style={{ color: C.ink }}>
+                          <div className="text-[14px] leading-snug" style={{ color: C.ink }}>
                             {m.self ? (
                               <b style={{ color: m.fg }}>{m.verb}</b>
                             ) : (
@@ -5294,7 +5342,7 @@ function AlertsSheet({ items, onClose, onOpenProfile, onOpenMessages, onOpenJobs
                             )}
                             {a.urgent && <span className="ml-1.5 text-[10px] font-bold rounded-full px-1.5 py-0.5" style={{ background: C.maroonSoft, color: C.maroon }}>ACTION NEEDED</span>}
                           </div>
-                          {a.text && a.kind !== "follow" && <div className="text-[12.5px] truncate mt-0.5" style={{ color: C.muted }}>{a.text}</div>}
+                          {a.text && a.kind !== "follow" && <div className="text-[13px] truncate mt-0.5" style={{ color: C.muted }}>{a.text}</div>}
                           <div className="text-[11px] mt-0.5" style={{ color: C.muted }}>{relTime(a.ts)}</div>
                         </div>
                       </button>
@@ -5330,9 +5378,7 @@ function InstallSheet({ installEvent, onClose }) {
         <div className="w-10 h-1 rounded-full mx-auto mb-4" style={{ background: C.line }} />
 
         <div className="flex items-start gap-3 mb-4">
-          <div className="w-12 h-12 rounded-2xl flex items-center justify-center shrink-0" style={{ background: C.pine }}>
-            <Compass size={22} color={C.goldSoft} />
-          </div>
+          <BrandMark size={48} />
           <div>
             <div className="text-[17px] font-semibold" style={{ color: C.ink }}>Install Bhutan Tourism Hub</div>
             <p className="text-[13px] mt-0.5" style={{ color: C.muted }}>Takes a second, and makes a real difference.</p>
@@ -5398,8 +5444,8 @@ function InstallReason({ Icon, title, body }) {
         <Icon size={15} color={C.gold} />
       </div>
       <div>
-        <div className="text-[13.5px] font-semibold" style={{ color: C.ink }}>{title}</div>
-        <div className="text-[12.5px] leading-snug" style={{ color: C.muted }}>{body}</div>
+        <div className="text-[14px] font-semibold" style={{ color: C.ink }}>{title}</div>
+        <div className="text-[13px] leading-snug" style={{ color: C.muted }}>{body}</div>
       </div>
     </div>
   );
@@ -5412,29 +5458,37 @@ function Tutorial({ user, nav, setTab, onDone }) {
   const first = (user.name || "").split(" ")[0];
 
   // steps point at real tabs; tabIndex tells the highlight which nav item to ring
-  const steps = talent
-    ? [
-        { kind: "intro", title: `Welcome, ${first}`, body: "You're one of the first on the hub. Two minutes and you'll know your way around." },
-        { kind: "tab", tab: "post", title: "Your Feed", body: "Share photos from your trips, pinned to where you took them. Every approved post builds your portfolio." },
-        { kind: "tab", tab: "jobs", title: "Jobs", body: "Operators post work here. Apply to anything matching your skills — including short-notice jobs when someone drops out." },
-        { kind: "tab", tab: "trips", title: "Trips", body: "Once you're hired, the trip appears here with its itinerary and meeting point." },
-        { kind: "tab", tab: "chats", title: "Messages", body: "Crew chat for each trip, plus direct messages with operators and other guides." },
-        { kind: "tab", tab: "profile", title: "Your Profile", body: "Set your availability, add specialities and languages. This is what operators see before booking you." },
-        { kind: "top", title: "Search & alerts", body: "Search anyone by name, and tap the bell for jobs, messages and follows." },
-        { kind: "outro", title: "One last thing", body: user.licenseStatus === "submitted"
-            ? "Your licence is with our review team. Everything works meanwhile — your Verified badge appears once it clears."
-            : "Add your licence from your profile to get the Verified badge. Operators prioritise verified guides and drivers." },
-      ]
-    : [
-        { kind: "intro", title: `Welcome, ${first}`, body: "You're one of the first operators here. Quick tour so you can start booking." },
-        { kind: "tab", tab: "discover", title: "Discover", body: "Every verified guide and driver, filtered by speciality, language and who's available right now." },
-        { kind: "tab", tab: "requests", title: "Jobs", body: "Post a job and let qualified people apply, or send a request directly to someone you want." },
-        { kind: "tab", tab: "trips", title: "Trips", body: "Every confirmed booking becomes a trip — crew, itinerary and meeting point in one place." },
-        { kind: "tab", tab: "chats", title: "Messages", body: "A chat channel per trip, plus direct messages with any guide or driver." },
-        { kind: "tab", tab: "feed", title: "Feed", body: "Recent posts from guides and drivers — a good way to spot people worth booking." },
-        { kind: "top", title: "Search & alerts", body: "Search people by name, and tap the bell when someone applies to your job." },
-        { kind: "outro", title: "You're set", body: "Post your first job and see who applies. Tell us what's missing — we're still building." },
-      ];
+  const ADMIN_STEPS = [
+    { kind: "intro", title: `Welcome, ${first}`, body: "You're the admin. You verify licences, moderate what gets posted, and support everyone using the hub." },
+    { kind: "tab", tab: "review", title: "Review", body: "Every post waits here before it goes live. Approve or reject with a reason — the person sees why." },
+    { kind: "tab", tab: "users", title: "Users", body: "Everyone who signs up. Open a licence, check the number against the register, then verify or reject. You can also message anyone directly from here." },
+    { kind: "tab", tab: "feed", title: "Feed", body: "Everything that's been approved, plus anything still pending — a quick way to see what the community is sharing." },
+    { kind: "tab", tab: "discover", title: "Discover", body: "The full directory. Useful for checking a profile looks right before you verify it." },
+    { kind: "tab", tab: "chats", title: "Messages", body: "Support conversations. Messages you send carry an OFFICIAL badge so people know they're genuinely from us." },
+    { kind: "outro", title: "One habit worth keeping", body: "Verify licences the same day they arrive. A guide waiting on a badge can't be booked, and that's the whole point of being here." },
+  ];
+
+  const TALENT_STEPS = [
+    { kind: "intro", title: `Welcome, ${first}`, body: "You're one of the first on the hub. Two minutes and you'll know your way around." },
+    { kind: "tab", tab: "post", title: "Your Feed", body: "Share photos from your trips, pinned to where you took them. Every approved post builds a portfolio operators can see." },
+    { kind: "tab", tab: "jobs", title: "Jobs", body: "Operators post work here. Apply to anything matching your skills — including short-notice jobs when someone drops out." },
+    { kind: "tab", tab: "trips", title: "Trips", body: "Once you're hired, the trip appears here with your brief: arrival flight, guest notes, the day plan and an emergency contact." },
+    { kind: "tab", tab: "chats", title: "Messages", body: "Crew chat for each trip, plus direct messages with operators and other guides." },
+    { kind: "tab", tab: "profile", title: "Your Profile", body: "This is what operators see before booking you. Add your licence, specialities and languages here — and keep your availability current." },
+    { kind: "outro", title: "Two things to do now", body: "Add your licence from your Profile so you get the Verified badge — operators prioritise verified crew. Then add your specialities and languages, because that's how operators filter when they search." },
+  ];
+
+  const OPERATOR_STEPS = [
+    { kind: "intro", title: `Welcome, ${first}`, body: "Here's how a booking moves through the hub, from first enquiry to finished trip." },
+    { kind: "tab", tab: "bookings", title: "Bookings", body: "Everything lives here in four stages: Enquiries, Confirmed, Past, and Follow up. Record an enquiry, and when the client says yes, tap Make a Trip." },
+    { kind: "tab", tab: "itinerary", title: "Itinerary", body: "Build the day-by-day plan for any confirmed trip, and share it with your client in one tap." },
+    { kind: "tab", tab: "discover", title: "Crew", body: "Every verified guide and driver, filtered by speciality, language and who's available right now. Phone numbers are visible to you — that's an operator feature." },
+    { kind: "tab", tab: "requests", title: "Jobs", body: "Post a job and let qualified people apply, or send a request directly to someone you want." },
+    { kind: "tab", tab: "chats", title: "Messages", body: "A chat channel per trip, plus direct messages with any guide or driver." },
+    { kind: "outro", title: "The one that pays for itself", body: "After a trip ends, open it and ask your guests for a review. Only you can request them — that's what makes the ratings on this platform worth trusting." },
+  ];
+
+  const steps = user.kind === "admin" ? ADMIN_STEPS : talent ? TALENT_STEPS : OPERATOR_STEPS;
 
   const step = steps[i];
   const navIndex = step.kind === "tab" ? nav.findIndex((n) => n.id === step.tab) : -1;
@@ -5471,12 +5525,10 @@ function Tutorial({ user, nav, setTab, onDone }) {
         ...(step.kind === "intro" || step.kind === "outro" ? { top: "50%", transform: "translateY(-50%)" } : {}) }}>
         <div className="rounded-2xl p-5" style={{ background: C.card, boxShadow: "0 20px 40px rgba(0,0,0,.35)" }}>
           {(step.kind === "intro" || step.kind === "outro") && (
-            <div className="w-12 h-12 rounded-2xl flex items-center justify-center mb-3" style={{ background: C.pine }}>
-              <Compass size={22} color={C.goldSoft} strokeWidth={1.8} />
-            </div>
+            <BrandMark size={48} className="mb-3" />
           )}
 
-          <div className="text-[18px] font-semibold tracking-[-0.01em]" style={{ color: C.ink }}>{step.title}</div>
+          <div className="text-[17px] font-semibold tracking-[-0.01em]" style={{ color: C.ink }}>{step.title}</div>
           <p className="text-[14px] leading-relaxed mt-1.5" style={{ color: C.muted }}>{step.body}</p>
 
           {/* progress dots */}
@@ -5500,7 +5552,7 @@ function Tutorial({ user, nav, setTab, onDone }) {
           </div>
 
           {i < steps.length - 1 && (
-            <button onClick={onDone} className="tap w-full text-[12.5px] font-medium mt-2.5" style={{ color: C.muted }}>Skip the tour</button>
+            <button onClick={onDone} className="tap w-full text-[13px] font-medium mt-2.5" style={{ color: C.muted }}>Skip the tour</button>
           )}
         </div>
       </div>
@@ -5568,17 +5620,17 @@ function PrivacyPanel({ talent }) {
     </div>
   ), document.body);
 
-  const P = ({ children }) => <p className="text-[13.5px] leading-relaxed mb-3" style={{ color: C.muted }}>{children}</p>;
+  const P = ({ children }) => <p className="text-[14px] leading-relaxed mb-3" style={{ color: C.muted }}>{children}</p>;
   const H = ({ children }) => <div className="text-[14px] font-semibold mt-4 mb-1.5" style={{ color: C.ink }}>{children}</div>;
 
   return (
     <div className="rounded-2xl overflow-hidden" style={{ background: C.card, border: `1px solid ${C.line}` }}>
       <div className="px-4 pt-3.5 pb-1 flex items-center gap-2">
         <ShieldCheck size={16} color={C.gold} />
-        <span className="text-[13.5px] font-semibold" style={{ color: C.ink }}>Privacy & your data</span>
+        <span className="text-[14px] font-semibold" style={{ color: C.ink }}>Privacy & your data</span>
       </div>
 
-      {note && <div className="mx-4 mb-2 rounded-lg px-3 py-2 text-[12.5px]" style={{ background: C.pineSoft, color: C.pine }}>{note}</div>}
+      {note && <div className="mx-4 mb-2 rounded-lg px-3 py-2 text-[13px]" style={{ background: C.pineSoft, color: C.pine }}>{note}</div>}
 
       {[
         ["Privacy policy", () => setOpen("privacy")],
@@ -5590,7 +5642,7 @@ function PrivacyPanel({ talent }) {
         <button key={label} onClick={fn} disabled={busy}
           className="tap w-full text-left px-4 py-3 flex items-center justify-between"
           style={{ borderTop: `1px solid ${C.lineSoft}` }}>
-          <span className="text-[13.5px]" style={{ color: i === 4 ? C.maroon : C.ink }}>{label}</span>
+          <span className="text-[14px]" style={{ color: i === 4 ? C.maroon : C.ink }}>{label}</span>
           <ChevronLeft size={16} color={C.muted} style={{ transform: "rotate(180deg)" }} />
         </button>
       ))}
@@ -5637,20 +5689,20 @@ function PrivacyPanel({ talent }) {
       {open === "data" && (
         <Sheet title="What we store about you">
           <div className="rounded-xl p-3.5 mb-3" style={{ background: C.bg, border: `1px solid ${C.line}` }}>
-            <div className="text-[12.5px] font-semibold mb-2" style={{ color: C.ink }}>Visible to other users</div>
+            <div className="text-[13px] font-semibold mb-2" style={{ color: C.ink }}>Visible to other users</div>
             {["Name and role", "Home base", "Specialities and languages", "Years of experience", "Approved posts and photos", "Trip record and reviews", "Availability status", "Phone number and email (so operators can contact you)"].map((x) => (
               <div key={x} className="flex items-start gap-2 mb-1">
                 <Eye size={12} color={C.muted} className="shrink-0 mt-1" />
-                <span className="text-[12.5px]" style={{ color: C.muted }}>{x}</span>
+                <span className="text-[13px]" style={{ color: C.muted }}>{x}</span>
               </div>
             ))}
           </div>
           <div className="rounded-xl p-3.5" style={{ background: C.pineSoft }}>
-            <div className="text-[12.5px] font-semibold mb-2" style={{ color: C.pine }}>Private — never shown to other users</div>
+            <div className="text-[13px] font-semibold mb-2" style={{ color: C.pine }}>Private — never shown to other users</div>
             {["Your licence document", "Your direct messages", "Your password", "Your login history"].map((x) => (
               <div key={x} className="flex items-start gap-2 mb-1">
                 <Lock size={12} color={C.pine} className="shrink-0 mt-1" />
-                <span className="text-[12.5px]" style={{ color: C.pine }}>{x}</span>
+                <span className="text-[13px]" style={{ color: C.pine }}>{x}</span>
               </div>
             ))}
           </div>
@@ -5876,7 +5928,7 @@ function CropEditor({ slides, initialRatio, onDone, onClose }) {
           </div>
         )}
 
-        <p className="text-center text-[11.5px] mt-2.5" style={{ color: "rgba(255,255,255,.55)" }}>
+        <p className="text-center text-[12px] mt-2.5" style={{ color: "rgba(255,255,255,.55)" }}>
           Drag to reposition · pinch or slide to zoom{slides.length > 1 ? " · tap a photo to reframe it" : ""}
         </p>
       </div>
@@ -5948,15 +6000,13 @@ function GuestReview({ token }) {
     setState("done");
   };
 
-  const Shell = ({ children }) => (
+  const ReviewPage = ({ children }) => (
     <div className="flex-1 overflow-y-auto hidescroll px-6 py-8" style={{ scrollbarWidth: "none" }}>
       <div className="flex items-center gap-2.5 mb-7">
-        <div className="w-10 h-10 rounded-xl flex items-center justify-center" style={{ background: C.pine }}>
-          <Compass size={20} color={C.goldSoft} strokeWidth={1.9} />
-        </div>
+        <BrandMark size={40} />
         <div>
           <div className="text-[16px] font-semibold leading-none" style={{ color: C.ink }}>Bhutan Tourism Hub</div>
-          <div className="text-[10px] font-semibold tracking-[.14em] uppercase mt-1" style={{ color: C.gold }}>Verified guest review</div>
+          <div className="text-[10px] font-semibold tracking-[.14em] uppercase mt-1" style={{ color: C.goldText }}>Verified guest review</div>
         </div>
       </div>
       {children}
@@ -5964,22 +6014,22 @@ function GuestReview({ token }) {
   );
 
   const Message = ({ Icon, title, body: b, tone }) => (
-    <Shell>
+    <ReviewPage>
       <div className="rounded-2xl p-6 text-center" style={{ background: C.card, border: `1px solid ${C.line}` }}>
         <div className="w-14 h-14 rounded-2xl flex items-center justify-center mx-auto mb-3"
           style={{ background: tone === "good" ? C.pineSoft : C.goldSoft }}>
           <Icon size={26} color={tone === "good" ? C.pine : C.gold} />
         </div>
         <div className="text-[17px] font-semibold" style={{ color: C.ink }}>{title}</div>
-        <p className="text-[13.5px] leading-relaxed mt-2" style={{ color: C.muted }}>{b}</p>
+        <p className="text-[14px] leading-relaxed mt-2" style={{ color: C.muted }}>{b}</p>
       </div>
-    </Shell>
+    </ReviewPage>
   );
 
   if (state === "loading") return (
-    <Shell><div className="flex items-center justify-center gap-2 py-16 text-[14px]" style={{ color: C.muted }}>
+    <ReviewPage><div className="flex items-center justify-center gap-2 py-16 text-[14px]" style={{ color: C.muted }}>
       <Loader2 size={18} className="animate-spin" /> Opening your review…
-    </div></Shell>
+    </div></ReviewPage>
   );
 
   if (state === "invalid") return <Message Icon={ShieldAlert} title="This link isn't valid"
@@ -6010,8 +6060,8 @@ function GuestReview({ token }) {
   const SmallStars = ({ label, hint, value, onChange }) => (
     <div className="flex items-center gap-3 py-2.5">
       <div className="flex-1 min-w-0">
-        <div className="text-[13.5px] font-medium" style={{ color: C.ink }}>{label}</div>
-        <div className="text-[11.5px]" style={{ color: C.muted }}>{hint}</div>
+        <div className="text-[14px] font-medium" style={{ color: C.ink }}>{label}</div>
+        <div className="text-[12px]" style={{ color: C.muted }}>{hint}</div>
       </div>
       <div className="flex gap-1 shrink-0">
         {[1, 2, 3, 4, 5].map((n) => (
@@ -6027,16 +6077,16 @@ function GuestReview({ token }) {
   const wordFor = [null, "Poor", "Fair", "Good", "Great", "Excellent"][rating] || "";
 
   return (
-    <Shell>
+    <ReviewPage>
       {/* who you are reviewing */}
       <div className="text-center mb-6">
         <div className="flex justify-center mb-3"><Avatar initials={talent?.initials || "?"} size={64} /></div>
-        <div className="text-[21px] font-semibold tracking-[-0.01em]" style={{ color: C.ink }}>{talent?.name || "Your guide"}</div>
-        <div className="text-[13.5px] mt-0.5" style={{ color: C.muted }}>
+        <div className="text-[22px] font-semibold tracking-[-0.01em]" style={{ color: C.ink }}>{talent?.name || "Your guide"}</div>
+        <div className="text-[14px] mt-0.5" style={{ color: C.muted }}>
           {talent ? roleLabel(talent.role) : ""}{talent?.base ? ` · ${talent.base}` : ""}
         </div>
         {info?.trip_label && (
-          <div className="inline-block mt-2.5 text-[12.5px] rounded-full px-3 py-1"
+          <div className="inline-block mt-2.5 text-[13px] rounded-full px-3 py-1"
             style={{ background: C.card, border: `1px solid ${C.line}`, color: C.muted }}>
             {info.trip_label}
           </div>
@@ -6059,7 +6109,7 @@ function GuestReview({ token }) {
       {rating > 0 && (
         <div className="fade mt-5">
           <div className="text-[15px] font-semibold mb-1" style={{ color: C.ink }}>Tell them why</div>
-          <p className="text-[12.5px] mb-2" style={{ color: C.muted }}>
+          <p className="text-[13px] mb-2" style={{ color: C.muted }}>
             A sentence or two is plenty. What did they do well? What will you remember?
           </p>
           <textarea value={body} onChange={(e) => setBody(e.target.value)} rows={5} maxLength={600}
@@ -6074,7 +6124,7 @@ function GuestReview({ token }) {
           <button onClick={() => setShowDetail((v) => !v)}
             className="tap w-full flex items-center justify-between rounded-xl px-4 py-3 mb-1"
             style={{ background: C.card, border: `1px solid ${C.line}` }}>
-            <span className="text-[13.5px] font-medium" style={{ color: C.ink }}>Rate a few details (optional)</span>
+            <span className="text-[14px] font-medium" style={{ color: C.ink }}>Rate a few details (optional)</span>
             <ChevronLeft size={17} color={C.muted} style={{ transform: showDetail ? "rotate(90deg)" : "rotate(-90deg)", transition: "transform .2s" }} />
           </button>
           {showDetail && (
@@ -6087,7 +6137,7 @@ function GuestReview({ token }) {
             </div>
           )}
 
-          <div className="text-[13.5px] font-medium mb-1.5 mt-4" style={{ color: C.ink }}>
+          <div className="text-[14px] font-medium mb-1.5 mt-4" style={{ color: C.ink }}>
             Where are you visiting from? <span style={{ color: C.muted }}>optional</span>
           </div>
           <input value={country} onChange={(e) => setCountry(e.target.value)} maxLength={40}
@@ -6103,13 +6153,13 @@ function GuestReview({ token }) {
             {busy ? <Loader2 size={18} className="animate-spin" /> : "Send my review"}
           </button>
 
-          <p className="text-[11.5px] text-center leading-snug mt-3.5" style={{ color: C.muted }}>
+          <p className="text-[12px] text-center leading-snug mt-3.5" style={{ color: C.muted }}>
             Your review is published on {talent?.name ? String(talent.name).split(" ")[0] + "'s" : "their"} profile
             and stays part of their professional record. Please be honest — that is what makes it worth something.
           </p>
         </div>
       )}
-    </Shell>
+    </ReviewPage>
   );
 }
 
@@ -6231,31 +6281,31 @@ ${made}`;
               body="Reviews are for the guides and drivers on this trip. You cannot request a review of yourself." />
           ) : (
             <>
-              <div className="text-[12.5px] font-medium mb-1.5" style={{ color: C.ink }}>Review is for</div>
+              <div className="text-[13px] font-medium mb-1.5" style={{ color: C.ink }}>Review is for</div>
               <div className="flex flex-wrap gap-2 mb-4">
                 {crew.map((m) => (
                   <Chip key={m.id} on={subject === m.id} onClick={() => setSubject(m.id)}>{m.name}</Chip>
                 ))}
               </div>
 
-              <div className="text-[12.5px] font-medium mb-1.5" style={{ color: C.ink }}>Guest name</div>
+              <div className="text-[13px] font-medium mb-1.5" style={{ color: C.ink }}>Guest name</div>
               <input value={guestName} onChange={(e) => setGuestName(e.target.value)} maxLength={60}
                 placeholder="e.g. Sarah Whitfield"
                 className="w-full h-11 px-3.5 rounded-xl text-[14px] mb-3" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
 
-              <div className="text-[12.5px] font-medium mb-1.5" style={{ color: C.ink }}>Guest email</div>
+              <div className="text-[13px] font-medium mb-1.5" style={{ color: C.ink }}>Guest email</div>
               <input value={guestEmail} onChange={(e) => setGuestEmail(e.target.value)} inputMode="email" autoCapitalize="none"
                 placeholder="guest@email.com"
                 className="w-full h-11 px-3.5 rounded-xl text-[14px] mb-1.5" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
-              <p className="text-[11.5px] mb-4" style={{ color: C.muted }}>
+              <p className="text-[12px] mb-4" style={{ color: C.muted }}>
                 Kept private, never shown on the review. It exists so a disputed review can be traced.
               </p>
 
-              <div className="text-[12.5px] font-medium mb-1.5" style={{ color: C.ink }}>Guest WhatsApp number <span style={{ color: C.muted }}>· optional</span></div>
+              <div className="text-[13px] font-medium mb-1.5" style={{ color: C.ink }}>Guest WhatsApp number <span style={{ color: C.muted }}>· optional</span></div>
               <input value={guestPhone} onChange={(e) => setGuestPhone(e.target.value)} inputMode="tel"
                 placeholder="+61 4XX XXX XXX — with country code"
                 className="w-full h-11 px-3.5 rounded-xl text-[14px] mb-1.5" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
-              <p className="text-[11.5px] mb-4" style={{ color: C.muted }}>
+              <p className="text-[12px] mb-4" style={{ color: C.muted }}>
                 Add it and WhatsApp opens straight to their chat. Leave it blank and you'll choose the contact in WhatsApp.
               </p>
 
@@ -6263,11 +6313,11 @@ ${made}`;
 
               {made ? (
                 <div className="rounded-2xl p-4 mb-4" style={{ background: C.pineSoft }}>
-                  <div className="text-[13.5px] font-semibold mb-1" style={{ color: C.pine }}>Link ready</div>
+                  <div className="text-[14px] font-semibold mb-1" style={{ color: C.pine }}>Link ready</div>
                   <p className="text-[12px] mb-2.5" style={{ color: C.pine, opacity: .85 }}>
                     Works once, expires in 14 days. Best shared with the guest in person on the last day.
                   </p>
-                  <div className="rounded-lg px-3 py-2 mb-2.5 break-all text-[11.5px] font-mono" style={{ background: C.card, color: C.ink }}>{made}</div>
+                  <div className="rounded-lg px-3 py-2 mb-2.5 break-all text-[12px] font-mono" style={{ background: C.card, color: C.ink }}>{made}</div>
                   <button onClick={sendWhatsApp}
                     className="tap w-full h-12 rounded-xl text-[15px] font-semibold inline-flex items-center justify-center gap-2 mb-2"
                     style={{ background: "#25D366", color: "#fff" }}>
@@ -6281,7 +6331,7 @@ ${made}`;
                     <button onClick={copy} className="tap flex-1 h-10 rounded-lg text-[13px] font-semibold"
                       style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }}>{copied ? "Copied" : "Copy"}</button>
                   </div>
-                  <button onClick={() => setMade(null)} className="tap w-full h-9 rounded-lg text-[12.5px] font-medium mt-2" style={{ color: C.pine }}>
+                  <button onClick={() => setMade(null)} className="tap w-full h-9 rounded-lg text-[13px] font-medium mt-2" style={{ color: C.pine }}>
                     Create another for the next guest
                   </button>
                 </div>
@@ -6297,7 +6347,7 @@ ${made}`;
 
           {issued.length > 0 && (
             <>
-              <div className="text-[11.5px] font-semibold tracking-[.12em] uppercase mb-2" style={{ color: C.gold }}>
+              <div className="text-[12px] font-semibold tracking-[.12em] uppercase mb-2" style={{ color: C.goldText }}>
                 Requests for this trip · {issued.length}/{MAX_PER_TRIP}
               </div>
               <div className="rounded-2xl overflow-hidden" style={{ border: `1px solid ${C.line}` }}>
@@ -6312,7 +6362,7 @@ ${made}`;
                         {used ? <Check size={13} color={C.pine} /> : expired ? <X size={13} color={C.maroon} /> : <Clock size={13} color={C.gold} />}
                       </span>
                       <span className="flex-1 text-[13px] truncate" style={{ color: C.ink }}>{t.guest_name || t.guest_email || "Guest"}</span>
-                      <span className="text-[11.5px] shrink-0" style={{ color: C.muted }}>
+                      <span className="text-[12px] shrink-0" style={{ color: C.muted }}>
                         {used ? "Reviewed" : expired ? "Expired" : "Waiting"}
                       </span>
                     </div>
@@ -6364,7 +6414,7 @@ function GuestReviews({ talentId, isAdmin, isSelf, onAskOperator, onCount }) {
   };
 
   if (rows === null) {
-    return <div className="flex items-center gap-2 justify-center py-8 text-[13.5px]" style={{ color: C.muted }}>
+    return <div className="flex items-center gap-2 justify-center py-8 text-[14px]" style={{ color: C.muted }}>
       <Loader2 size={16} className="animate-spin" /> Loading reviews…
     </div>;
   }
@@ -6383,7 +6433,7 @@ function GuestReviews({ talentId, isAdmin, isSelf, onAskOperator, onCount }) {
             : "Guest reviews appear here once an operator invites guests to review this person."}
         </p>
         {isSelf && onAskOperator && (
-          <button onClick={onAskOperator} className="tap h-10 px-4 rounded-xl text-[13.5px] font-semibold inline-flex items-center gap-1.5"
+          <button onClick={onAskOperator} className="tap h-10 px-4 rounded-xl text-[14px] font-semibold inline-flex items-center gap-1.5"
             style={{ background: C.pine, color: "#fff" }}>
             <Send size={14} /> Ask your operator
           </button>
@@ -6407,7 +6457,7 @@ function GuestReviews({ talentId, isAdmin, isSelf, onAskOperator, onCount }) {
         <div className="px-4 py-3.5 flex items-center justify-between" style={{ background: C.pine }}>
           <div>
             <div className="text-[11px] font-semibold tracking-[.14em] uppercase" style={{ color: C.goldSoft }}>Guest reviews</div>
-            <div className="text-[12.5px] mt-0.5" style={{ color: "#ffffffcc" }}>{rows.length} {rows.length === 1 ? "review" : "reviews"}</div>
+            <div className="text-[13px] mt-0.5" style={{ color: "#ffffffcc" }}>{rows.length} {rows.length === 1 ? "review" : "reviews"}</div>
           </div>
           <div className="text-right">
             <div className="text-[26px] font-semibold leading-none text-white">{Number(avg || 0).toFixed(1)}</div>
@@ -6420,7 +6470,7 @@ function GuestReviews({ talentId, isAdmin, isSelf, onAskOperator, onCount }) {
               <div key={label}>
                 <div className="flex items-baseline justify-between mb-1.5">
                   <span className="text-[13px] font-medium" style={{ color: C.ink }}>{label}</span>
-                  <span className="text-[12.5px] font-semibold" style={{ color: C.pine }}>{Number(v || 0).toFixed(1)}</span>
+                  <span className="text-[13px] font-semibold" style={{ color: C.pine }}>{Number(v || 0).toFixed(1)}</span>
                 </div>
                 <div className="h-1.5 rounded-full overflow-hidden" style={{ background: C.lineSoft }}>
                   <div className="h-full rounded-full" style={{ width: `${(v / 5) * 100}%`, background: `linear-gradient(90deg, ${C.gold}, #D9A94E)` }} />
@@ -6437,7 +6487,7 @@ function GuestReviews({ talentId, isAdmin, isSelf, onAskOperator, onCount }) {
           <div key={r.id} className="rounded-2xl p-4" style={{ background: C.card, border: `1px solid ${C.line}` }}>
             <div className="flex items-start gap-3">
               <div className="w-9 h-9 rounded-full flex items-center justify-center shrink-0" style={{ background: C.goldSoft }}>
-                <span className="text-[13px] font-semibold" style={{ color: "#7a5a1e" }}>
+                <span className="text-[13px] font-semibold" style={{ color: C.goldText }}>
                   {(r.guest_name || "G").charAt(0).toUpperCase()}
                 </span>
               </div>
@@ -6468,7 +6518,7 @@ function GuestReviews({ talentId, isAdmin, isSelf, onAskOperator, onCount }) {
               )}
               <span className="inline-flex items-center gap-1 text-[11px] font-semibold rounded-full px-2 py-1"
                 style={{ background: r.issuer_role === "admin" ? C.goldSoft : C.pineSoft,
-                         color: r.issuer_role === "admin" ? "#7a5a1e" : C.pine }}>
+                         color: r.issuer_role === "admin" ? C.goldText : C.pine }}>
                 <ShieldCheck size={10} />
                 {r.issuer_role === "admin" ? "Verified by Bhutan Tourism Hub" : "Invited by the tour operator"}
               </span>
@@ -6478,7 +6528,7 @@ function GuestReviews({ talentId, isAdmin, isSelf, onAskOperator, onCount }) {
         ))}
       </div>
 
-      <p className="text-[11.5px] text-center mt-4 leading-snug" style={{ color: C.muted }}>
+      <p className="text-[12px] text-center mt-4 leading-snug" style={{ color: C.muted }}>
         Each review comes from a one-time link tied to a specific trip. We show who sent the invite so
         you can judge it for yourself.
       </p>
@@ -6558,26 +6608,26 @@ ${user.name || ""}`;
         </div>
 
         <div className="flex-1 overflow-y-auto hidescroll px-5 pb-5" style={{ scrollbarWidth: "none" }}>
-          <div className="text-[12.5px] font-medium mb-1.5" style={{ color: C.ink }}>Operator or agency name</div>
+          <div className="text-[13px] font-medium mb-1.5" style={{ color: C.ink }}>Operator or agency name</div>
           <input value={company} onChange={(e) => setCompany(e.target.value)} maxLength={60}
             placeholder="e.g. Druk Journeys"
             className="w-full h-11 px-3.5 rounded-xl text-[14px] mb-3.5" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
 
-          <div className="text-[12.5px] font-medium mb-1.5" style={{ color: C.ink }}>Their WhatsApp number <span style={{ color: C.muted }}>· optional</span></div>
+          <div className="text-[13px] font-medium mb-1.5" style={{ color: C.ink }}>Their WhatsApp number <span style={{ color: C.muted }}>· optional</span></div>
           <input value={opPhone} onChange={(e) => setOpPhone(e.target.value)} inputMode="tel"
             placeholder="17 12 34 56 — or with country code"
             className="w-full h-11 px-3.5 rounded-xl text-[14px] mb-1.5" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
-          <p className="text-[11.5px] mb-4" style={{ color: C.muted }}>
+          <p className="text-[12px] mb-4" style={{ color: C.muted }}>
             Add it and WhatsApp opens straight to their chat. A Bhutanese 8-digit number works on its own.
           </p>
 
-          <div className="text-[11.5px] font-semibold tracking-[.12em] uppercase mb-2" style={{ color: C.gold }}>Message</div>
-          <div className="rounded-xl p-3.5 mb-3 text-[12.5px] leading-relaxed whitespace-pre-wrap"
+          <div className="text-[12px] font-semibold tracking-[.12em] uppercase mb-2" style={{ color: C.goldText }}>Message</div>
+          <div className="rounded-xl p-3.5 mb-3 text-[13px] leading-relaxed whitespace-pre-wrap"
             style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink, maxHeight: 240, overflowY: "auto" }}>
             {message}
           </div>
 
-          {note && <p className="text-[12.5px] mb-2" style={{ color: C.maroon }}>{note}</p>}
+          {note && <p className="text-[13px] mb-2" style={{ color: C.maroon }}>{note}</p>}
 
           <div className="space-y-2">
             <button onClick={shareWhatsApp}
@@ -6586,15 +6636,15 @@ ${user.name || ""}`;
               <MessageCircle size={17} /> Send on WhatsApp
             </button>
             <div className="flex gap-2">
-              <button onClick={shareEmail} className="tap flex-1 h-11 rounded-xl text-[13.5px] font-semibold inline-flex items-center justify-center gap-1.5"
+              <button onClick={shareEmail} className="tap flex-1 h-11 rounded-xl text-[14px] font-semibold inline-flex items-center justify-center gap-1.5"
                 style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }}>
                 <Mail size={15} /> Email
               </button>
-              <button onClick={shareNative} className="tap flex-1 h-11 rounded-xl text-[13.5px] font-semibold inline-flex items-center justify-center gap-1.5"
+              <button onClick={shareNative} className="tap flex-1 h-11 rounded-xl text-[14px] font-semibold inline-flex items-center justify-center gap-1.5"
                 style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }}>
                 <Share2 size={15} /> Share
               </button>
-              <button onClick={copy} className="tap flex-1 h-11 rounded-xl text-[13.5px] font-semibold"
+              <button onClick={copy} className="tap flex-1 h-11 rounded-xl text-[14px] font-semibold"
                 style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }}>
                 {copied ? "Copied" : "Copy"}
               </button>
@@ -6603,7 +6653,7 @@ ${user.name || ""}`;
 
           <div className="rounded-xl p-3.5 flex gap-2.5 mt-4" style={{ background: C.goldSoft }}>
             <Star size={16} color={C.gold} className="shrink-0 mt-0.5" />
-            <p className="text-[12px] leading-snug" style={{ color: "#7a5a1e" }}>
+            <p className="text-[12px] leading-snug" style={{ color: C.goldText }}>
               <b>Tip:</b> ask on the last day of the trip, while the guests are still with you.
               A review written the same week is far more specific — and far more useful to the next operator reading it.
             </p>
@@ -6692,13 +6742,13 @@ function AdminMessage({ adminId, user, onClose, onSent }) {
             <Avatar initials={initialsOf(user.full_name)} size={42} />
             <div className="flex-1 min-w-0">
               <div className="text-[16px] font-semibold" style={{ color: C.ink }}>{user.full_name || "Unnamed"}</div>
-              <div className="text-[12.5px]" style={{ color: C.muted }}>{roleLabel(user.role)}{user.base ? ` · ${user.base}` : ""}</div>
+              <div className="text-[13px]" style={{ color: C.muted }}>{roleLabel(user.role)}{user.base ? ` · ${user.base}` : ""}</div>
             </div>
           </div>
         </div>
 
         <div className="flex-1 overflow-y-auto hidescroll px-5 pb-5" style={{ scrollbarWidth: "none" }}>
-          <div className="text-[11.5px] font-semibold tracking-[.12em] uppercase mb-2" style={{ color: C.gold }}>Choose a message</div>
+          <div className="text-[12px] font-semibold tracking-[.12em] uppercase mb-2" style={{ color: C.goldText }}>Choose a message</div>
           <div className="flex flex-wrap gap-2 mb-4">
             {ADMIN_TEMPLATES.map((t) => (
               <Chip key={t.id} on={tpl === t.id} onClick={() => pick(t.id)}>{t.label}</Chip>
@@ -6710,7 +6760,7 @@ function AdminMessage({ adminId, user, onClose, onSent }) {
             className="w-full px-3.5 py-3 rounded-xl text-[14px] leading-relaxed resize-none"
             style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
           <div className="flex justify-between items-center mt-1 mb-4">
-            <span className="text-[11.5px]" style={{ color: C.muted }}>Edit freely before sending</span>
+            <span className="text-[12px]" style={{ color: C.muted }}>Edit freely before sending</span>
             <span className="text-[11px]" style={{ color: C.muted }}>{body.length}/1500</span>
           </div>
 
@@ -6740,7 +6790,7 @@ function AdminMessage({ adminId, user, onClose, onSent }) {
 /*  ENQUIRIES — the pipeline before a trip exists                             */
 /* ========================================================================== */
 const ENQ_STATUS = {
-  new:    { label: "New",      bg: C.goldSoft,   fg: "#7a5a1e" },
+  new:    { label: "New",      bg: C.goldSoft,   fg: C.goldText },
   quoted: { label: "Quoted",   bg: "#E7EEF6",    fg: "#2b5a8a" },
   won:    { label: "Won",      bg: C.pineSoft,   fg: C.pine },
   lost:   { label: "Failed",   bg: C.maroonSoft, fg: C.maroon },
@@ -6792,7 +6842,7 @@ function EnquiryCard({ enq, actions, onEdit, onFlash, onOpenTrips }) {
           <div className="text-[15px] font-semibold leading-snug" style={{ color: C.ink }}>{enq.clientName}</div>
           {enq.title && <div className="text-[13px] mt-0.5" style={{ color: C.muted }}>{enq.title}</div>}
         </button>
-        <span className="text-[11.5px] font-semibold rounded-full px-2.5 py-1 shrink-0" style={{ background: st.bg, color: st.fg }}>{st.label}</span>
+        <span className="text-[12px] font-semibold rounded-full px-2.5 py-1 shrink-0" style={{ background: st.bg, color: st.fg }}>{st.label}</span>
       </div>
 
       {/* where this sits in the journey */}
@@ -6820,13 +6870,13 @@ function EnquiryCard({ enq, actions, onEdit, onFlash, onOpenTrips }) {
       {enq.notes && <p className="text-[13px] leading-snug mt-2.5" style={{ color: C.muted }}>{enq.notes}</p>}
 
       {enq.status === "lost" && enq.lostReason && (
-        <div className="text-[12.5px] mt-2.5 rounded-lg px-3 py-2" style={{ background: C.maroonSoft, color: C.maroon }}>
+        <div className="text-[13px] mt-2.5 rounded-lg px-3 py-2" style={{ background: C.maroonSoft, color: C.maroon }}>
           Didn't go ahead — {enq.lostReason}
         </div>
       )}
 
       {overdue && (
-        <div className="text-[12.5px] mt-2.5 rounded-lg px-3 py-2 inline-flex items-center gap-1.5" style={{ background: C.goldSoft, color: "#7a5a1e" }}>
+        <div className="text-[13px] mt-2.5 rounded-lg px-3 py-2 inline-flex items-center gap-1.5" style={{ background: C.goldSoft, color: C.goldText }}>
           <Clock size={12} /> Follow-up was due {fmtDate(enq.followUpOn)}
         </div>
       )}
@@ -6840,13 +6890,13 @@ function EnquiryCard({ enq, actions, onEdit, onFlash, onOpenTrips }) {
 
       {enq.status === "lost" && (
         <div className="flex gap-2 mt-3">
-          <button onClick={contactEmail} className="tap flex-1 h-10 rounded-xl text-[12.5px] font-semibold inline-flex items-center justify-center gap-1.5"
+          <button onClick={contactEmail} className="tap flex-1 h-10 rounded-xl text-[13px] font-semibold inline-flex items-center justify-center gap-1.5"
             style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }}>
             <Mail size={14} /> Follow up
           </button>
           <button onClick={() => actions.setEnquiryStatus(enq.id, "quoted")}
-            className="tap flex-1 h-10 rounded-xl text-[12.5px] font-semibold"
-            style={{ background: C.goldSoft, color: "#7a5a1e" }}>
+            className="tap flex-1 h-10 rounded-xl text-[13px] font-semibold"
+            style={{ background: C.goldSoft, color: C.goldText }}>
             Reopen
           </button>
         </div>
@@ -6855,17 +6905,17 @@ function EnquiryCard({ enq, actions, onEdit, onFlash, onOpenTrips }) {
       {["new", "quoted", "cold"].includes(enq.status) && !confirming && !losing && (
         <>
           <div className="flex gap-2 mt-3">
-            <button onClick={contactWhatsApp} className="tap flex-1 h-10 rounded-xl text-[12.5px] font-semibold inline-flex items-center justify-center gap-1.5"
+            <button onClick={contactWhatsApp} className="tap flex-1 h-10 rounded-xl text-[13px] font-semibold inline-flex items-center justify-center gap-1.5"
               style={{ background: "#25D366", color: "#fff" }}>
               <MessageCircle size={14} /> WhatsApp
             </button>
-            <button onClick={contactEmail} className="tap flex-1 h-10 rounded-xl text-[12.5px] font-semibold inline-flex items-center justify-center gap-1.5"
+            <button onClick={contactEmail} className="tap flex-1 h-10 rounded-xl text-[13px] font-semibold inline-flex items-center justify-center gap-1.5"
               style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }}>
               <Mail size={14} /> Email
             </button>
           </div>
           <div className="flex gap-2 mt-2">
-            <button onClick={() => setLosing(true)} className="tap flex-1 h-10 rounded-xl text-[12.5px] font-semibold"
+            <button onClick={() => setLosing(true)} className="tap flex-1 h-10 rounded-xl text-[13px] font-semibold"
               style={{ background: C.card, border: `1px solid ${C.maroon}44`, color: C.maroon }}>
               Failed
             </button>
@@ -6879,8 +6929,8 @@ function EnquiryCard({ enq, actions, onEdit, onFlash, onOpenTrips }) {
 
       {confirming && (
         <div className="rounded-xl p-3.5 mt-3 fade" style={{ background: C.pineSoft }}>
-          <div className="text-[13.5px] font-semibold mb-1" style={{ color: C.pine }}>Make this a trip?</div>
-          <p className="text-[12.5px] mb-3" style={{ color: C.pine, opacity: .85 }}>
+          <div className="text-[14px] font-semibold mb-1" style={{ color: C.pine }}>Make this a trip?</div>
+          <p className="text-[13px] mb-3" style={{ color: C.pine, opacity: .85 }}>
             {enq.start && enq.end
               ? `A trip will be created for ${fmtDate(enq.start)} – ${fmtDate(enq.end)}. You can then hire your crew onto it and build the itinerary.`
               : "This enquiry has no dates yet. Tap the name above to add them, then come back."}
@@ -6908,12 +6958,12 @@ function EnquiryCard({ enq, actions, onEdit, onFlash, onOpenTrips }) {
                   setLosing(false);
                   onFlash("Recorded — it'll come back in your follow-ups in six months.");
                 }}
-                className="tap rounded-full px-3 py-1.5 text-[12.5px] font-medium"
+                className="tap rounded-full px-3 py-1.5 text-[13px] font-medium"
                 style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }}>{r}</button>
             ))}
           </div>
           <div className="flex gap-2">
-            <button onClick={() => setLosing(false)} className="tap flex-1 h-9 rounded-lg text-[12.5px] font-semibold"
+            <button onClick={() => setLosing(false)} className="tap flex-1 h-9 rounded-lg text-[13px] font-semibold"
               style={{ background: C.card, border: `1px solid ${C.line}`, color: C.muted }}>Cancel</button>
             <button onClick={() => {
                 const month = new Date(Date.now() + 30 * 86400e3).toISOString().slice(0, 10);
@@ -6921,8 +6971,8 @@ function EnquiryCard({ enq, actions, onEdit, onFlash, onOpenTrips }) {
                 setLosing(false);
                 onFlash("Marked cold — back in your follow-ups in a month.");
               }}
-              className="tap flex-1 h-9 rounded-lg text-[12.5px] font-semibold"
-              style={{ background: C.goldSoft, color: "#7a5a1e" }}>Just gone quiet</button>
+              className="tap flex-1 h-9 rounded-lg text-[13px] font-semibold"
+              style={{ background: C.goldSoft, color: C.goldText }}>Just gone quiet</button>
           </div>
         </div>
       )}
@@ -7035,7 +7085,7 @@ function EnquiryForm({ user, enquiry, actions, onBack, onSaved }) {
         <input type="date" value={f.followUpOn} onChange={(ev) => set("followUpOn", ev.target.value)}
           className="w-full h-12 px-3.5 rounded-xl text-[14px] mb-1.5"
           style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }} />
-        <p className="text-[11.5px] mb-5" style={{ color: C.muted }}>
+        <p className="text-[12px] mb-5" style={{ color: C.muted }}>
           It'll appear in "To chase" on this date. Most lost work is simply never followed up.
         </p>
 
@@ -7106,7 +7156,7 @@ function ItineraryBuilder({ trip, canEdit, onChanged }) {
   return (
     <div>
       <div className="flex items-center justify-between mb-3">
-        <div className="text-[12px] font-semibold tracking-[.14em] uppercase" style={{ color: C.gold }}>Itinerary</div>
+        <div className="text-[12px] font-semibold tracking-[.14em] uppercase" style={{ color: C.goldText }}>Itinerary</div>
         {nights && <span className="text-[12px]" style={{ color: C.muted }}>{days.length}/{nights} days planned</span>}
       </div>
 
@@ -7115,8 +7165,8 @@ function ItineraryBuilder({ trip, canEdit, onChanged }) {
           <div className="w-11 h-11 rounded-2xl flex items-center justify-center mx-auto mb-2.5" style={{ background: C.goldSoft }}>
             <CalendarDays size={20} color={C.gold} />
           </div>
-          <div className="text-[14.5px] font-semibold" style={{ color: C.ink }}>No days planned yet</div>
-          <p className="text-[12.5px] mt-1" style={{ color: C.muted }}>
+          <div className="text-[15px] font-semibold" style={{ color: C.ink }}>No days planned yet</div>
+          <p className="text-[13px] mt-1" style={{ color: C.muted }}>
             {canEdit ? "Add the day-by-day plan so your crew knows the route." : "The operator hasn't added the plan yet."}
           </p>
         </div>
@@ -7137,10 +7187,10 @@ function ItineraryBuilder({ trip, canEdit, onChanged }) {
                     className="w-full h-10 px-3 rounded-lg text-[14px] mb-2"
                     style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} autoFocus />
                   <div className="flex gap-2">
-                    <button onClick={() => setEditId(null)} className="tap flex-1 h-9 rounded-lg text-[12.5px] font-semibold"
+                    <button onClick={() => setEditId(null)} className="tap flex-1 h-9 rounded-lg text-[13px] font-semibold"
                       style={{ background: C.card, border: `1px solid ${C.line}`, color: C.muted }}>Cancel</button>
                     <button onClick={() => saveEdit(it.day)} disabled={busy}
-                      className="tap flex-1 h-9 rounded-lg text-[12.5px] font-semibold" style={{ background: C.pine, color: "#fff" }}>Save</button>
+                      className="tap flex-1 h-9 rounded-lg text-[13px] font-semibold" style={{ background: C.pine, color: "#fff" }}>Save</button>
                   </div>
                 </div>
               ) : (
@@ -7167,7 +7217,7 @@ function ItineraryBuilder({ trip, canEdit, onChanged }) {
 
       {canEdit && (adding ? (
         <div className="rounded-xl p-3.5 fade" style={{ background: C.card, border: `1px solid ${C.pine}` }}>
-          <div className="text-[12.5px] font-medium mb-2" style={{ color: C.ink }}>
+          <div className="text-[13px] font-medium mb-2" style={{ color: C.ink }}>
             Day {(days.length ? Math.max(...days.map((d) => d.day || 0)) : 0) + 1}
           </div>
           <input value={title} onChange={(e) => setTitle(e.target.value)} maxLength={120}
@@ -7180,7 +7230,7 @@ function ItineraryBuilder({ trip, canEdit, onChanged }) {
               className="tap flex-1 h-10 rounded-lg text-[13px] font-semibold"
               style={{ background: C.card, border: `1px solid ${C.line}`, color: C.muted }}>Cancel</button>
             <button onClick={add} disabled={busy || !title.trim()}
-              className="tap flex-[1.4] h-10 rounded-lg text-[13.5px] font-semibold inline-flex items-center justify-center gap-1.5"
+              className="tap flex-[1.4] h-10 rounded-lg text-[14px] font-semibold inline-flex items-center justify-center gap-1.5"
               style={{ background: title.trim() ? C.pine : "#C7CEC7", color: "#fff" }}>
               {busy ? <Loader2 size={14} className="animate-spin" /> : <><Plus size={14} strokeWidth={3} /> Add day</>}
             </button>
@@ -7188,8 +7238,8 @@ function ItineraryBuilder({ trip, canEdit, onChanged }) {
         </div>
       ) : (
         <button onClick={() => setAdding(true)}
-          className="tap w-full h-11 rounded-xl text-[13.5px] font-semibold inline-flex items-center justify-center gap-1.5"
-          style={{ background: C.goldSoft, color: "#7a5a1e" }}>
+          className="tap w-full h-11 rounded-xl text-[14px] font-semibold inline-flex items-center justify-center gap-1.5"
+          style={{ background: C.goldSoft, color: C.goldText }}>
           <Plus size={15} strokeWidth={3} /> Add {days.length ? "another day" : "the first day"}
         </button>
       ))}
@@ -7250,11 +7300,11 @@ function BookingsTab({ user, enquiries, trips, actions, onOpenProfile }) {
     <div className="px-5 py-4">
       {/* the pipeline, always visible — you can see where everything stands */}
       <div className="flex items-center justify-between mb-3">
-        <div className="text-[12px] font-semibold tracking-[.14em] uppercase" style={{ color: C.gold }}>Bookings</div>
+        <div className="text-[12px] font-semibold tracking-[.14em] uppercase" style={{ color: C.goldText }}>Bookings</div>
         {dueNow.length > 0 && (
           <button onClick={() => setStage(followUp.some((e) => dueNow.includes(e)) && !live.some((e) => dueNow.includes(e)) ? "followup" : "enquiries")}
             className="tap inline-flex items-center gap-1.5 text-[12px] font-semibold rounded-full px-2.5 py-1"
-            style={{ background: C.goldSoft, color: "#7a5a1e" }}>
+            style={{ background: C.goldSoft, color: C.goldText }}>
             <Clock size={12} /> {dueNow.length} to chase
           </button>
         )}
@@ -7272,7 +7322,7 @@ function BookingsTab({ user, enquiries, trips, actions, onOpenProfile }) {
                 opacity: st.id === "past" && !on ? 0.72 : 1,
               }}>
               <st.Icon size={15} color={on ? C.goldSoft : C.muted} strokeWidth={on ? 2.4 : 2} />
-              <span className="text-[10.5px] font-semibold leading-none" style={{ color: on ? "#fff" : C.ink }}>{st.label}</span>
+              <span className="text-[11px] font-semibold leading-none" style={{ color: on ? "#fff" : C.ink }}>{st.label}</span>
               <span className="text-[13px] font-bold leading-none" style={{ color: on ? C.goldSoft : C.muted }}>{st.count}</span>
             </button>
           );
@@ -7285,7 +7335,7 @@ function BookingsTab({ user, enquiries, trips, actions, onOpenProfile }) {
       {stage === "enquiries" && (
         <>
           <button onClick={() => setEditing({})}
-            className="tap w-full h-12 rounded-xl text-[14.5px] font-semibold inline-flex items-center justify-center gap-2 mb-3"
+            className="tap w-full h-12 rounded-xl text-[15px] font-semibold inline-flex items-center justify-center gap-2 mb-3"
             style={{ background: C.pine, color: "#fff", boxShadow: `0 6px 16px ${C.pine}33` }}>
             <Plus size={17} strokeWidth={3} /> New enquiry
           </button>
@@ -7327,7 +7377,7 @@ function BookingsTab({ user, enquiries, trips, actions, onOpenProfile }) {
             <div className="space-y-3" style={{ opacity: 0.74 }}>
               {past.map((tr) => <TripCard key={tr.id} trip={tr} past onOpen={() => setOpenTripId(tr.id)} />)}
             </div>
-            <p className="text-[11.5px] text-center mt-4 leading-snug" style={{ color: C.muted }}>
+            <p className="text-[12px] text-center mt-4 leading-snug" style={{ color: C.muted }}>
               Open a past trip to ask its guests for a review — it's never too late, but sooner is better.
             </p>
           </>
@@ -7375,7 +7425,7 @@ function RemoveJob({ listing, actions }) {
   if (!arm) {
     return (
       <button onClick={() => setArm(true)}
-        className="tap w-full py-2.5 text-[12.5px] font-semibold inline-flex items-center justify-center gap-1.5"
+        className="tap w-full py-2.5 text-[13px] font-semibold inline-flex items-center justify-center gap-1.5"
         style={{ borderTop: `1px solid ${C.lineSoft}`, color: C.muted }}>
         <Trash2 size={13} /> Remove this job
       </button>
@@ -7384,17 +7434,17 @@ function RemoveJob({ listing, actions }) {
 
   return (
     <div className="px-4 py-3" style={{ borderTop: `1px solid ${C.lineSoft}`, background: C.maroonSoft }}>
-      <p className="text-[12.5px] leading-snug mb-2.5" style={{ color: "#6b4a46" }}>
+      <p className="text-[13px] leading-snug mb-2.5" style={{ color: "#6b4a46" }}>
         {count > 0
           ? `${count} ${count === 1 ? "person has" : "people have"} applied. They won't be told, but the job disappears from their board straight away. You can restore it from the Bin.`
           : "It moves to the Bin, where you can restore it or delete it for good."}
       </p>
       <div className="flex gap-2">
-        <button onClick={() => setArm(false)} className="tap flex-1 h-9 rounded-lg text-[12.5px] font-semibold"
+        <button onClick={() => setArm(false)} className="tap flex-1 h-9 rounded-lg text-[13px] font-semibold"
           style={{ background: C.card, color: C.muted }}>Keep it</button>
         <button onClick={async () => { setBusy(true); await actions.binListing(listing.id); setBusy(false); }}
           disabled={busy}
-          className="tap flex-1 h-9 rounded-lg text-[12.5px] font-bold inline-flex items-center justify-center gap-1.5"
+          className="tap flex-1 h-9 rounded-lg text-[13px] font-bold inline-flex items-center justify-center gap-1.5"
           style={{ background: C.maroon, color: "#fff" }}>
           {busy ? <Loader2 size={13} className="animate-spin" /> : "Move to Bin"}
         </button>
@@ -7438,8 +7488,8 @@ function JobBin({ listings, jobs, actions }) {
           <div key={l.id} className="rounded-2xl p-4 mb-3" style={{ background: C.card, border: `1px dashed ${C.line}`, opacity: .9 }}>
             <div className="flex items-start justify-between gap-3">
               <div className="flex-1 min-w-0">
-                <div className="text-[14.5px] font-semibold leading-snug" style={{ color: C.ink }}>{l.title}</div>
-                <div className="text-[12.5px] mt-0.5" style={{ color: C.muted }}>
+                <div className="text-[15px] font-semibold leading-snug" style={{ color: C.ink }}>{l.title}</div>
+                <div className="text-[13px] mt-0.5" style={{ color: C.muted }}>
                   {roleLabel(l.role)} · {fmtDate(l.start)} – {fmtDate(l.end)}
                 </div>
               </div>
@@ -7457,15 +7507,15 @@ function JobBin({ listings, jobs, actions }) {
 
             {erasing === l.id ? (
               <div className="rounded-xl p-3 mt-3" style={{ background: C.maroonSoft }}>
-                <p className="text-[12.5px] mb-2.5" style={{ color: "#6b4a46" }}>
+                <p className="text-[13px] mb-2.5" style={{ color: "#6b4a46" }}>
                   This erases the job and every application to it. It cannot be undone.
                 </p>
                 <div className="flex gap-2">
-                  <button onClick={() => setErasing(null)} className="tap flex-1 h-9 rounded-lg text-[12.5px] font-semibold"
+                  <button onClick={() => setErasing(null)} className="tap flex-1 h-9 rounded-lg text-[13px] font-semibold"
                     style={{ background: C.card, color: C.muted }}>Cancel</button>
                   <button onClick={async () => { setBusyId(l.id); await actions.destroyListing(l.id); setBusyId(null); setErasing(null); }}
                     disabled={busyId === l.id}
-                    className="tap flex-1 h-9 rounded-lg text-[12.5px] font-bold"
+                    className="tap flex-1 h-9 rounded-lg text-[13px] font-bold"
                     style={{ background: C.maroon, color: "#fff" }}>
                     {busyId === l.id ? <Loader2 size={13} className="animate-spin" /> : "Erase for good"}
                   </button>
@@ -7474,7 +7524,7 @@ function JobBin({ listings, jobs, actions }) {
             ) : (
               <div className="flex gap-2 mt-3">
                 <button onClick={() => setErasing(l.id)}
-                  className="tap flex-1 h-10 rounded-xl text-[12.5px] font-semibold"
+                  className="tap flex-1 h-10 rounded-xl text-[13px] font-semibold"
                   style={{ background: C.card, border: `1px solid ${C.line}`, color: C.maroon }}>
                   Delete permanently
                 </button>
@@ -7497,8 +7547,8 @@ function JobBin({ listings, jobs, actions }) {
           <div key={j.id} className="rounded-2xl p-4 mb-3" style={{ background: C.card, border: `1px dashed ${C.line}`, opacity: .9 }}>
             <div className="flex items-start justify-between gap-3">
               <div className="flex-1 min-w-0">
-                <div className="text-[14.5px] font-semibold leading-snug" style={{ color: C.ink }}>{j.title}</div>
-                <div className="text-[12.5px] mt-0.5" style={{ color: C.muted }}>
+                <div className="text-[15px] font-semibold leading-snug" style={{ color: C.ink }}>{j.title}</div>
+                <div className="text-[13px] mt-0.5" style={{ color: C.muted }}>
                   Direct request to {t?.name || "a member"}
                 </div>
               </div>
@@ -7507,7 +7557,7 @@ function JobBin({ listings, jobs, actions }) {
             </div>
             <div className="flex gap-2 mt-3">
               <button onClick={async () => { setBusyId(j.id); await actions.destroyRequest(j.id); setBusyId(null); }}
-                className="tap flex-1 h-10 rounded-xl text-[12.5px] font-semibold"
+                className="tap flex-1 h-10 rounded-xl text-[13px] font-semibold"
                 style={{ background: C.card, border: `1px solid ${C.line}`, color: C.maroon }}>
                 Delete permanently
               </button>
@@ -7521,5 +7571,615 @@ function JobBin({ listings, jobs, actions }) {
         );
       })}
     </div>
+  );
+}
+
+/* ========================================================================== */
+/*  TRIP ESSENTIALS — the things that actually go wrong                       */
+/*  Not "meeting point". Visa clearance, SDF, permits, flights, hotels.       */
+/* ========================================================================== */
+const READY_STATES = {
+  not_started: { label: "Not started", bg: C.bg,         fg: C.muted,  dot: "#C7CEC7" },
+  in_progress: { label: "In progress", bg: C.goldSoft,   fg: C.goldText, dot: C.gold },
+  done:        { label: "Done",        bg: C.pineSoft,   fg: C.pine,   dot: "#2E7D4F" },
+  not_needed:  { label: "Not needed",  bg: C.bg,         fg: C.muted,  dot: "#C7CEC7" },
+};
+
+const CHECKLIST = [
+  { key: "visaStatus",    col: "visa_status",    label: "Visa clearance",
+    hint: "Applied through the Department of Tourism. Needs every guest's passport." },
+  { key: "sdfStatus",     col: "sdf_status",     label: "SDF paid",
+    hint: "Sustainable Development Fee — per guest, per night." },
+  { key: "permitsStatus", col: "permits_status", label: "Route permits",
+    hint: "Needed for restricted areas. Allow several days." },
+  { key: "hotelsStatus",  col: "hotels_status",  label: "Hotels booked",
+    hint: "Every night of the trip confirmed." },
+];
+
+function TripEssentials({ trip, canEdit, actions }) {
+  const [editing, setEditing] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [f, setF] = useState({
+    arrival_flight: trip.arrivalFlight || "",
+    arrival_at: trip.arrivalAt ? String(trip.arrivalAt).slice(0, 16) : "",
+    departure_flight: trip.departureFlight || "",
+    departure_at: trip.departureAt ? String(trip.departureAt).slice(0, 16) : "",
+    arrival_point: trip.arrivalPoint || "Paro",
+    guest_count: trip.guestCount || "",
+    guest_notes: trip.guestNotes || "",
+    emergency_name: trip.emergencyName || "",
+    emergency_phone: trip.emergencyPhone || "",
+  });
+  const set = (k, v) => setF((x) => ({ ...x, [k]: v }));
+
+  const cycle = async (item) => {
+    if (!canEdit) return;
+    const order = item.key === "permitsStatus"
+      ? ["not_needed", "in_progress", "done"]
+      : ["not_started", "in_progress", "done"];
+    const cur = trip[item.key] || order[0];
+    const next = order[(order.indexOf(cur) + 1) % order.length];
+    await actions.saveTripDetails(trip.id, { [item.col]: next });
+  };
+
+  const save = async () => {
+    setBusy(true);
+    await actions.saveTripDetails(trip.id, {
+      arrival_flight: f.arrival_flight.trim() || null,
+      arrival_at: f.arrival_at ? new Date(f.arrival_at).toISOString() : null,
+      departure_flight: f.departure_flight.trim() || null,
+      departure_at: f.departure_at ? new Date(f.departure_at).toISOString() : null,
+      arrival_point: f.arrival_point || null,
+      guest_count: f.guest_count ? Number(f.guest_count) : null,
+      guest_notes: f.guest_notes.trim() || null,
+      emergency_name: f.emergency_name.trim() || null,
+      emergency_phone: f.emergency_phone.trim() || null,
+    });
+    setBusy(false);
+    setEditing(false);
+  };
+
+  const daysOut = trip.start ? Math.ceil((new Date(trip.start + "T00:00") - Date.now()) / 86400e3) : null;
+  const notReady = CHECKLIST.filter((c) => !["done", "not_needed"].includes(trip[c.key] || "not_started"));
+  const urgent = daysOut !== null && daysOut <= 21 && daysOut >= 0 && notReady.length > 0;
+
+  const fmtWhen = (iso) => {
+    if (!iso) return null;
+    try {
+      const d = new Date(iso);
+      if (isNaN(d.getTime())) return null;
+      return d.toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+    } catch (e) { return null; }
+  };
+
+  if (editing) {
+    return (
+      <div className="rounded-2xl p-4 mb-4" style={{ background: C.card, border: `1px solid ${C.pine}` }}>
+        <div className="text-[14px] font-semibold mb-3" style={{ color: C.ink }}>Trip details</div>
+
+        <Label>Arriving at</Label>
+        <div className="flex gap-2 mb-3">
+          {["Paro", "Phuentsholing", "Gelephu", "S. Jongkhar"].map((p) => (
+            <Chip key={p} on={f.arrival_point === p} onClick={() => set("arrival_point", p)}>{p}</Chip>
+          ))}
+        </div>
+
+        <div className="grid grid-cols-2 gap-3 mb-3">
+          <div>
+            <Label>Arrival flight</Label>
+            <input value={f.arrival_flight} onChange={(e) => set("arrival_flight", e.target.value.toUpperCase())}
+              placeholder="KB 201" className="w-full h-11 px-3 rounded-xl text-[14px]"
+              style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
+          </div>
+          <div>
+            <Label>Lands</Label>
+            <input type="datetime-local" value={f.arrival_at} onChange={(e) => set("arrival_at", e.target.value)}
+              className="w-full h-11 px-2.5 rounded-xl text-[13px]"
+              style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3 mb-3">
+          <div>
+            <Label>Departure flight</Label>
+            <input value={f.departure_flight} onChange={(e) => set("departure_flight", e.target.value.toUpperCase())}
+              placeholder="KB 200" className="w-full h-11 px-3 rounded-xl text-[14px]"
+              style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
+          </div>
+          <div>
+            <Label>Departs</Label>
+            <input type="datetime-local" value={f.departure_at} onChange={(e) => set("departure_at", e.target.value)}
+              className="w-full h-11 px-2.5 rounded-xl text-[13px]"
+              style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
+          </div>
+        </div>
+
+        <Label>Number of guests</Label>
+        <input value={f.guest_count} onChange={(e) => set("guest_count", e.target.value.replace(/[^\d]/g, ""))}
+          inputMode="numeric" placeholder="2" className="w-full h-11 px-3 rounded-xl text-[14px] mb-3"
+          style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
+
+        <Label>Dietary, medical or altitude notes</Label>
+        <textarea value={f.guest_notes} onChange={(e) => set("guest_notes", e.target.value)} rows={2} maxLength={400}
+          placeholder="One vegetarian. Mrs Chen has a heart condition — avoid Chele La."
+          className="w-full px-3 py-2.5 rounded-xl text-[14px] resize-none mb-3"
+          style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
+
+        <div className="grid grid-cols-2 gap-3 mb-4">
+          <div>
+            <Label>Emergency contact</Label>
+            <input value={f.emergency_name} onChange={(e) => set("emergency_name", e.target.value)}
+              placeholder="Name" className="w-full h-11 px-3 rounded-xl text-[14px]"
+              style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
+          </div>
+          <div>
+            <Label>Their number</Label>
+            <input value={f.emergency_phone} onChange={(e) => set("emergency_phone", e.target.value)} inputMode="tel"
+              placeholder="+61…" className="w-full h-11 px-3 rounded-xl text-[14px]"
+              style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
+          </div>
+        </div>
+
+        <div className="flex gap-2">
+          <button onClick={() => setEditing(false)} className="tap flex-1 h-11 rounded-xl text-[14px] font-semibold"
+            style={{ background: C.card, border: `1px solid ${C.line}`, color: C.muted }}>Cancel</button>
+          <button onClick={save} disabled={busy} className="tap flex-[1.4] h-11 rounded-xl text-[14px] font-semibold"
+            style={{ background: C.pine, color: "#fff" }}>
+            {busy ? <Loader2 size={16} className="animate-spin" /> : "Save details"}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mb-4">
+      {urgent && (
+        <div className="rounded-xl px-3.5 py-3 mb-3 flex gap-2.5" style={{ background: C.maroonSoft }}>
+          <ShieldAlert size={16} color={C.maroon} className="shrink-0 mt-0.5" />
+          <p className="text-[13px] leading-snug" style={{ color: C.maroon }}>
+            Departs in {daysOut} {daysOut === 1 ? "day" : "days"} and {notReady.length}{" "}
+            {notReady.length === 1 ? "item isn't" : "items aren't"} ready: {notReady.map((c) => c.label).join(", ")}.
+          </p>
+        </div>
+      )}
+
+      {/* arrival / departure */}
+      <div className="rounded-2xl overflow-hidden mb-3" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+        <div className="px-4 py-3 flex items-center justify-between" style={{ borderBottom: `1px solid ${C.lineSoft}` }}>
+          <span className="text-[13px] font-semibold" style={{ color: C.ink }}>Arrival & departure</span>
+          {canEdit && (
+            <button onClick={() => setEditing(true)} className="tap text-[13px] font-semibold" style={{ color: C.pine }}>
+              {trip.arrivalFlight ? "Edit" : "Add"}
+            </button>
+          )}
+        </div>
+        <div className="px-4 py-3">
+          {trip.arrivalFlight || trip.departureFlight ? (
+            <>
+              <div className="flex items-center gap-2.5 mb-2">
+                <div className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0" style={{ background: C.pineSoft }}>
+                  <ArrowRight size={13} color={C.pine} />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="text-[14px] font-medium" style={{ color: C.ink }}>
+                    {trip.arrivalFlight || "Arrival"} {trip.arrivalPoint ? `· ${trip.arrivalPoint}` : ""}
+                  </div>
+                  <div className="text-[12px]" style={{ color: C.muted }}>{fmtWhen(trip.arrivalAt) || "Time not set"}</div>
+                </div>
+              </div>
+              <div className="flex items-center gap-2.5">
+                <div className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0" style={{ background: C.goldSoft }}>
+                  <ArrowRight size={13} color={C.gold} style={{ transform: "rotate(180deg)" }} />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="text-[14px] font-medium" style={{ color: C.ink }}>{trip.departureFlight || "Departure"}</div>
+                  <div className="text-[12px]" style={{ color: C.muted }}>{fmtWhen(trip.departureAt) || "Time not set"}</div>
+                </div>
+              </div>
+            </>
+          ) : (
+            <p className="text-[13px]" style={{ color: C.muted }}>
+              {canEdit ? "Add the flights so your crew knows when to be at the airport." : "The operator hasn't added flight details yet."}
+            </p>
+          )}
+
+          {(trip.guestCount || trip.guestNotes) && (
+            <div className="mt-3 pt-3" style={{ borderTop: `1px solid ${C.lineSoft}` }}>
+              {trip.guestCount > 0 && (
+                <div className="text-[13px] font-medium mb-1" style={{ color: C.ink }}>
+                  {trip.guestCount} {trip.guestCount === 1 ? "guest" : "guests"}
+                </div>
+              )}
+              {trip.guestNotes && <p className="text-[13px] leading-snug" style={{ color: C.muted }}>{trip.guestNotes}</p>}
+            </div>
+          )}
+
+          {trip.emergencyPhone && (
+            <a href={`tel:${dialNumber(trip.emergencyPhone)}`}
+              className="tap flex items-center gap-2 mt-3 pt-3 text-[13px] font-semibold"
+              style={{ borderTop: `1px solid ${C.lineSoft}`, color: C.pine }}>
+              <PhoneCall size={13} /> Emergency: {trip.emergencyName || "contact"} · {prettyNumber(trip.emergencyPhone)}
+            </a>
+          )}
+        </div>
+      </div>
+
+      {/* the checklist */}
+      <div className="rounded-2xl overflow-hidden" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+        <div className="px-4 py-3" style={{ borderBottom: `1px solid ${C.lineSoft}` }}>
+          <span className="text-[13px] font-semibold" style={{ color: C.ink }}>Before departure</span>
+          {canEdit && <span className="text-[12px] ml-2" style={{ color: C.muted }}>tap to change</span>}
+        </div>
+        {CHECKLIST.map((item, i) => {
+          const st = READY_STATES[trip[item.key] || "not_started"] || READY_STATES.not_started;
+          return (
+            <button key={item.key} onClick={() => cycle(item)} disabled={!canEdit}
+              className="tap w-full text-left px-4 py-3 flex items-start gap-3"
+              style={{ borderTop: i ? `1px solid ${C.lineSoft}` : "none" }}>
+              <span className="rounded-full shrink-0 mt-1.5" style={{ width: 9, height: 9, background: st.dot }} />
+              <div className="flex-1 min-w-0">
+                <div className="text-[14px] font-medium" style={{ color: C.ink }}>{item.label}</div>
+                <div className="text-[12px] leading-snug mt-0.5" style={{ color: C.muted }}>{item.hint}</div>
+              </div>
+              <span className="text-[11px] font-semibold rounded-full px-2 py-1 shrink-0"
+                style={{ background: st.bg, color: st.fg }}>{st.label}</span>
+            </button>
+          );
+        })}
+        <button onClick={() => canEdit && actions.saveTripDetails(trip.id, { insurance_ok: !trip.insuranceOk })}
+          disabled={!canEdit}
+          className="tap w-full text-left px-4 py-3 flex items-center gap-3" style={{ borderTop: `1px solid ${C.lineSoft}` }}>
+          <span className="w-5 h-5 rounded-md flex items-center justify-center shrink-0"
+            style={{ background: trip.insuranceOk ? C.pine : C.card, border: `1.5px solid ${trip.insuranceOk ? C.pine : C.line}` }}>
+            {trip.insuranceOk && <Check size={12} color="#fff" strokeWidth={3.2} />}
+          </span>
+          <div className="flex-1">
+            <div className="text-[14px] font-medium" style={{ color: C.ink }}>Travel insurance confirmed</div>
+            <div className="text-[12px]" style={{ color: C.muted }}>Required for trekking routes.</div>
+          </div>
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* ========================================================================== */
+/*  QUICK ITINERARY — pick a trip, build its day plan                         */
+/*  The same builder that lives inside a trip, reachable in one tap so an      */
+/*  operator can plan several trips in a sitting.                              */
+/* ========================================================================== */
+function QuickItinerary({ user, trips, actions }) {
+  const meId = user.talentId || user.id;
+  const mine = (trips || [])
+    .filter((tr) => tr && (tr.operatorId === meId || (tr.members || []).some((m) => m && m.id === meId)))
+    .filter((tr) => tripStateNow(tr) !== "completed")
+    .sort((a, b) => new Date(a.start) - new Date(b.start));
+
+  const [pickedId, setPickedId] = useState(mine[0]?.id || null);
+  useEffect(() => { if (!pickedId && mine.length) setPickedId(mine[0].id); }, [mine.length]);
+
+  const trip = mine.find((t) => t.id === pickedId);
+  const canEdit = user.kind === "operator" || user.kind === "admin";
+
+  if (mine.length === 0) {
+    return (
+      <div className="px-5 py-4">
+        <SectionLabel>Itinerary</SectionLabel>
+        <Empty Icon={CalendarDays} title="No trips to plan"
+          body="Confirm an enquiry from Bookings and the trip appears here, ready for its day-by-day plan." />
+      </div>
+    );
+  }
+
+  return (
+    <div className="px-5 py-4">
+      <SectionLabel trailing={`${mine.length} ${mine.length === 1 ? "trip" : "trips"}`}>Itinerary</SectionLabel>
+
+      {/* pick the trip */}
+      <div className="flex gap-2 overflow-x-auto hidescroll pb-1 mb-4" style={{ scrollbarWidth: "none" }}>
+        {mine.map((tr) => {
+          const on = tr.id === pickedId;
+          const planned = (tr.itinerary || []).length;
+          const nights = tr.start && tr.end
+            ? Math.max(1, Math.round((new Date(tr.end) - new Date(tr.start)) / 86400e3) + 1) : null;
+          return (
+            <button key={tr.id} onClick={() => setPickedId(tr.id)}
+              className="tap shrink-0 rounded-xl px-3.5 py-2.5 text-left"
+              style={{ background: on ? C.pine : C.card, border: `1px solid ${on ? C.pine : C.line}`, minWidth: 160 }}>
+              <div className="text-[13px] font-semibold truncate" style={{ color: on ? "#fff" : C.ink, maxWidth: 170 }}>{tr.title}</div>
+              <div className="text-[12px] mt-0.5" style={{ color: on ? C.goldSoft : C.muted }}>
+                {fmtDate(tr.start)}{nights ? ` · ${planned}/${nights} days` : ""}
+              </div>
+            </button>
+          );
+        })}
+      </div>
+
+      {trip && (
+        <>
+          <div className="rounded-xl px-3.5 py-3 mb-4 flex items-center gap-3" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+            <div className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0" style={{ background: C.pine }}>
+              <MapIcon size={17} color={C.goldSoft} />
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="text-[14px] font-semibold truncate" style={{ color: C.ink }}>{trip.title}</div>
+              <div className="text-[12px]" style={{ color: C.muted }}>
+                {fmtDate(trip.start)} – {fmtDate(trip.end)}
+                {trip.guestCount ? ` · ${trip.guestCount} guests` : ""}
+              </div>
+            </div>
+          </div>
+
+          <ItineraryBuilder trip={trip} canEdit={canEdit} onChanged={actions.reloadTrips} />
+
+          {(trip.itinerary || []).length > 0 && (
+            <button
+              onClick={() => {
+                const text = `${trip.title}\n${fmtDate(trip.start)} – ${fmtDate(trip.end)}\n\n` +
+                  (trip.itinerary || []).map((d) => `Day ${d.day}: ${d.title}`).join("\n");
+                if (navigator.share) navigator.share({ title: trip.title, text }).catch(() => {});
+                else navigator.clipboard?.writeText(text);
+              }}
+              className="tap w-full h-11 rounded-xl text-[14px] font-semibold inline-flex items-center justify-center gap-1.5 mt-3"
+              style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }}>
+              <Share2 size={14} /> Share this itinerary
+            </button>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+/* ========================================================================== */
+/*  CREW BRIEF — what a guide or driver needs, in the order they need it      */
+/*                                                                            */
+/*  An operator thinks in checklists. A guide thinks: where do I need to be,  */
+/*  who am I collecting, what must I not get wrong. Same data, different       */
+/*  order, and the safety-critical notes come first.                          */
+/* ========================================================================== */
+const AIRLINES = [
+  { name: "Drukair", url: "https://www.drukair.com.bt/", note: "Royal Bhutan Airlines" },
+  { name: "Bhutan Airlines", url: "https://www.bhutanairlines.bt/", note: "Tashi Air" },
+];
+
+function CrewBrief({ trip, user }) {
+  const [open, setOpen] = useState(true);
+
+  const fmtWhen = (iso) => {
+    if (!iso) return null;
+    try {
+      const d = new Date(iso);
+      if (isNaN(d.getTime())) return null;
+      return d.toLocaleString("en-GB", { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+    } catch (e) { return null; }
+  };
+
+  const arrival = fmtWhen(trip.arrivalAt);
+  const departure = fmtWhen(trip.departureAt);
+  const days = trip.start ? Math.ceil((new Date(trip.start + "T00:00") - Date.now()) / 86400e3) : null;
+  const myRole = (trip.members || []).find((m) => m && m.id === (user.talentId || user.id))?.roleInTrip;
+
+  return (
+    <div className="rounded-2xl overflow-hidden mb-4" style={{ background: C.card, border: `1px solid ${C.pine}33` }}>
+      {/* heading */}
+      <div className="px-4 py-3 flex items-center gap-2.5" style={{ background: C.pine }}>
+        <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0" style={{ background: "rgba(255,255,255,.15)" }}>
+          <Compass size={16} color={C.goldSoft} />
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="text-[14px] font-semibold text-white">Your brief</div>
+          <div className="text-[12px]" style={{ color: "#ffffffbb" }}>
+            {myRole ? `You're the ${String(myRole).replace("_", " ")}` : "Trip details"}
+            {days !== null && days >= 0 ? ` · starts in ${days === 0 ? "today" : days === 1 ? "1 day" : `${days} days`}` : ""}
+          </div>
+        </div>
+        <button onClick={() => setOpen((v) => !v)} className="tap w-8 h-8 rounded-full flex items-center justify-center"
+          style={{ background: "rgba(255,255,255,.14)" }} aria-label="Toggle brief">
+          <ChevronLeft size={15} color="#fff" style={{ transform: open ? "rotate(90deg)" : "rotate(-90deg)", transition: "transform .2s" }} />
+        </button>
+      </div>
+
+      {open && (
+        <div className="px-4 py-3.5">
+          {/* 1. things that must not be got wrong */}
+          {trip.guestNotes && (
+            <div className="rounded-xl px-3.5 py-3 mb-3 flex gap-2.5" style={{ background: C.maroonSoft }}>
+              <ShieldAlert size={16} color={C.maroon} className="shrink-0 mt-0.5" />
+              <div>
+                <div className="text-[13px] font-bold mb-0.5" style={{ color: C.maroon }}>Important — read before the trip</div>
+                <p className="text-[13px] leading-snug" style={{ color: C.maroon }}>{trip.guestNotes}</p>
+              </div>
+            </div>
+          )}
+
+          {/* 2. where to be, when */}
+          <div className="text-[12px] font-semibold tracking-[.12em] uppercase mb-2" style={{ color: C.goldText }}>Collection</div>
+          {trip.arrivalFlight || arrival ? (
+            <div className="rounded-xl px-3.5 py-3 mb-3" style={{ background: C.bg, border: `1px solid ${C.line}` }}>
+              <div className="flex items-start gap-2.5">
+                <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0" style={{ background: C.pineSoft }}>
+                  <ArrowRight size={14} color={C.pine} />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="text-[14px] font-semibold" style={{ color: C.ink }}>
+                    {trip.arrivalFlight || "Arrival"}
+                    {trip.arrivalPoint ? ` · ${trip.arrivalPoint}` : ""}
+                  </div>
+                  <div className="text-[13px] mt-0.5" style={{ color: C.muted }}>{arrival || "Time not confirmed yet"}</div>
+                  {trip.guestCount > 0 && (
+                    <div className="text-[13px] mt-1.5 font-medium" style={{ color: C.pine }}>
+                      Collecting {trip.guestCount} {trip.guestCount === 1 ? "guest" : "guests"}
+                    </div>
+                  )}
+                </div>
+              </div>
+              {departure && (
+                <div className="flex items-center gap-2.5 mt-3 pt-3" style={{ borderTop: `1px solid ${C.line}` }}>
+                  <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0" style={{ background: C.goldSoft }}>
+                    <ArrowRight size={14} color={C.gold} style={{ transform: "rotate(180deg)" }} />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-[14px] font-medium" style={{ color: C.ink }}>
+                      Drop-off · {trip.departureFlight || "departure"}
+                    </div>
+                    <div className="text-[13px]" style={{ color: C.muted }}>{departure}</div>
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="rounded-xl px-3.5 py-3 mb-3 text-[13px]" style={{ background: C.bg, border: `1px dashed ${C.line}`, color: C.muted }}>
+              Flight details not added yet. Ask the operator in the trip chat so you know when to be at the airport.
+            </div>
+          )}
+
+          {/* 3. check the flight */}
+          <div className="text-[12px] font-semibold tracking-[.12em] uppercase mb-2" style={{ color: C.goldText }}>Check the flight</div>
+          <div className="flex gap-2 mb-3">
+            {AIRLINES.map((a) => (
+              <a key={a.name} href={a.url} target="_blank" rel="noreferrer"
+                className="tap flex-1 rounded-xl px-3 py-2.5 text-left"
+                style={{ background: C.bg, border: `1px solid ${C.line}` }}>
+                <div className="text-[13px] font-semibold" style={{ color: C.ink }}>{a.name}</div>
+                <div className="text-[11px] inline-flex items-center gap-1 mt-0.5" style={{ color: C.pine }}>
+                  Open <ExternalLink size={9} />
+                </div>
+              </a>
+            ))}
+          </div>
+          <p className="text-[12px] leading-snug mb-3" style={{ color: C.muted }}>
+            Paro arrivals shift with weather and the valley closes early. Check the morning of the flight —
+            a delayed landing changes everyone's day.
+          </p>
+
+          {/* 4. the plan */}
+          {(trip.itinerary || []).length > 0 && (
+            <>
+              <div className="text-[12px] font-semibold tracking-[.12em] uppercase mb-2" style={{ color: C.goldText }}>
+                The plan · {(trip.itinerary || []).length} days
+              </div>
+              <div className="rounded-xl overflow-hidden mb-3" style={{ border: `1px solid ${C.line}` }}>
+                {(trip.itinerary || []).map((it, i) => (
+                  <div key={it.day} className="px-3.5 py-2.5 flex items-start gap-2.5"
+                    style={{ background: C.bg, borderTop: i ? `1px solid ${C.line}` : "none" }}>
+                    <div className="w-6 h-6 rounded-md flex items-center justify-center shrink-0" style={{ background: C.pine }}>
+                      <span className="text-[11px] font-bold" style={{ color: C.goldSoft }}>{it.day}</span>
+                    </div>
+                    <span className="text-[13px] leading-snug" style={{ color: C.ink }}>{it.title}</span>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+
+          {/* 5. who to call if something goes wrong */}
+          {trip.emergencyPhone && (
+            <a href={`tel:${dialNumber(trip.emergencyPhone)}`}
+              className="tap w-full rounded-xl px-3.5 py-3 flex items-center gap-3"
+              style={{ background: C.pineSoft }}>
+              <div className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0" style={{ background: C.pine }}>
+                <PhoneCall size={15} color="#fff" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="text-[13px] font-semibold" style={{ color: C.pine }}>
+                  Emergency contact{trip.emergencyName ? ` · ${trip.emergencyName}` : ""}
+                </div>
+                <div className="text-[12px]" style={{ color: C.pine, opacity: .8 }}>{prettyNumber(trip.emergencyPhone)}</div>
+              </div>
+            </a>
+          )}
+
+          <button
+            onClick={() => {
+              const lines = [
+                trip.title,
+                `${fmtDate(trip.start)} – ${fmtDate(trip.end)}`,
+                trip.arrivalFlight ? `Arrival: ${trip.arrivalFlight}${arrival ? ` · ${arrival}` : ""}` : null,
+                trip.guestCount ? `Guests: ${trip.guestCount}` : null,
+                trip.guestNotes ? `Important: ${trip.guestNotes}` : null,
+                (trip.itinerary || []).length ? "\nPlan:" : null,
+                ...(trip.itinerary || []).map((d) => `Day ${d.day}: ${d.title}`),
+              ].filter(Boolean).join("\n");
+              if (navigator.share) navigator.share({ title: trip.title, text: lines }).catch(() => {});
+              else navigator.clipboard?.writeText(lines);
+            }}
+            className="tap w-full h-10 rounded-xl text-[13px] font-semibold inline-flex items-center justify-center gap-1.5 mt-3"
+            style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }}>
+            <Download size={13} /> Save this brief to my phone
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ========================================================================== */
+/*  SIDE RAIL — the desktop navigation                                        */
+/*  Same tabs, same badges, but visible all at once with room for the role    */
+/*  and a quick view of what needs attention. Hidden below 900px.             */
+/* ========================================================================== */
+function SideRail({ user, nav, tab, setTab, badges, alerts, onOpenAlerts, onLogout }) {
+  const roleName = roleLabel(user.kind === "admin" ? "operator" : user.kind);
+  return (
+    <aside className="side-rail">
+      {/* who you are */}
+      <div className="flex items-center gap-2.5 px-2 mb-5">
+        <BrandMark size={40} />
+        <div className="min-w-0">
+          <div className="text-[14px] font-semibold leading-tight truncate" style={{ color: C.ink }}>Bhutan Tourism Hub</div>
+          <div className="text-[11px] font-semibold tracking-[.1em] uppercase mt-0.5" style={{ color: C.goldText }}>
+            {user.kind === "admin" ? "Admin" : roleName}
+          </div>
+        </div>
+      </div>
+
+      {/* the tabs */}
+      <nav className="flex flex-col gap-1">
+        {nav.map((n) => {
+          const on = tab === n.id;
+          const badge = badges[n.id] || 0;
+          return (
+            <button key={n.id} onClick={() => setTab(n.id)}
+              className="tap w-full flex items-center gap-3 px-3 h-11 rounded-xl text-left"
+              style={{ background: on ? C.pine : "transparent" }}>
+              <n.Icon size={18} color={on ? C.goldSoft : C.muted} strokeWidth={on ? 2.3 : 2} />
+              <span className="flex-1 text-[14px] font-semibold" style={{ color: on ? "#fff" : C.ink }}>{n.label}</span>
+              {badge > 0 && (
+                <span className="min-w-[20px] h-[20px] px-1.5 rounded-full flex items-center justify-center text-[11px] font-bold text-white"
+                  style={{ background: on ? C.gold : C.maroon }}>{badge}</span>
+              )}
+            </button>
+          );
+        })}
+      </nav>
+
+      <div className="mt-auto pt-4">
+        <button onClick={onOpenAlerts}
+          className="tap w-full flex items-center gap-3 px-3 h-11 rounded-xl text-left mb-1"
+          style={{ background: alerts > 0 ? C.goldSoft : "transparent" }}>
+          <Bell size={18} color={alerts > 0 ? C.gold : C.muted} />
+          <span className="flex-1 text-[14px] font-semibold" style={{ color: alerts > 0 ? C.goldText : C.ink }}>
+            Notifications
+          </span>
+          {alerts > 0 && (
+            <span className="min-w-[20px] h-[20px] px-1.5 rounded-full flex items-center justify-center text-[11px] font-bold text-white"
+              style={{ background: C.maroon }}>{alerts > 9 ? "9+" : alerts}</span>
+          )}
+        </button>
+
+        <button onClick={onLogout}
+          className="tap w-full flex items-center gap-3 px-3 h-11 rounded-xl text-left"
+          style={{ background: "transparent" }}>
+          <LogOut size={17} color={C.muted} />
+          <span className="text-[14px] font-medium" style={{ color: C.muted }}>Sign out</span>
+        </button>
+
+        <div className="px-3 pt-3 mt-2" style={{ borderTop: `1px solid ${C.lineSoft}` }}>
+          <div className="text-[10px]" style={{ color: C.line }}>{BUILD}</div>
+        </div>
+      </div>
+    </aside>
   );
 }
