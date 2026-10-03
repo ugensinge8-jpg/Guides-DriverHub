@@ -49,7 +49,7 @@ const sysMsg = (text) => ({ id: uid(), senderId: null, kind: "system", body: tex
 /* ── Cloud (Supabase) ── posts are global when configured; everything falls back to local demo mode when not. */
 const CLOUD = Boolean(supabase);
 const DEMO_MODE = false;   // set true only for local demos without a database
-const BUILD = "BUILD 19 — 3 Oct";   // bump every deploy; shown at the top of the welcome screen
+const BUILD = "BUILD 20 — 3 Oct";   // bump every deploy; shown at the top of the welcome screen
 // which device someone is on — shown beside the build so a screenshot tells us both
 const DEVICE = (() => {
   try {
@@ -2378,9 +2378,10 @@ function Label({ children }) { return <div className="text-[13px] font-medium mb
 
 /* ============================== Trips + chat ============================== */
 function tripStateNow(trip) {
+  if (!trip) return "scheduled";
   const end = new Date(trip.end + "T23:59").getTime();
   if (Date.now() > end) return "completed";
-  return trip.chat.state; // scheduled | active
+  return (trip.chat && trip.chat.state) || "scheduled"; // scheduled | active — never crash on a partial trip
 }
 function TripStateBadge({ state }) {
   const m = {
@@ -5481,7 +5482,7 @@ function Tutorial({ user, nav, setTab, onDone }) {
   const OPERATOR_STEPS = [
     { kind: "intro", title: `Welcome, ${first}`, body: "Here's how a booking moves through the hub, from first enquiry to finished trip." },
     { kind: "tab", tab: "bookings", title: "Bookings", body: "Everything lives here in four stages: Enquiries, Confirmed, Past, and Follow up. Record an enquiry, and when the client says yes, tap Make a Trip." },
-    { kind: "tab", tab: "itinerary", title: "Itinerary", body: "Build the day-by-day plan for any confirmed trip, and share it with your client in one tap." },
+    { kind: "tab", tab: "itinerary", title: "Itinerary", body: "Drukpah builds a day-by-day plan from Bhutan's roads — shaped by nights, ages, pace and hotel type — then applies it to a trip or shares it with your client." },
     { kind: "tab", tab: "discover", title: "Crew", body: "Every verified guide and driver, filtered by speciality, language and who's available right now. Phone numbers are visible to you — that's an operator feature." },
     { kind: "tab", tab: "requests", title: "Jobs", body: "Post a job and let qualified people apply, or send a request directly to someone you want." },
     { kind: "tab", tab: "chats", title: "Messages", body: "A chat channel per trip, plus direct messages with any guide or driver." },
@@ -7849,14 +7850,15 @@ function TripEssentials({ trip, canEdit, actions }) {
 /*  The same builder that lives inside a trip, reachable in one tap so an      */
 /*  operator can plan several trips in a sitting.                              */
 /* ========================================================================== */
-function QuickItinerary({ user, trips, actions }) {
+function TripPlans({ user, trips, actions, focusId }) {
   const meId = user.talentId || user.id;
   const mine = (trips || [])
     .filter((tr) => tr && (tr.operatorId === meId || (tr.members || []).some((m) => m && m.id === meId)))
     .filter((tr) => tripStateNow(tr) !== "completed")
     .sort((a, b) => new Date(a.start) - new Date(b.start));
 
-  const [pickedId, setPickedId] = useState(mine[0]?.id || null);
+  const [pickedId, setPickedId] = useState(focusId || mine[0]?.id || null);
+  useEffect(() => { if (focusId) setPickedId(focusId); }, [focusId]);
   useEffect(() => { if (!pickedId && mine.length) setPickedId(mine[0].id); }, [mine.length]);
 
   const trip = mine.find((t) => t.id === pickedId);
@@ -7864,17 +7866,13 @@ function QuickItinerary({ user, trips, actions }) {
 
   if (mine.length === 0) {
     return (
-      <div className="px-5 py-4">
-        <SectionLabel>Itinerary</SectionLabel>
-        <Empty Icon={CalendarDays} title="No trips to plan"
-          body="Confirm an enquiry from Bookings and the trip appears here, ready for its day-by-day plan." />
-      </div>
+      <Empty Icon={CalendarDays} title="No trips to plan yet"
+        body="Confirm an enquiry from Bookings, or build a plan with Drukpah and apply it to a trip." />
     );
   }
 
   return (
-    <div className="px-5 py-4">
-      <SectionLabel trailing={`${mine.length} ${mine.length === 1 ? "trip" : "trips"}`}>Itinerary</SectionLabel>
+    <div>
 
       {/* pick the trip */}
       <div className="flex gap-2 overflow-x-auto hidescroll pb-1 mb-4" style={{ scrollbarWidth: "none" }}>
@@ -8181,5 +8179,768 @@ function SideRail({ user, nav, tab, setTab, badges, alerts, onOpenAlerts, onLogo
         </div>
       </div>
     </aside>
+  );
+}
+
+
+/* The Itinerary tab: the Drukpah engine, beside the per-trip editor */
+function QuickItinerary({ user, trips, actions }) {
+  const [mode, setMode] = useState("engine");
+  const [focusId, setFocusId] = useState(null);
+  return (
+    <div className="px-5 py-4">
+      <SectionLabel>Itinerary</SectionLabel>
+      <div className="mb-4">
+        <Segmented value={mode} onChange={setMode} options={[["engine", "Drukpah engine"], ["trips", "Trip plans"]]} />
+      </div>
+      {mode === "engine"
+        ? <DrukpahEngine user={user} trips={trips} actions={actions} onApplied={(id) => { setFocusId(id); setMode("trips"); }} />
+        : <TripPlans user={user} trips={trips} actions={actions} focusId={focusId} />}
+    </div>
+  );
+}
+
+/* ============================================================================
+   DRUKPAH — itinerary engine for Bhutan
+   A road graph (towns, passes, roads with hours) plus a planner that builds a
+   day-by-day route shaped by nights, ages, pace, interests and hotel type.
+   Drive times are conservative operator figures; they vary with weather and
+   roadworks, and the plan says so.
+   ========================================================================== */
+const DK_TOWNS = {
+  paro:      { n: "Paro",             lat: 27.43, lng: 89.42, alt: 2200, stay: true,  hotels: ["home", "3", "4", "lux"] },
+  thimphu:   { n: "Thimphu",          lat: 27.47, lng: 89.64, alt: 2320, stay: true,  hotels: ["3", "4", "lux"] },
+  haa:       { n: "Haa",              lat: 27.39, lng: 89.28, alt: 2700, stay: true,  hotels: ["home", "3"] },
+  chuzom:    { n: "Chuzom",           lat: 27.30, lng: 89.53, alt: 1990, stay: false },
+  punakha:   { n: "Punakha",          lat: 27.59, lng: 89.87, alt: 1250, stay: true,  hotels: ["home", "3", "4", "lux"] },
+  wangdue:   { n: "Wangdue",          lat: 27.49, lng: 89.90, alt: 1350, stay: true,  hotels: ["3", "4"] },
+  gangtey:   { n: "Gangtey",          lat: 27.46, lng: 90.18, alt: 2900, stay: true,  hotels: ["home", "3", "4", "lux"] },
+  trongsa:   { n: "Trongsa",          lat: 27.50, lng: 90.51, alt: 2200, stay: true,  hotels: ["home", "3"] },
+  bumthang:  { n: "Bumthang",         lat: 27.55, lng: 90.75, alt: 2600, stay: true,  hotels: ["home", "3", "4", "lux"] },
+  mongar:    { n: "Mongar",           lat: 27.27, lng: 91.24, alt: 1600, stay: true,  hotels: ["home", "3"] },
+  trashigang:{ n: "Trashigang",       lat: 27.33, lng: 91.55, alt: 1150, stay: true,  hotels: ["home", "3"] },
+  yangtse:   { n: "Trashiyangtse",    lat: 27.61, lng: 91.50, alt: 1750, stay: true,  hotels: ["home", "3"] },
+  lhuentse:  { n: "Lhuentse",         lat: 27.67, lng: 91.18, alt: 1400, stay: true,  hotels: ["home", "3"] },
+  sjongkhar: { n: "Samdrup Jongkhar", lat: 26.80, lng: 91.50, alt: 250,  stay: true,  hotels: ["3"] },
+  zhemgang:  { n: "Zhemgang",         lat: 27.22, lng: 90.66, alt: 1900, stay: true,  hotels: ["home", "3"] },
+  gelephu:   { n: "Gelephu",          lat: 26.87, lng: 90.49, alt: 250,  stay: true,  hotels: ["3", "4"] },
+  phuentsholing: { n: "Phuentsholing", lat: 26.86, lng: 89.39, alt: 300, stay: true,  hotels: ["3", "4"] },
+};
+
+const DK_PASSES = {
+  chele:     { n: "Chele La",      alt: 3988, lat: 27.37, lng: 89.35 },
+  dochula:   { n: "Dochula",       alt: 3100, lat: 27.49, lng: 89.75 },
+  lawala:    { n: "Lawa La",       alt: 3360, lat: 27.42, lng: 90.12 },
+  pelela:    { n: "Pele La",       alt: 3420, lat: 27.52, lng: 90.22 },
+  yotongla:  { n: "Yotong La",     alt: 3425, lat: 27.56, lng: 90.62 },
+  thrumshing:{ n: "Thrumshing La", alt: 3780, lat: 27.26, lng: 91.08 },
+  korila:    { n: "Kori La",       alt: 2400, lat: 27.29, lng: 91.36 },
+};
+
+// km and typical hours, conservative; pass = the high point crossed
+const DK_ROADS = [
+  ["paro", "chuzom", 24, 0.6], ["chuzom", "thimphu", 31, 0.65],
+  ["paro", "haa", 65, 2.0, "chele"], ["haa", "chuzom", 79, 2.75],
+  ["chuzom", "phuentsholing", 141, 4.5],
+  ["thimphu", "punakha", 75, 2.5, "dochula"], ["thimphu", "wangdue", 70, 2.5, "dochula"],
+  ["punakha", "wangdue", 13, 0.5],
+  ["wangdue", "gangtey", 65, 2.5, "lawala"],
+  ["gangtey", "trongsa", 120, 4.5, "pelela"], ["wangdue", "trongsa", 129, 4.5, "pelela"],
+  ["trongsa", "bumthang", 68, 2.5, "yotongla"],
+  ["bumthang", "mongar", 198, 7.5, "thrumshing"],
+  ["mongar", "trashigang", 91, 3.5, "korila"], ["mongar", "lhuentse", 76, 3.0],
+  ["trashigang", "yangtse", 55, 2.0], ["trashigang", "sjongkhar", 180, 7.0],
+  ["trongsa", "zhemgang", 110, 4.5], ["zhemgang", "gelephu", 148, 4.0],
+];
+
+// what to see — effort: easy | moderate | hard ; kind: culture | nature
+const DK_SEE = {
+  paro: [
+    { t: "Rinpung Dzong", k: "culture", e: "easy" },
+    { t: "Kyichu Lhakhang, one of Bhutan's oldest temples", k: "culture", e: "easy" },
+    { t: "National Museum at Ta Dzong", k: "culture", e: "easy" },
+    { t: "Farmhouse visit and hot-stone bath", k: "culture", e: "easy" },
+    { t: "Drukgyel Dzong", k: "culture", e: "easy" },
+  ],
+  thimphu: [
+    { t: "Tashichho Dzong", k: "culture", e: "easy" },
+    { t: "Buddha Dordenma", k: "culture", e: "easy" },
+    { t: "National Memorial Chorten", k: "culture", e: "easy" },
+    { t: "Folk Heritage Museum", k: "culture", e: "easy" },
+    { t: "Motithang Takin Preserve", k: "nature", e: "easy" },
+    { t: "Walk to Cheri Monastery", k: "nature", e: "moderate" },
+  ],
+  haa: [
+    { t: "Lhakhang Karpo and Lhakhang Nagpo", k: "culture", e: "easy" },
+    { t: "Haa valley village walk", k: "nature", e: "easy" },
+  ],
+  punakha: [
+    { t: "Punakha Dzong", k: "culture", e: "easy" },
+    { t: "Walk through rice fields to Chimi Lhakhang", k: "culture", e: "easy" },
+    { t: "Punakha suspension bridge", k: "nature", e: "easy" },
+    { t: "Hike to Khamsum Yulley Namgyal Chorten", k: "nature", e: "moderate" },
+  ],
+  wangdue: [{ t: "Wangdue Phodrang Dzong", k: "culture", e: "easy" }],
+  gangtey: [
+    { t: "Gangtey Monastery", k: "culture", e: "easy" },
+    { t: "Gangtey Nature Trail across the valley", k: "nature", e: "moderate" },
+    { t: "Black-necked Crane Information Centre", k: "nature", e: "easy" },
+  ],
+  trongsa: [
+    { t: "Trongsa Dzong", k: "culture", e: "easy" },
+    { t: "Tower of Trongsa museum", k: "culture", e: "easy" },
+  ],
+  bumthang: [
+    { t: "Jambay Lhakhang", k: "culture", e: "easy" },
+    { t: "Kurjey Lhakhang", k: "culture", e: "easy" },
+    { t: "Jakar Dzong", k: "culture", e: "easy" },
+    { t: "Tamshing Lhakhang", k: "culture", e: "easy" },
+    { t: "Mebar Tsho, the Burning Lake", k: "nature", e: "easy" },
+    { t: "Ura village", k: "culture", e: "easy" },
+  ],
+  mongar: [
+    { t: "Mongar Dzong", k: "culture", e: "easy" },
+    { t: "Drametse Lhakhang", k: "culture", e: "easy" },
+  ],
+  trashigang: [
+    { t: "Trashigang Dzong", k: "culture", e: "easy" },
+    { t: "Gom Kora temple", k: "culture", e: "easy" },
+    { t: "Rangjung Woesel Choeling Monastery", k: "culture", e: "easy" },
+  ],
+  yangtse: [
+    { t: "Chorten Kora", k: "culture", e: "easy" },
+    { t: "Bumdeling Wildlife Sanctuary", k: "nature", e: "moderate" },
+  ],
+  lhuentse: [
+    { t: "Lhuentse Dzong", k: "culture", e: "easy" },
+    { t: "Khoma village weavers", k: "culture", e: "easy" },
+  ],
+  sjongkhar: [{ t: "Zangdopelri temple", k: "culture", e: "easy" }],
+  phuentsholing: [
+    { t: "Zangdopelri temple", k: "culture", e: "easy" },
+    { t: "Crocodile Breeding Centre", k: "nature", e: "easy" },
+  ],
+  zhemgang: [{ t: "Zhemgang Dzong", k: "culture", e: "easy" }],
+  gelephu: [{ t: "Gelephu hot springs", k: "nature", e: "easy" }],
+};
+
+const DK_HOTEL = { home: "Homestay / farmstay", "3": "3-star", "4": "4-star", lux: "Luxury lodge" };
+const DK_TIERS = ["home", "3", "4", "lux"];
+
+// classic routes, as overnight towns in order — the planner adapts them
+const DK_ROUTES_PARO = {
+  // every plan of 4+ nights ends with two Paro nights: a full last day for the Tiger's Nest
+  3:  ["thimphu", "punakha", "paro"],
+  4:  ["thimphu", "punakha", "paro", "paro"],
+  5:  ["thimphu", "thimphu", "punakha", "paro", "paro"],
+  6:  ["thimphu", "thimphu", "punakha", "gangtey", "paro", "paro"],
+  7:  ["thimphu", "thimphu", "punakha", "gangtey", "paro", "paro", "paro"],
+  8:  ["thimphu", "thimphu", "punakha", "gangtey", "paro", "haa", "paro", "paro"],
+  9:  ["thimphu", "thimphu", "punakha", "punakha", "gangtey", "paro", "haa", "paro", "paro"],
+  10: ["thimphu", "thimphu", "punakha", "gangtey", "trongsa", "bumthang", "bumthang", "punakha", "paro", "paro"],
+  11: ["thimphu", "thimphu", "punakha", "gangtey", "trongsa", "bumthang", "bumthang", "punakha", "paro", "paro", "paro"],
+  12: ["thimphu", "thimphu", "punakha", "gangtey", "trongsa", "bumthang", "bumthang", "punakha", "paro", "haa", "paro", "paro"],
+  13: ["thimphu", "thimphu", "punakha", "gangtey", "gangtey", "trongsa", "bumthang", "bumthang", "punakha", "paro", "haa", "paro", "paro"],
+  14: ["thimphu", "thimphu", "punakha", "gangtey", "gangtey", "trongsa", "bumthang", "bumthang", "bumthang", "punakha", "paro", "haa", "paro", "paro"],
+};
+const DK_ROUTES_EAST = {
+  10: ["thimphu", "punakha", "gangtey", "trongsa", "bumthang", "bumthang", "mongar", "trashigang", "trashigang", "sjongkhar"],
+  11: ["thimphu", "thimphu", "punakha", "gangtey", "trongsa", "bumthang", "bumthang", "mongar", "trashigang", "trashigang", "sjongkhar"],
+  12: ["thimphu", "thimphu", "punakha", "gangtey", "trongsa", "bumthang", "bumthang", "mongar", "trashigang", "yangtse", "trashigang", "sjongkhar"],
+  13: ["thimphu", "thimphu", "punakha", "gangtey", "trongsa", "bumthang", "bumthang", "bumthang", "mongar", "trashigang", "yangtse", "trashigang", "sjongkhar"],
+  14: ["thimphu", "thimphu", "punakha", "punakha", "gangtey", "trongsa", "bumthang", "bumthang", "bumthang", "mongar", "trashigang", "yangtse", "trashigang", "sjongkhar"],
+};
+
+// ── the road graph ──────────────────────────────────────────────────────────
+const DK_ADJ = {};
+for (const [a, b, km, h, pass] of DK_ROADS) {
+  (DK_ADJ[a] = DK_ADJ[a] || []).push({ to: b, km, h, pass });
+  (DK_ADJ[b] = DK_ADJ[b] || []).push({ to: a, km, h, pass });
+}
+
+/** fastest road between two towns: { h, km, nodes: [...], passes: [...] } */
+function dkRoute(from, to) {
+  if (from === to) return { h: 0, km: 0, nodes: [from], passes: [], pts: [DK_TOWNS[from]] };
+  const dist = { [from]: 0 }, prev = {}, edgeIn = {}, done = new Set();
+  while (true) {
+    let u = null, best = Infinity;
+    for (const k in dist) if (!done.has(k) && dist[k] < best) { best = dist[k]; u = k; }
+    if (u === null) return null;
+    if (u === to) break;
+    done.add(u);
+    for (const e of DK_ADJ[u] || []) {
+      const nd = dist[u] + e.h;
+      if (dist[e.to] === undefined || nd < dist[e.to]) { dist[e.to] = nd; prev[e.to] = u; edgeIn[e.to] = e; }
+    }
+  }
+  const nodes = [to]; let km = 0; const passes = [];
+  for (let n = to; n !== from; n = prev[n]) {
+    nodes.unshift(prev[n]); km += edgeIn[n].km;
+    if (edgeIn[n].pass) passes.unshift(edgeIn[n].pass);
+  }
+  const pts = [];
+  for (let k = 0; k < nodes.length; k++) {
+    if (k > 0) {
+      const e = (DK_ADJ[nodes[k - 1]] || []).find((x) => x.to === nodes[k]);
+      if (e && e.pass) pts.push(DK_PASSES[e.pass]);
+    }
+    pts.push(DK_TOWNS[nodes[k]]);
+  }
+  return { h: Math.round(dist[to] * 100) / 100, km, nodes, passes, pts };
+}
+
+function dkFmtHours(h) {
+  if (h <= 0) return "";
+  const whole = Math.floor(h), q = Math.round((h - whole) * 4);
+  const frac = ["", "¼", "½", "¾"][q % 4] || "";
+  const w = q === 4 ? whole + 1 : whole;
+  return w === 0 ? `${frac} h` : `${w}${q === 4 ? "" : frac} h`;
+}
+
+/**
+ * Build a plan.
+ * opts: { nights, exit: "paro"|"phuentsholing"|"sjongkhar", adults, seniors, kids, under6,
+ *         pace: "relaxed"|"standard"|"active", culture, nature, hotel: "home"|"3"|"4"|"lux", month: 0..12 }
+ */
+function dkPlan(opts) {
+  const o = Object.assign({ nights: 7, exit: "paro", adults: 2, seniors: 0, kids: 0, under6: 0,
+                            pace: "standard", culture: true, nature: true, hotel: "3", month: 0 }, opts || {});
+  const notes = [];
+  const N = Math.max(3, Math.min(14, Math.round(o.nights)));
+  const gentle = o.seniors > 0 || o.under6 > 0;
+  let cap = { relaxed: 4.5, standard: 6.5, active: 8 }[o.pace] || 6.5;
+  if (gentle) cap = Math.min(cap, 5);
+
+  // 1. choose the route
+  let exit = o.exit;
+  let seq;
+  if (exit === "sjongkhar") {
+    if (N < 10) {
+      notes.push({ level: "info", text: "Crossing the whole country to Samdrup Jongkhar needs at least 10 nights, so this is a western loop ending in Paro." });
+      exit = "paro"; seq = DK_ROUTES_PARO[N].slice();
+    } else seq = DK_ROUTES_EAST[N].slice();
+  } else seq = DK_ROUTES_PARO[N].slice();
+  if (N >= 10 && exit !== "sjongkhar" && gentle) {
+    notes.push({ level: "info", text: "Central Bhutan involves several long drives. With seniors or young children, consider a domestic flight between Bumthang and Paro when one is scheduled." });
+  }
+
+  // 2. split any day longer than this group should drive, keeping the total nights
+  const START = "paro";
+  const reduceOrder = ["thimphu", "punakha", "gangtey", "bumthang", "trashigang", "haa", "paro"];
+  const trailingParo = () => { let c = 0; for (let k = seq.length - 1; k >= 0 && seq[k] === "paro"; k--) c++; return c; };
+  for (let guard = 0; guard < 20; guard++) {
+    let changed = false;
+    for (let i = 0; i < seq.length; i++) {
+      const from = i === 0 ? START : seq[i - 1], to = seq[i];
+      const r = dkRoute(from, to);
+      if (!r || r.h <= cap) continue;
+      // best overnight along the way: a town with hotels that balances the two halves
+      let bestNode = null, bestScore = Infinity;
+      for (const n of r.nodes.slice(1, -1)) {
+        if (!DK_TOWNS[n] || !DK_TOWNS[n].stay) continue;
+        const a = dkRoute(from, n).h, b = dkRoute(n, to).h;
+        const score = Math.max(a, b);
+        if (score < bestScore && score <= cap + 0.01) { bestScore = score; bestNode = n; }
+      }
+      if (!bestNode) continue;                           // no town between — leave it, warn later
+      // free a night somewhere so the trip stays the same length
+      let freed = false;
+      for (const town of reduceOrder) {
+        const idxs = seq.map((t, k) => (t === town ? k : -1)).filter((k) => k >= 0);
+        if (idxs.length < 2) continue;
+        if (town === "paro" && exit === "paro" && trailingParo() <= 2) continue;   // keep the Tiger's Nest day
+        const k = idxs[idxs.length - 1] === seq.length - 1 && town === "paro" ? idxs[0] : idxs[idxs.length - 1];
+        // never strand the final Paro night
+        if (k === seq.length - 1) continue;
+        seq.splice(k, 1); freed = true; break;
+      }
+      if (!freed) continue;
+      const at = seq.indexOf(to, Math.max(0, i - 1));
+      seq.splice(at < 0 ? i : at, 0, bestNode);
+      changed = true; break;
+    }
+    if (!changed) break;
+  }
+
+  // 3. day by day
+  const used = new Set();
+  const wantKind = (s) => (s.k === "culture" ? o.culture : o.nature) || (!o.culture && !o.nature);
+  const okEffort = (s) => !(gentle && s.e === "hard") && !(o.under6 > 0 && s.e === "moderate" && s.k === "nature");
+  const pick = (town, n) => {
+    const out = [];
+    for (const s of DK_SEE[town] || []) {
+      if (out.length >= n) break;
+      if (used.has(s.t) || !wantKind(s) || !okEffort(s)) continue;
+      used.add(s.t); out.push(s.t);
+    }
+    return out;
+  };
+
+  const lastParoFullDay = (() => {
+    // the last day that starts and ends in Paro — best for the Tiger's Nest, once acclimatised
+    for (let i = seq.length - 1; i >= 1; i--) if (seq[i] === "paro" && seq[i - 1] === "paro") return i;
+    for (let i = seq.length - 1; i >= 1; i--) if (seq[i] === "paro" && seq[i - 1] === "haa") return -1;
+    return -1;
+  })();
+
+  const days = [];
+  let totalH = 0, longest = { h: 0, day: 0 };
+  for (let i = 0; i < seq.length; i++) {
+    const from = i === 0 ? START : seq[i - 1], to = seq[i];
+    const r = dkRoute(from, to) || { h: 0, km: 0, nodes: [from, to], passes: [], pts: [DK_TOWNS[from], DK_TOWNS[to]] };
+    const moving = from !== to;
+    const acts = [];
+    if (i === 0) acts.push("Land at Paro — your guide meets you at the airport");
+    if (moving) {
+      for (const p of r.passes) {
+        const P = DK_PASSES[p];
+        if (p === "dochula") acts.push("Stop at Dochula: 108 chortens and, on a clear day, the Himalaya");
+        else acts.push(`Cross ${P.n} (${P.alt.toLocaleString("en")} m)`);
+      }
+      let room = r.h <= 3 ? 2 : r.h <= 5 ? 1 : 0;
+      if (i === 0) {                                      // arrival day: a flight already behind them
+        room = o.pace === "active" && !gentle ? 2 : 1;
+        if (o.pace !== "relaxed" && !gentle) acts.push(...pick("paro", 1));
+      }
+      acts.push(...pick(to, room));
+    } else if (i === lastParoFullDay) {
+      if (o.under6 > 0) acts.push("Tiger's Nest: view it from the cafeteria viewpoint — the full hike is too long for small children");
+      else if (o.seniors > 0) acts.push("Tiger's Nest: ride a horse to the cafeteria viewpoint, then walk on if comfortable");
+      else acts.push("Hike to Taktsang, the Tiger's Nest — about 4–5 hours there and back");
+      used.add("taktsang");
+      acts.push(...pick("paro", 1));
+    } else {
+      acts.push(...pick(to, o.pace === "relaxed" || gentle ? 2 : 3));
+    }
+    const onlyPasses = moving && acts.every((a) => a.startsWith("Cross ") || a.startsWith("Stop at Dochula"));
+    if (acts.length === (i === 0 ? 1 : 0) || onlyPasses) {
+      if (moving && r.h >= 5) acts.push("Arrive and rest after the long drive");
+      else if (!moving) acts.push(o.pace === "relaxed" ? "A slower day to rest and wander" : "Free time to explore");
+    }
+
+    const town = DK_TOWNS[to];
+    let tier = o.hotel;
+    if (!town.hotels.includes(tier)) {
+      const below = DK_TIERS.slice(0, DK_TIERS.indexOf(tier)).reverse();
+      tier = below.find((t) => town.hotels.includes(t)) || town.hotels[town.hotels.length - 1];
+    }
+    if (moving) { totalH += r.h; if (r.h > longest.h) longest = { h: r.h, day: i + 1 }; }
+    days.push({
+      day: i + 1, from, to, moving, h: moving ? r.h : 0, km: moving ? r.km : 0,
+      passes: moving ? r.passes : [], nodes: r.nodes, pts: moving ? r.pts : [DK_TOWNS[to]], acts,
+      night: to, hotel: tier, hotelWanted: o.hotel, hotelFallback: tier !== o.hotel,
+    });
+  }
+
+  // departure day
+  const last = seq[seq.length - 1];
+  const dep = { day: seq.length + 1, from: last, moving: false, h: 0, km: 0, passes: [], nodes: [last], pts: [DK_TOWNS[last]], acts: [], night: null };
+  if (exit === "paro") {
+    const r = dkRoute(last, "paro");
+    if (last !== "paro") { dep.moving = true; dep.to = "paro"; dep.h = r.h; dep.km = r.km; dep.nodes = r.nodes; dep.passes = r.passes; dep.pts = r.pts; totalH += r.h; }
+    dep.acts.push("Fly out of Paro");
+  } else if (exit === "phuentsholing") {
+    const r = dkRoute(last, "phuentsholing");
+    dep.moving = true; dep.to = "phuentsholing"; dep.h = r.h; dep.km = r.km; dep.nodes = r.nodes; dep.passes = r.passes; dep.pts = r.pts;
+    totalH += r.h; if (r.h > longest.h) longest = { h: r.h, day: dep.day };
+    dep.acts.push("Drive to Phuentsholing and cross into India");
+  } else {
+    dep.acts.push("Cross into India — about 3 hours to Guwahati");
+  }
+  days.push(dep);
+
+  // 4. what the operator should know
+  for (const d of days) {
+    if (d.moving && d.h > cap + 0.01) {
+      const P = d.passes.length ? ` over ${DK_PASSES[d.passes[d.passes.length - 1]].n}` : "";
+      notes.push({ level: gentle ? "warn" : "info",
+        text: `Day ${d.day} is a long one: about ${dkFmtHours(d.h)}${P}. There's no town between to stop overnight${gentle ? " — tiring for seniors and small children; plan rest stops" : ""}.` });
+    }
+  }
+  const highest = days.flatMap((d) => d.passes).map((p) => DK_PASSES[p]).sort((a, b) => b.alt - a.alt)[0];
+  if (highest && highest.alt >= 3400 && (o.seniors > 0 || o.under6 > 0)) {
+    notes.push({ level: "warn", text: `The route crosses ${highest.n} at ${highest.alt.toLocaleString("en")} m. Keep stops there short for seniors and small children, and check with travellers who have heart or breathing conditions.` });
+  }
+  const fall = days.filter((d) => d.hotelFallback);
+  if (fall.length) {
+    const towns = [...new Set(fall.map((d) => DK_TOWNS[d.night].n))];
+    notes.push({ level: "info", text: `${DK_HOTEL[o.hotel]} options aren't available in ${towns.join(", ")} — the plan uses the best available there.` });
+  }
+  if (lastParoFullDay < 0 && exit === "paro") {
+    notes.push({ level: "info", text: "There's no full day in Paro at the end for the Tiger's Nest. Add a night in Paro to fit it in — it's best done last, once everyone has acclimatised." });
+  }
+  const M = o.month;
+  if (M >= 6 && M <= 8) notes.push({ level: "info", text: "Monsoon season: landslides can close roads for hours. Build slack into long driving days." });
+  const snowy = ["thrumshing", "chele"].filter((p) => days.some((d) => d.passes.includes(p))).map((p) => DK_PASSES[p].n);
+  if ((M === 12 || (M >= 1 && M <= 2)) && snowy.length)
+    notes.push({ level: "warn", text: `Winter: snow can close ${snowy.join(" and ")}. Have a back-up plan for ${snowy.length > 1 ? "those days" : "that day"}.` });
+  if ((M >= 11 || (M >= 1 && M <= 2)) && seq.includes("gangtey"))
+    notes.push({ level: "good", text: "Black-necked cranes winter in the Phobjikha valley from about November to February." });
+
+  // 5. the Sustainable Development Fee, by age (USD; Indian nationals pay differently)
+  const sdf = N * ((o.adults + o.seniors) * 100 + o.kids * 50);
+  const travellers = o.adults + o.seniors + o.kids + o.under6;
+
+  return { nights: N, days, exit, cap, gentle, totalH: Math.round(totalH * 4) / 4, longest, notes, sdf, travellers, seq };
+}
+
+
+/* ========================================================================== */
+/*  DRUKPAH — the itinerary engine, as it appears in the Itinerary tab        */
+/* ========================================================================== */
+const DK_MONTHS = ["Any month", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const DK_PACE = { relaxed: "Relaxed", standard: "Standard", active: "Active" };
+const DK_EXIT = { paro: "Paro · fly out", phuentsholing: "Phuentsholing", sjongkhar: "Samdrup Jongkhar" };
+
+function dkDayTitle(d) {
+  const T = (k) => (DK_TOWNS[k] ? DK_TOWNS[k].n : k);
+  const parts = [];
+  if (d.moving && d.to) parts.push(`${T(d.from)} → ${T(d.to)} · ${dkFmtHours(d.h)}`);
+  else parts.push(T(d.from));
+  const acts = (d.acts || []).filter((a) => !a.startsWith("Land at Paro"));
+  if (acts.length) parts.push(acts.join(", "));
+  if (d.night) parts.push(`Night in ${T(d.night)} (${DK_HOTEL[d.hotel]})`);
+  return parts.join(" · ");
+}
+
+function DkStepper({ label, sub, value, min = 0, max = 20, onChange }) {
+  const dim = (on) => (on ? C.ink : C.line);
+  return (
+    <div className="flex items-center justify-between py-2">
+      <div className="min-w-0 pr-3">
+        <div className="text-[14px] font-medium" style={{ color: C.ink }}>{label}</div>
+        {sub && <div className="text-[12px]" style={{ color: C.muted }}>{sub}</div>}
+      </div>
+      <div className="flex items-center gap-1 shrink-0">
+        <button type="button" onClick={() => onChange(Math.max(min, value - 1))} disabled={value <= min}
+          aria-label={`Fewer: ${label}`}
+          className="tap w-11 h-11 rounded-xl flex items-center justify-center text-[22px] leading-none"
+          style={{ background: C.bg, border: `1px solid ${C.line}`, color: dim(value > min) }}>−</button>
+        <span className="w-9 text-center text-[16px] font-semibold" style={{ color: C.ink, fontVariantNumeric: "tabular-nums" }}>{value}</span>
+        <button type="button" onClick={() => onChange(Math.min(max, value + 1))} disabled={value >= max}
+          aria-label={`More: ${label}`}
+          className="tap w-11 h-11 rounded-xl flex items-center justify-center"
+          style={{ background: C.bg, border: `1px solid ${C.line}`, color: dim(value < max) }}>
+          <Plus size={17} strokeWidth={2.4} />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function DkRouteMap({ plan }) {
+  const pts = [];
+  for (const d of plan.days) for (const p of d.pts || []) {
+    const last = pts[pts.length - 1];
+    if (!last || last.lat !== p.lat || last.lng !== p.lng) pts.push(p);
+  }
+  const stops = [];
+  const seen = new Set();
+  for (const d of plan.days) {
+    if (d.night && !seen.has(d.night)) { seen.add(d.night); stops.push({ key: d.night, n: stops.length + 1 }); }
+  }
+  const line = pts.map((p) => `${btPctX(p.lng).toFixed(2)},${btPctY(p.lat).toFixed(2)}`).join(" ");
+  return (
+    <div>
+      <div className="relative rounded-2xl overflow-hidden" style={{ border: `1px solid ${C.line}`, background: C.card }}>
+        <img src={mapImg} alt="Map of Bhutan with the planned route drawn on it" className="w-full block" draggable="false" />
+        <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="absolute inset-0 w-full h-full" aria-hidden="true">
+          <polyline points={line} fill="none" stroke="#FFFFFF" strokeWidth="5" strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" opacity="0.85" />
+          <polyline points={line} fill="none" stroke={C.maroon} strokeWidth="2.5" strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
+        </svg>
+        {stops.map((s) => {
+          const t = DK_TOWNS[s.key];
+          return (
+            <div key={s.key} className="absolute" style={{ left: `${btPctX(t.lng)}%`, top: `${btPctY(t.lat)}%`, transform: "translate(-50%, -50%)" }}>
+              <div className="w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold"
+                style={{ background: C.pine, color: "#FFFFFF", border: "2px solid #FFFFFF", boxShadow: "0 1px 3px rgba(0,0,0,.25)" }}>{s.n}</div>
+            </div>
+          );
+        })}
+      </div>
+      <div className="flex flex-wrap gap-x-3 gap-y-1 mt-2">
+        {stops.map((s) => (
+          <span key={s.key} className="text-[12px]" style={{ color: C.muted }}>
+            <b style={{ color: C.pine }}>{s.n}</b> {DK_TOWNS[s.key].n}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function DrukpahEngine({ user, trips, actions, onApplied }) {
+  const [f, setF] = useState({ nights: 7, exit: "paro", adults: 2, seniors: 0, kids: 0, under6: 0,
+                               pace: "standard", culture: true, nature: true, hotel: "3", month: 0 });
+  const [plan, setPlan] = useState(null);
+  const [editing, setEditing] = useState(true);
+  const [confirmTrip, setConfirmTrip] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState(null);
+  const set = (k, v) => setF((x) => ({ ...x, [k]: v }));
+  const people = f.adults + f.seniors + f.kids + f.under6;
+  const canApply = user.kind === "operator" || user.kind === "admin";
+
+  const meId = user.talentId || user.id;
+  const upcoming = (trips || [])
+    .filter((tr) => tr && (tr.operatorId === meId || (tr.members || []).some((m) => m && m.id === meId)))
+    .filter((tr) => tripStateNow(tr) !== "completed")
+    .sort((a, b) => new Date(a.start) - new Date(b.start));
+
+  const build = () => {
+    if (people === 0) { setNote("Add at least one traveller."); return; }
+    setPlan(dkPlan(f)); setEditing(false); setNote(null); setConfirmTrip(null);
+  };
+
+  const apply = async (trip) => {
+    if (!plan || !CLOUD) return;
+    setBusy(true); setNote(null);
+    const previous = (trip.itinerary || []).map((d) => ({ trip_id: trip.id, day_no: d.day, title: d.title }));
+    const rows = plan.days.map((d) => ({ trip_id: trip.id, day_no: d.day, title: dkDayTitle(d) }));
+    const del = await supabase.from("trip_itinerary").delete().eq("trip_id", trip.id);
+    if (del.error) { setBusy(false); setNote("Couldn't update that trip — " + del.error.message); return; }
+    const ins = await supabase.from("trip_itinerary").insert(rows);
+    if (ins.error) {
+      if (previous.length) await supabase.from("trip_itinerary").insert(previous);   // put the old plan back
+      setBusy(false); setNote("Couldn't save the plan — " + ins.error.message + ". The trip's earlier plan was kept.");
+      return;
+    }
+    setBusy(false); setConfirmTrip(null);
+    actions.reloadTrips && actions.reloadTrips();
+    onApplied && onApplied(trip.id);
+  };
+
+  const share = async () => {
+    if (!plan) return;
+    const head = `Bhutan · ${plan.nights} nights, ${plan.days.length} days`;
+    const body = plan.days.map((d) => `Day ${d.day} — ${dkDayTitle(d)}`).join("\n");
+    const tail = `\nSustainable Development Fee: about USD ${plan.sdf.toLocaleString("en")}\nPlanned with Drukpah · Bhutan Tourism Hub`;
+    const text = `${head}\n\n${body}\n${tail}`;
+    try {
+      if (navigator.share) await navigator.share({ title: head, text });
+      else { await navigator.clipboard.writeText(text); setNote("Copied — paste it into an email or WhatsApp."); }
+    } catch (e) {}
+  };
+
+  const levelStyle = {
+    warn: { bg: C.maroonSoft, fg: C.maroon, Icon: ShieldAlert },
+    info: { bg: C.bg, fg: C.ink, Icon: Clock },
+    good: { bg: C.pineSoft, fg: C.pine, Icon: Check },
+  };
+
+  return (
+    <div>
+      {/* the engine's name, plainly */}
+      <div className="flex items-center gap-3 mb-4">
+        <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0" style={{ background: C.pine }}>
+          <MapIcon size={19} color={C.goldSoft} />
+        </div>
+        <div className="min-w-0">
+          <div className="text-[17px] font-semibold leading-tight" style={{ color: C.ink }}>Drukpah</div>
+          <div className="text-[12px]" style={{ color: C.muted }}>Itinerary engine, built on Bhutan's roads</div>
+        </div>
+      </div>
+
+      {editing ? (
+        <div className="rounded-2xl px-4 py-3 mb-4" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+          <DkStepper label="Nights" sub={`${f.nights + 1} days in Bhutan`} value={f.nights} min={3} max={14} onChange={(v) => set("nights", v)} />
+
+          <div className="pt-2 pb-3" style={{ borderTop: `1px solid ${C.lineSoft}` }}>
+            <div className="text-[13px] font-medium mb-2 mt-1" style={{ color: C.ink }}>Leaving from</div>
+            <div className="flex flex-wrap gap-2">
+              {Object.entries(DK_EXIT).map(([k, l]) => <Chip key={k} on={f.exit === k} onClick={() => set("exit", k)}>{l}</Chip>)}
+            </div>
+          </div>
+
+          <div style={{ borderTop: `1px solid ${C.lineSoft}` }}>
+            <DkStepper label="Adults" value={f.adults} max={20} onChange={(v) => set("adults", v)} />
+            <DkStepper label="Seniors" sub="65 and over — gentler days" value={f.seniors} max={20} onChange={(v) => set("seniors", v)} />
+            <DkStepper label="Children 6–12" sub="Half the SDF" value={f.kids} max={10} onChange={(v) => set("kids", v)} />
+            <DkStepper label="Under 6" sub="No SDF — shorter drives" value={f.under6} max={10} onChange={(v) => set("under6", v)} />
+          </div>
+
+          <div className="pt-2 pb-3" style={{ borderTop: `1px solid ${C.lineSoft}` }}>
+            <div className="text-[13px] font-medium mb-2 mt-1" style={{ color: C.ink }}>Pace</div>
+            <Segmented value={f.pace} onChange={(v) => set("pace", v)} options={Object.entries(DK_PACE)} />
+          </div>
+
+          <div className="pt-2 pb-3" style={{ borderTop: `1px solid ${C.lineSoft}` }}>
+            <div className="text-[13px] font-medium mb-2 mt-1" style={{ color: C.ink }}>Interests</div>
+            <div className="flex flex-wrap gap-2">
+              <Chip on={f.culture} onClick={() => set("culture", !f.culture)}>Dzongs and temples</Chip>
+              <Chip on={f.nature} onClick={() => set("nature", !f.nature)}>Nature and walks</Chip>
+            </div>
+          </div>
+
+          <div className="pt-2 pb-3" style={{ borderTop: `1px solid ${C.lineSoft}` }}>
+            <div className="text-[13px] font-medium mb-2 mt-1" style={{ color: C.ink }}>Hotels</div>
+            <div className="flex flex-wrap gap-2">
+              {DK_TIERS.map((k) => <Chip key={k} on={f.hotel === k} onClick={() => set("hotel", k)}>{DK_HOTEL[k]}</Chip>)}
+            </div>
+          </div>
+
+          <div className="pt-2 pb-1" style={{ borderTop: `1px solid ${C.lineSoft}` }}>
+            <label className="block">
+              <span className="block text-[13px] font-medium mb-2 mt-1" style={{ color: C.ink }}>Travelling in</span>
+              <select value={f.month} onChange={(e) => set("month", Number(e.target.value))}
+                className="w-full h-11 px-3 rounded-xl text-[14px]"
+                style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }}>
+                {DK_MONTHS.map((m, i) => <option key={m} value={i}>{m}</option>)}
+              </select>
+            </label>
+          </div>
+
+          {note && <p className="text-[13px] mt-3" style={{ color: C.maroon }}>{note}</p>}
+
+          <button type="button" onClick={build}
+            className="tap w-full h-12 rounded-xl text-[15px] font-semibold inline-flex items-center justify-center gap-2 mt-4 mb-1"
+            style={{ background: C.pine, color: "#FFFFFF", boxShadow: `0 6px 16px ${C.pine}33` }}>
+            Build the itinerary <ArrowRight size={17} strokeWidth={2.4} />
+          </button>
+        </div>
+      ) : (
+        <button type="button" onClick={() => setEditing(true)}
+          className="tap w-full rounded-2xl px-4 py-3 mb-4 flex items-center gap-3 text-left"
+          style={{ background: C.card, border: `1px solid ${C.line}` }}>
+          <div className="flex-1 min-w-0 text-[13px] leading-relaxed" style={{ color: C.ink }}>
+            {[<b key="n">{f.nights} nights</b>, `${people} ${people === 1 ? "traveller" : "travellers"}`, DK_PACE[f.pace], DK_HOTEL[f.hotel],
+              f.month ? DK_MONTHS[f.month] : null].filter(Boolean).map((part, k, all) => (
+              <React.Fragment key={k}><span className="whitespace-nowrap">{part}</span>{k < all.length - 1 ? " · " : ""}</React.Fragment>
+            ))}
+          </div>
+          <span className="text-[13px] font-semibold shrink-0" style={{ color: C.pine }}>Change</span>
+        </button>
+      )}
+
+      {plan && !editing && (
+        <div className="fade">
+          {/* the plan at a glance */}
+          <div className="grid grid-cols-3 gap-2 mb-4">
+            {[
+              ["Driving", dkFmtHours(plan.totalH) || "—"],
+              ["Longest", plan.longest.h ? `${dkFmtHours(plan.longest.h)}` : "—"],
+              ["SDF", `$${plan.sdf.toLocaleString("en")}`],
+            ].map(([k, v]) => (
+              <div key={k} className="rounded-xl px-3 py-2.5" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+                <div className="text-[11px] font-semibold tracking-[.06em] uppercase" style={{ color: C.goldText }}>{k}</div>
+                <div className="text-[17px] font-semibold mt-0.5" style={{ color: C.ink }}>{v}</div>
+              </div>
+            ))}
+          </div>
+
+          <DkRouteMap plan={plan} />
+
+          {plan.notes.length > 0 && (
+            <div className="mt-4 space-y-2">
+              {plan.notes.map((n, i) => {
+                const st = levelStyle[n.level] || levelStyle.info;
+                return (
+                  <div key={i} className="rounded-xl px-3.5 py-3 flex gap-2.5" style={{ background: st.bg, border: n.level === "info" ? `1px solid ${C.line}` : "none" }}>
+                    <st.Icon size={15} color={st.fg} className="shrink-0 mt-0.5" />
+                    <p className="text-[13px] leading-snug" style={{ color: st.fg }}>{n.text}</p>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* day by day */}
+          <div className="text-[11px] font-semibold tracking-[.14em] uppercase mt-6 mb-2" style={{ color: C.goldText }}>Day by day</div>
+          <div className="space-y-2">
+            {plan.days.map((d) => (
+              <div key={d.day} className="rounded-xl px-3.5 py-3" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+                <div className="flex items-start gap-3">
+                  <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0" style={{ background: C.pine }}>
+                    <span className="text-[12px] font-bold" style={{ color: C.goldSoft }}>{d.day}</span>
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-[14px] font-semibold leading-snug" style={{ color: C.ink }}>
+                      {d.moving && d.to ? `${DK_TOWNS[d.from].n} → ${DK_TOWNS[d.to].n}` : DK_TOWNS[d.from].n}
+                    </div>
+                    {d.moving && d.h > 0 && (
+                      <div className="text-[12px] mt-0.5 inline-flex items-center gap-1" style={{ color: C.muted }}>
+                        <Car size={12} /> {dkFmtHours(d.h)} · {d.km} km
+                      </div>
+                    )}
+                    <ul className="mt-1.5 space-y-1">
+                      {d.acts.map((a, k) => (
+                        <li key={k} className="text-[13px] leading-snug flex gap-2" style={{ color: C.ink }}>
+                          <span className="mt-[7px] w-1 h-1 rounded-full shrink-0" style={{ background: C.gold }} />
+                          <span>{a}</span>
+                        </li>
+                      ))}
+                    </ul>
+                    {d.night && (
+                      <div className="text-[12px] mt-2" style={{ color: d.hotelFallback ? C.goldText : C.muted }}>
+                        Night in {DK_TOWNS[d.night].n} · {DK_HOTEL[d.hotel]}{d.hotelFallback ? " (best available)" : ""}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {note && <p className="text-[13px] mt-3" style={{ color: note.startsWith("Copied") ? C.pine : C.maroon }}>{note}</p>}
+
+          {/* use it */}
+          <div className="mt-5 space-y-2">
+            {canApply && upcoming.length > 0 && !confirmTrip && (
+              <div className="rounded-2xl p-3.5" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+                <div className="text-[13px] font-semibold mb-1" style={{ color: C.ink }}>Apply to a trip</div>
+                <p className="text-[12px] mb-2.5" style={{ color: C.muted }}>The plan becomes the trip's itinerary, and appears in the crew's brief.</p>
+                <div className="flex flex-col gap-2">
+                  {upcoming.map((tr) => (
+                    <button key={tr.id} type="button" onClick={() => setConfirmTrip(tr)}
+                      className="tap w-full rounded-xl px-3 py-2.5 text-left flex items-center justify-between gap-2"
+                      style={{ background: C.bg, border: `1px solid ${C.line}` }}>
+                      <span className="text-[13px] font-medium truncate" style={{ color: C.ink }}>{tr.title}</span>
+                      <span className="text-[12px] shrink-0" style={{ color: C.muted }}>{fmtDate(tr.start)}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {confirmTrip && (
+              <div className="rounded-2xl p-3.5 fade" style={{ background: C.pineSoft }}>
+                <div className="text-[13px] font-semibold mb-1" style={{ color: C.pine }}>Use this plan for “{confirmTrip.title}”?</div>
+                <p className="text-[12px] mb-3 leading-snug" style={{ color: C.pine }}>
+                  {(confirmTrip.itinerary || []).length
+                    ? `It replaces the ${(confirmTrip.itinerary || []).length} days already planned for this trip.`
+                    : "The trip has no days planned yet."}
+                  {(() => {
+                    if (!confirmTrip.start || !confirmTrip.end) return "";
+                    const tripDays = Math.round((new Date(confirmTrip.end) - new Date(confirmTrip.start)) / 86400e3) + 1;
+                    return tripDays !== plan.days.length ? ` Note: the trip is ${tripDays} days and this plan is ${plan.days.length}.` : "";
+                  })()}
+                </p>
+                <div className="flex gap-2">
+                  <button type="button" onClick={() => setConfirmTrip(null)} className="tap flex-1 h-10 rounded-lg text-[13px] font-semibold"
+                    style={{ background: C.card, color: C.muted }}>Cancel</button>
+                  <button type="button" onClick={() => apply(confirmTrip)} disabled={busy}
+                    className="tap flex-[1.4] h-10 rounded-lg text-[13px] font-semibold inline-flex items-center justify-center gap-1.5"
+                    style={{ background: C.pine, color: "#FFFFFF" }}>
+                    {busy ? <Loader2 size={14} className="animate-spin" /> : "Apply the plan"}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            <button type="button" onClick={share}
+              className="tap w-full h-11 rounded-xl text-[14px] font-semibold inline-flex items-center justify-center gap-2"
+              style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }}>
+              <Share2 size={15} /> Share with the client
+            </button>
+          </div>
+
+          <p className="text-[12px] leading-snug mt-4" style={{ color: C.muted }}>
+            Drive times are typical figures and change with weather and roadworks. Hotel availability is indicative —
+            confirm current options. SDF: USD 100 per adult per night, USD 50 for ages 6–12, nothing under 6, valid to
+            31 August 2027; Indian nationals pay Nu 1,200 per night.
+          </p>
+        </div>
+      )}
+    </div>
   );
 }
