@@ -49,7 +49,7 @@ const sysMsg = (text) => ({ id: uid(), senderId: null, kind: "system", body: tex
 /* ── Cloud (Supabase) ── posts are global when configured; everything falls back to local demo mode when not. */
 const CLOUD = Boolean(supabase);
 const DEMO_MODE = false;   // set true only for local demos without a database
-const BUILD = "BUILD 23 — 3 Oct";   // bump every deploy; shown at the top of the welcome screen
+const BUILD = "BUILD 28 — 4 Oct";   // bump every deploy; shown at the top of the welcome screen
 // which device someone is on — shown beside the build so a screenshot tells us both
 const DEVICE = (() => {
   try {
@@ -554,6 +554,20 @@ export default function App() {
   };
   const inviteMe = user ? (user.talentId || user.id) : null;
   const inviteKind = user ? user.kind : null;
+  const [creditRequests, setCreditRequests] = useState([]);
+  const fetchCreditRequests = async () => {
+    if (!CLOUD || inviteKind !== "admin") { setCreditRequests([]); return; }
+    const { data, error } = await supabase.from("drukpah_credit_requests").select("*").eq("status", "open");
+    if (!error) setCreditRequests(data || []);
+  };
+  useEffect(() => {
+    if (!CLOUD || inviteKind !== "admin") { setCreditRequests([]); return; }
+    fetchCreditRequests();
+    const ch = supabase.channel("credit-requests-live")
+      .on("postgres_changes", { event: "*", schema: "public", table: "drukpah_credit_requests" }, fetchCreditRequests)
+      .subscribe();
+    return () => { supabase.removeChannel(ch); };
+  }, [inviteKind]);
   useEffect(() => {
     if (!CLOUD || !inviteMe) { setInvites([]); return; }
     fetchInvites();
@@ -1069,7 +1083,7 @@ export default function App() {
         {!user ? (
           <Login onPick={setAccountId} session={session} myProfile={myProfile} onAuthed={reloadMe} onBusy={setAuthBusy} invitePreview={invitePreview} />
         ) : (
-          <InvitesCtx.Provider value={{ invites }}>
+          <InvitesCtx.Provider value={{ invites, creditRequests }}>
           <Shell key={user.id} user={user} posts={posts} jobs={jobs} trips={trips} listings={listings} enquiries={enquiries} dirTick={dirTick}
             actions={{ addPost, approve, reject, deletePost, reloadDirectory: loadProfiles, setAvailability, toggleFollow, sendJob, setJobStatus, postChat, openChat, postListing, applyToListing, setApplicant, hireApplicant, saveEnquiry, setEnquiryStatus, convertEnquiry, reloadTrips: fetchTrips, binListing, destroyListing, binRequest, destroyRequest, saveTripDetails, createInvite, cancelInvite, respondInvite }} engagement={{ likes, comments, toggleLike, addComment, deleteComment, follows, toggleFollow, stories, addStory, deleteStory }} dm={{ dms, sendDm, markRead, sharePostTo }} onLogout={() => { if (session) supabase.auth.signOut(); setAccountId(null); }} />
           </InvitesCtx.Provider>
@@ -1192,7 +1206,7 @@ const NAV = {
 const DEFAULT_TAB = { guide: "post", driver: "post", operator: "bookings", admin: "review" };
 
 function Shell({ user, posts, jobs, trips, listings, enquiries, actions, engagement, dm, dirTick, onLogout }) {
-  const { invites: crewInvites } = React.useContext(InvitesCtx);
+  const { invites: crewInvites, creditRequests: openCreditRequests } = React.useContext(InvitesCtx);
   const [tab, setTab] = useState(DEFAULT_TAB[user.kind]);
   const [overlay, setOverlay] = useState(null); // {type:'profile'|'request', talentId}
   const [dmWith, setDmWith] = useState(null);
@@ -1282,6 +1296,12 @@ function Shell({ user, posts, jobs, trips, listings, enquiries, actions, engagem
         add({ id: `crewjoin-${inv.id}`, kind: "crewJoined", who: inv.talentId, text: inv.tripTitle, ts: inv.respondedAt });
     });
 
+    /* ---- Operators asking for more AI drafts (admins) ---- */
+    (openCreditRequests || []).forEach((r) => {
+      add({ id: `credit-${r.id}`, kind: "creditRequest", who: r.operator_id, text: `${r.pack || ""} drafts${r.note ? ` · ${r.note}` : ""}`,
+            ts: r.created_at ? new Date(r.created_at).getTime() : Date.now(), urgent: true });
+    });
+
     /* ---- Reminders about your own account ---- */
     const me = PROFILE_DIR[actorId];
     const DAY = 86400e3;
@@ -1361,7 +1381,7 @@ function Shell({ user, posts, jobs, trips, listings, enquiries, actions, engagem
 
     return out.sort((a, b) => (b.ts || 0) - (a.ts || 0)).slice(0, 50);
     } catch (e) { console.error('alertItems failed:', e); return []; }
-  }, [dm?.dms, engagement?.likes, engagement?.comments, engagement?.follows, jobs, listings, posts, trips, actorId, dirTick, user.licenseStatus, crewInvites]);
+  }, [dm?.dms, engagement?.likes, engagement?.comments, engagement?.follows, jobs, listings, posts, trips, actorId, dirTick, user.licenseStatus, crewInvites, openCreditRequests]);
 
   // notify the device when something new arrives
   useEffect(() => {
@@ -1465,7 +1485,8 @@ function Shell({ user, posts, jobs, trips, listings, enquiries, actions, engagem
           onOpenMessages={() => { setAlertsOpen(false); setTab("chats"); }}
           onOpenJobs={() => { setAlertsOpen(false); setTab(user.kind === "operator" ? "requests" : "jobs"); }}
           onOpenTrips={() => { setAlertsOpen(false); setTab(user.kind === "operator" ? "bookings" : "trips"); }}
-          onOpenSelf={() => { setAlertsOpen(false); setTab(user.kind === "operator" || user.kind === "admin" ? "discover" : "profile"); }} />
+          onOpenSelf={() => { setAlertsOpen(false); setTab(user.kind === "operator" || user.kind === "admin" ? "discover" : "profile"); }}
+          onOpenUsers={() => { setAlertsOpen(false); setTab("users"); }} />
       )}
 
       <BottomNav nav={nav} tab={tab}
@@ -3778,6 +3799,7 @@ function AdminUsers({ onChanged, currentAdminId }) {
   const [note, setNote] = useState(null);
   const [openId, setOpenId] = useState(null);
   const [msgUser, setMsgUser] = useState(null);
+  const [creditUser, setCreditUser] = useState(null);
 
   const flash = (m) => { setNote(m); setTimeout(() => setNote(null), 2600); };
 
@@ -3855,6 +3877,8 @@ function AdminUsers({ onChanged, currentAdminId }) {
 
       {note && <div className="rounded-xl px-3 py-2 text-[13px] mb-3" style={{ background: C.pineSoft, color: C.pine }}>{note}</div>}
 
+      <AdminDraftsPanel adminId={currentAdminId} onChanged={onChanged} />
+
       {rows === null ? (
         <div className="flex items-center gap-2 text-[14px] py-6 justify-center" style={{ color: C.muted }}><Loader2 size={17} className="animate-spin" /> Loading…</div>
       ) : list.length === 0 ? (
@@ -3925,6 +3949,10 @@ function AdminUsers({ onChanged, currentAdminId }) {
                       <RefreshCw size={14} /> Un-verify
                     </button>
                   )}
+                  {u.role === "operator" && (
+                    <button onClick={() => setCreditUser({ id: u.id, name: u.full_name })} className="tap h-10 px-3 rounded-xl text-[12px] font-semibold shrink-0"
+                      style={{ background: C.goldSoft, color: C.goldText }}>Add drafts</button>
+                  )}
                   <button onClick={() => setMsgUser(u)} className="tap w-10 h-10 rounded-xl flex items-center justify-center shrink-0"
                     style={{ background: C.pineSoft, border: `1px solid ${C.line}` }} aria-label="Message this user">
                     <MessageCircle size={16} color={C.pine} />
@@ -3959,6 +3987,10 @@ function AdminUsers({ onChanged, currentAdminId }) {
         <AdminMessage adminId={currentAdminId} user={msgUser}
           onClose={() => setMsgUser(null)}
           onSent={(name) => flash(`Message sent to ${name}.`)} />
+      )}
+      {creditUser && (
+        <AdminAddDrafts adminId={currentAdminId} operator={creditUser} onClose={() => setCreditUser(null)}
+          onDone={(n) => flash(`${n} AI drafts added for ${creditUser.name}.`)} />
       )}
 
       <div className="mt-6 rounded-2xl p-4" style={{ background: C.card, border: `1px solid ${C.line}` }}>
@@ -5386,7 +5418,7 @@ function Stat({ n, label, onClick }) {
 }
 
 /* ============================== Notifications ============================= */
-function AlertsSheet({ items, onClose, onOpenProfile, onOpenMessages, onOpenJobs, onOpenTrips, onOpenSelf, notifyOn, onEnableNotify, installed, onInstall }) {
+function AlertsSheet({ items, onClose, onOpenProfile, onOpenMessages, onOpenJobs, onOpenTrips, onOpenSelf, notifyOn, onEnableNotify, installed, onInstall, onOpenUsers}) {
   const meta = {
     message:   { Icon: MessageCircle, bg: C.pineSoft,   fg: C.pine,     verb: "sent you a message" },
     share:     { Icon: Share2,        bg: C.pineSoft,   fg: C.pine,     verb: "shared a post with you" },
@@ -5407,6 +5439,7 @@ function AlertsSheet({ items, onClose, onOpenProfile, onOpenMessages, onOpenJobs
     profileThin:     { Icon: User,        bg: C.goldSoft,   fg: C.goldText, verb: "Finish your profile", self: true },
     crewRequest:     { Icon: UserPlus,    bg: C.pineSoft,   fg: C.pine,     verb: "You've been asked to join a crew", self: true },
     crewJoined:      { Icon: Check,       bg: C.pineSoft,   fg: C.pine,     verb: "joined your crew" },
+    creditRequest:   { Icon: Users,       bg: C.goldSoft,   fg: C.goldText, verb: "asked for more AI drafts" },
     official:        { Icon: ShieldCheck, bg: C.pineSoft,   fg: C.pine,    verb: "Message from Bhutan Tourism Hub" },
   };
 
@@ -5458,6 +5491,7 @@ function AlertsSheet({ items, onClose, onOpenProfile, onOpenMessages, onOpenJobs
                       if (a.kind === "message" || a.kind === "share" || a.kind === "official") return onOpenMessages();
                       if (a.kind === "job" || a.kind === "listing" || a.kind === "applicant") return onOpenJobs();
                       if (a.kind === "tripSoon" || a.kind === "askReview" || a.kind === "crewRequest") return onOpenTrips && onOpenTrips();
+                      if (a.kind === "creditRequest") return onOpenUsers && onOpenUsers();
                       if (m.self) return onOpenSelf && onOpenSelf();
                       if (p) return onOpenProfile(a.who);
                     };
@@ -5625,7 +5659,7 @@ function Tutorial({ user, nav, setTab, onDone }) {
   const OPERATOR_STEPS = [
     { kind: "intro", title: `Welcome, ${first}`, body: "Here's how a booking moves through the hub, from first enquiry to finished trip." },
     { kind: "tab", tab: "bookings", title: "Bookings", body: "Everything lives here in four stages: Enquiries, Confirmed, Past, and Follow up. Record an enquiry, and when the client says yes, tap Make a Trip." },
-    { kind: "tab", tab: "itinerary", title: "Itinerary", body: "Drukpah builds a day-by-day plan from Bhutan's roads — shaped by nights, ages, pace and hotel type — then applies it to a trip or shares it with your client." },
+    { kind: "tab", tab: "itinerary", title: "Itinerary", body: "Drukpah builds a day-by-day plan from Bhutan's roads — or drafts one with AI from your own template and a trip description — then applies it to a trip or shares it with your client." },
     { kind: "tab", tab: "discover", title: "Crew", body: "Every verified guide and driver, filtered by speciality, language and who's available right now. Phone numbers are visible to you — that's an operator feature." },
     { kind: "tab", tab: "requests", title: "Jobs", body: "Post a job and let qualified people apply, or send a request directly to someone you want." },
     { kind: "tab", tab: "chats", title: "Messages", body: "A chat channel per trip, plus direct messages with any guide or driver." },
@@ -5827,6 +5861,7 @@ function PrivacyPanel({ talent }) {
           <P>Your profile, specialities, languages, approved posts and trip record are visible to other users of the platform. Your phone number and email are shown so operators can contact you for work. Your licence document is private — only you and our verification team can see it. Your direct messages are private to you and the person you are messaging.</P>
           <H>Where it is stored</H>
           <P>On Supabase servers, encrypted in transit and at rest. Email is sent through Resend. The site is served over HTTPS by Cloudflare.</P>
+          <P>When a tour operator drafts an itinerary with AI, the trip description and route are sent to Anthropic's API to write it. Operators should keep guests' passport numbers and contact details out of descriptions.</P>
           <H>How long we keep it</H>
           <P>Your profile and posts remain until you ask us to delete them. Stories are deleted automatically after 24 hours. Trip chats are cleared after a trip ends.</P>
           <H>Your rights</H>
@@ -8355,15 +8390,19 @@ function SideRail({ user, nav, tab, setTab, badges, alerts, onOpenAlerts, onLogo
 function QuickItinerary({ user, trips, actions }) {
   const [mode, setMode] = useState("engine");
   const [focusId, setFocusId] = useState(null);
+  const [presetTemplateId, setPresetTemplateId] = useState(null);
   return (
     <div className="px-5 py-4">
       <SectionLabel>Itinerary</SectionLabel>
       <div className="mb-4">
-        <Segmented value={mode} onChange={setMode} options={[["engine", "Drukpah engine"], ["trips", "Trip plans"]]} />
+        <Segmented value={mode} onChange={setMode} options={[["engine", "Drukpah"], ["templates", "Templates"], ["trips", "Trip plans"]]} />
       </div>
       {mode === "engine"
-        ? <DrukpahEngine user={user} trips={trips} actions={actions} onApplied={(id) => { setFocusId(id); setMode("trips"); }} />
-        : <TripPlans user={user} trips={trips} actions={actions} focusId={focusId} />}
+        ? <DrukpahEngine user={user} trips={trips} actions={actions} presetTemplateId={presetTemplateId}
+            onApplied={(id) => { setFocusId(id); setMode("trips"); }} />
+        : mode === "templates"
+          ? <TemplatesTab user={user} onDraft={(id) => { setPresetTemplateId(id); setMode("engine"); }} />
+          : <TripPlans user={user} trips={trips} actions={actions} focusId={focusId} />}
     </div>
   );
 }
@@ -8763,6 +8802,7 @@ const DK_EXIT = { paro: "Paro · fly out", phuentsholing: "Phuentsholing", sjong
 function dkDayTitle(d) {
   const T = (k) => (DK_TOWNS[k] ? DK_TOWNS[k].n : k);
   const parts = [];
+  if (d.aiTitle || d.title) parts.push(d.aiTitle || d.title);
   if (d.moving && d.to) parts.push(`${T(d.from)} → ${T(d.to)} · ${dkFmtHours(d.h)}`);
   else parts.push(T(d.from));
   const acts = (d.acts || []).filter((a) => !a.startsWith("Land at Paro"));
@@ -8837,7 +8877,7 @@ function DkRouteMap({ plan }) {
   );
 }
 
-function DrukpahEngine({ user, trips, actions, onApplied }) {
+function DrukpahEngine({ user, trips, actions, onApplied, presetTemplateId }) {
   const topRef = useRef(null);
   const [f, setF] = useState({ nights: 7, exit: "paro", adults: 2, seniors: 0, kids: 0, under6: 0,
                                pace: "standard", culture: true, nature: true, hotel: "3", month: 0 });
@@ -8849,6 +8889,26 @@ function DrukpahEngine({ user, trips, actions, onApplied }) {
   const set = (k, v) => setF((x) => ({ ...x, [k]: v }));
   const people = f.adults + f.seniors + f.kids + f.under6;
   const canApply = user.kind === "operator" || user.kind === "admin";
+  const tpl = useDrukpahTemplates(user);
+  const [templateId, setTemplateId] = useState(presetTemplateId || "");
+  useEffect(() => { if (presetTemplateId) { setTemplateId(presetTemplateId); setEditing(true); } }, [presetTemplateId]);
+  const [description, setDescription] = useState("");
+  const [drafting, setDrafting] = useState(false);
+  const [ai, setAi] = useState(null);
+  const template = (tpl.templates || []).find((t) => t.id === templateId) || null;
+  const descOk = description.trim().length >= 30;
+  const [way, setWay] = useState("describe");         // describe it (Drukpah reads) | set it up (the form)
+  const [read, setRead] = useState(null);             // what Drukpah understood from the description
+  const cr = useDrukpahCredits(user);
+  const [getMore, setGetMore] = useState(false);
+  const noCredits = !!(cr.credits && cr.credits.total_left <= 0);
+  const aiOn = !!(cr.settings && cr.settings.aiOn);
+  // Drukpah's own writing: a title per day and a summary, no AI needed (AI titles take precedence when present)
+  const withWriting = (plan, fields, placed) => ({
+    ...plan,
+    days: plan.days.map((d, i) => ({ ...d, title: dkDayTitle2(d, i, plan.days.length) })),
+    summary: dkSummary(fields, plan, template ? template.name : null, placed ? placed.days.flatMap((d) => d.signature) : []),
+  });
 
   const meId = user.talentId || user.id;
   const upcoming = (trips || [])
@@ -8856,11 +8916,84 @@ function DrukpahEngine({ user, trips, actions, onApplied }) {
     .filter((tr) => tripStateNow(tr) !== "completed")
     .sort((a, b) => new Date(a.start) - new Date(b.start));
 
+  // land at the top of the new plan, not wherever the button happened to be
+  const scrollToPlan = () => setTimeout(() => { try { topRef.current && topRef.current.scrollIntoView({ block: "start", behavior: "smooth" }); } catch (e) {} }, 40);
   const build = () => {
     if (people === 0) { setNote("Add at least one traveller."); return; }
-    setPlan(dkPlan(f)); setEditing(false); setNote(null); setConfirmTrip(null);
-    // land at the top of the new plan, not wherever the button happened to be
-    setTimeout(() => { try { topRef.current && topRef.current.scrollIntoView({ block: "start", behavior: "smooth" }); } catch (e) {} }, 40);
+    setPlan(withWriting(dkPlan(f), f, null)); setAi(null); setEditing(false); setNote(null); setConfirmTrip(null);
+    scrollToPlan();
+  };
+
+  // the free way: Drukpah's engine with the template placed, no AI
+  const buildPlaced = (fields, briefItems) => {
+    const base = dkPlan(fields);
+    const items = [...(template ? template.items : []), ...(briefItems || [])];
+    const placed = items.length ? dkPlaceTemplate(base, items) : null;
+    setPlan(withWriting(placed ? { ...base, days: placed.days } : base, fields, placed));
+    setAi(placed ? { status: "placed", reason: null, summary: "", tips: [], unplaced: placed.unplaced,
+                     templateName: template ? template.name : "from your description" } : null);
+    setEditing(false); setNote(null); setConfirmTrip(null); scrollToPlan();
+  };
+  // Drukpah reads the description, fills in the settings, and builds — free, instant
+  const buildFromDescription = () => {
+    if (!descOk) { setNote("Describe the trip in a sentence or two — at least 30 characters."); return; }
+    const r = dkReadDescription(description);
+    const nf = { ...f, ...r.fields };
+    setF(nf); setRead(r);
+    buildPlaced(nf, r.items);
+  };
+
+  // Drukpah fixes the route and places the template; the AI writes the days around it (1 draft)
+  const draft = async () => {
+    if (!descOk) { setNote("Describe the trip in a sentence or two — at least 30 characters."); return; }
+    let fields = f, briefItems = [];
+    if (way === "describe") { const r = dkReadDescription(description); fields = { ...f, ...r.fields }; briefItems = r.items || []; setF(fields); setRead(r); }
+    else setRead(null);
+    if (fields.adults + fields.seniors + fields.kids + fields.under6 === 0) { setNote("Add at least one traveller."); return; }
+    setDrafting(true); setNote(null); setConfirmTrip(null);
+    const base = dkPlan(fields);
+    const placed = dkPlaceTemplate(base, [...(template ? template.items : []), ...briefItems]);
+    const T = (k) => (DK_TOWNS[k] ? DK_TOWNS[k].n : k);
+    const payload = {
+      description: description.trim(), templateId: template ? template.id : null,
+      template: template ? { name: template.name, items: template.items } : null,
+      travellers: { adults: fields.adults, seniors: fields.seniors, kids: fields.kids, under6: fields.under6 },
+      pace: fields.pace, hotel: DK_HOTEL[fields.hotel], month: fields.month ? DK_MONTHS[fields.month] : null,
+      days: placed.days.map((d) => ({
+        day: d.day, route: d.moving && d.to ? `${T(d.from)} → ${T(d.to)}` : T(d.from),
+        h: d.h || 0, drive: d.h ? dkFmtHours(d.h) : "", passes: (d.passes || []).map((p) => DK_PASSES[p].n),
+        night: d.night ? T(d.night) : null, hotel: d.night ? DK_HOTEL[d.hotel] : null, acts: d.acts, signature: d.signature,
+      })),
+      unplaced: placed.unplaced.map((u) => u.title),
+    };
+    let out = null, reason = null;
+    try {
+      const { data, error } = await supabase.functions.invoke("drukpah-draft", { body: payload });
+      if (error) {
+        try { const b = await error.context.json(); reason = b && b.error; } catch (e) {}
+        reason = reason || "The AI drafter couldn't be reached.";
+      } else if (data && data.draft) {
+        out = data.draft;
+        if (data.credits) cr.setCredits((c) => ({ ...(c || {}), free_left: Number(data.credits.free_left) || 0, purchased: Number(data.credits.purchased) || 0,
+          total_left: (Number(data.credits.free_left) || 0) + (Number(data.credits.purchased) || 0), allowance: c ? c.allowance : 0 }));
+      } else reason = "The AI returned nothing usable.";
+    } catch (e) { reason = "The AI drafter couldn't be reached."; }
+    if (reason && /drafts left/i.test(reason)) cr.reload();
+    if (out) cr.reload();                                   // the database is the source of truth for what's left
+    // check it here too: the same days, in the same order, each with something to do
+    const fits = out && Array.isArray(out.days) && out.days.length === placed.days.length
+      && out.days.every((x, i) => x && x.day === placed.days[i].day && Array.isArray(x.activities) && x.activities.length);
+    if (out && !fits) { out = null; reason = "The AI's answer didn't fit the route, so it was set aside."; }
+    const days = placed.days.map((d, i) => {
+      const a = out ? out.days[i] : null;
+      return a ? { ...d, aiTitle: String(a.title || ""), acts: a.activities.map(String), note: String(a.note || "") } : d;
+    });
+    setPlan(withWriting({ ...base, days }, fields, placed));
+    setAi({ status: out ? "ai" : "fallback", reason, summary: out ? String(out.summary || "") : "",
+            tips: out && Array.isArray(out.tips) ? out.tips.map(String).slice(0, 3) : [],
+            unplaced: placed.unplaced, templateName: template ? template.name : "" });
+    setDrafting(false); setEditing(false);
+    scrollToPlan();
   };
 
   const apply = async (trip) => {
@@ -8912,8 +9045,35 @@ function DrukpahEngine({ user, trips, actions, onApplied }) {
         </div>
       </div>
 
+      {editing && getMore && <GetMoreSheet user={user} settings={cr.settings} openRequest={cr.openRequest} onClose={() => setGetMore(false)} onSent={() => cr.reload()} />}
       {editing ? (
         <div className="rounded-2xl px-4 py-3 mb-4" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+          <div className="pt-1 pb-3"><Segmented value={way} onChange={setWay} options={[["describe", "Describe it"], ["form", "Set it up"]]} /></div>
+          <div className="pb-3 mb-1" style={{ borderBottom: `1px solid ${C.lineSoft}` }}>
+            <label className="block">
+              <span className="block text-[13px] font-medium mb-2 mt-1" style={{ color: C.ink }}>Your template <span style={{ color: C.muted }}>· optional</span></span>
+              <select value={templateId} onChange={(e) => setTemplateId(e.target.value)} aria-label="Your template"
+                className="w-full h-11 px-3 rounded-xl text-[14px]" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }}>
+                <option value="">None — Drukpah's own suggestions</option>
+                {(tpl.templates || []).map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+              </select>
+            </label>
+            {(way === "describe" || template) && (
+              <label className="block mt-3">
+                <span className="block text-[13px] font-medium mb-1" style={{ color: C.ink }}>Describe the trip {(way === "describe" || aiOn) ? <span style={{ color: C.maroon }}>· required</span> : <span style={{ color: C.muted }}>· optional</span>}</span>
+                <span className="block text-[12px] mb-2 leading-snug" style={{ color: C.muted }}>How long, who's travelling, what they love, anything to avoid. Drukpah reads it — and the AI drafts around it when you use a template.</span>
+                <textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={4} maxLength={2000}
+                  placeholder="e.g. A couple in their sixties from Melbourne, keen gardeners and photographers. Gentle pace, no long hikes, one special dinner."
+                  className="w-full px-3.5 py-3 rounded-xl text-[14px] resize-none" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
+                <span className="block text-[11px] mt-1 text-right" style={{ color: descOk ? C.pine : C.muted }}>
+                  {descOk ? "Enough to draft from" : `${Math.max(0, 30 - description.trim().length)} more characters needed`}
+                </span>
+              </label>
+            )}
+            {template && aiOn && <CreditsLine credits={cr.credits} onGetMore={() => setGetMore(true)} />}
+          </div>
+
+          {way === "form" && (<>
           <DkStepper label="Nights" sub={`${f.nights + 1} days in Bhutan`} value={f.nights} min={3} max={14} onChange={(v) => set("nights", v)} />
 
           <div className="pt-2 pb-3" style={{ borderTop: `1px solid ${C.lineSoft}` }}>
@@ -8960,17 +9120,55 @@ function DrukpahEngine({ user, trips, actions, onApplied }) {
               </select>
             </label>
           </div>
+          </>)}
 
           {note && <p className="text-[13px] mt-3" style={{ color: C.maroon }}>{note}</p>}
 
-          <button type="button" onClick={build}
-            className="tap w-full h-12 rounded-xl text-[15px] font-semibold inline-flex items-center justify-center gap-2 mt-4 mb-1"
-            style={{ background: C.pine, color: "#FFFFFF", boxShadow: `0 6px 16px ${C.pine}33` }}>
-            Build the itinerary <ArrowRight size={17} strokeWidth={2.4} />
-          </button>
+          {way === "describe" ? (
+            <>
+              <button type="button" onClick={buildFromDescription} disabled={!descOk || drafting}
+                className="tap w-full h-12 rounded-xl text-[15px] font-semibold inline-flex items-center justify-center gap-2 mt-4 mb-1"
+                style={{ background: descOk ? C.pine : "#C7CEC7", color: "#FFFFFF", boxShadow: descOk ? `0 6px 16px ${C.pine}33` : "none" }}>
+                Build from description <ArrowRight size={17} strokeWidth={2.4} />
+              </button>
+              {template && aiOn && (
+                <button type="button" onClick={draft} disabled={drafting || !descOk || noCredits}
+                  className="tap w-full h-11 rounded-xl text-[14px] font-semibold inline-flex items-center justify-center gap-2 mt-2 mb-1"
+                  style={{ background: C.card, border: `1.5px solid ${descOk && !noCredits ? C.pine : C.line}`, color: descOk && !noCredits ? C.pine : C.muted }}>
+                  {drafting ? <><Loader2 size={16} className="animate-spin" /> Drafting…</> : noCredits ? "No AI drafts left — tap Get more" : "Draft with AI · 1 draft"}
+                </button>
+              )}
+            </>
+          ) : template && !aiOn ? (
+            <button type="button" onClick={() => { setRead(null); buildPlaced(f); }}
+              className="tap w-full h-12 rounded-xl text-[15px] font-semibold inline-flex items-center justify-center gap-2 mt-4 mb-1"
+              style={{ background: C.pine, color: "#FFFFFF", boxShadow: `0 6px 16px ${C.pine}33` }}>
+              Build with my template <ArrowRight size={17} strokeWidth={2.4} />
+            </button>
+          ) : template ? (
+            <>
+              <button type="button" onClick={draft} disabled={drafting || !descOk || noCredits}
+                className="tap w-full h-12 rounded-xl text-[15px] font-semibold inline-flex items-center justify-center gap-2 mt-4 mb-1"
+                style={{ background: descOk && !noCredits ? C.pine : "#C7CEC7", color: "#FFFFFF", boxShadow: descOk && !noCredits ? `0 6px 16px ${C.pine}33` : "none" }}>
+                {drafting ? <><Loader2 size={17} className="animate-spin" /> Drafting your itinerary…</> : noCredits ? "No AI drafts left — tap Get more" : <>Draft with AI · 1 draft <ArrowRight size={17} strokeWidth={2.4} /></>}
+              </button>
+              <button type="button" onClick={() => { setRead(null); buildPlaced(f); }}
+                className="tap w-full h-11 rounded-xl text-[14px] font-semibold mt-2 mb-1"
+                style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }}>
+                Place my template without AI · free
+              </button>
+            </>
+          ) : (
+            <button type="button" onClick={build}
+              className="tap w-full h-12 rounded-xl text-[15px] font-semibold inline-flex items-center justify-center gap-2 mt-4 mb-1"
+              style={{ background: C.pine, color: "#FFFFFF", boxShadow: `0 6px 16px ${C.pine}33` }}>
+              Build the itinerary <ArrowRight size={17} strokeWidth={2.4} />
+            </button>
+          )}
         </div>
       ) : (
-        <button type="button" onClick={() => setEditing(true)}
+        <>
+        <button type="button" onClick={() => { setEditing(true); if (read) setWay("form"); }}
           className="tap w-full rounded-2xl px-4 py-3 mb-4 flex items-center gap-3 text-left"
           style={{ background: C.card, border: `1px solid ${C.line}` }}>
           <div className="flex-1 min-w-0 text-[13px] leading-relaxed" style={{ color: C.ink }}>
@@ -8981,6 +9179,17 @@ function DrukpahEngine({ user, trips, actions, onApplied }) {
           </div>
           <span className="text-[13px] font-semibold shrink-0" style={{ color: C.pine }}>Change</span>
         </button>
+        {read && (
+          <div className="rounded-2xl px-4 py-3 mb-4 -mt-2" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+            <div className="text-[11px] font-semibold tracking-[.12em] uppercase mb-1.5" style={{ color: C.goldText }}>What Drukpah read</div>
+            <div className="flex flex-wrap gap-1.5">
+              {read.understood.map((u) => <span key={u} className="text-[12px] rounded-full px-2.5 py-1" style={{ background: C.pineSoft, color: C.pine }}>{u}</span>)}
+              {read.assumed.map((u) => <span key={u} className="text-[12px] rounded-full px-2.5 py-1" style={{ background: C.goldSoft, color: C.goldText }}>{u}</span>)}
+            </div>
+            <div className="text-[12px] mt-2" style={{ color: C.muted }}>Not quite right? Tap Change to set it precisely.</div>
+          </div>
+        )}
+        </>
       )}
 
       {plan && !editing && (
@@ -8998,6 +9207,35 @@ function DrukpahEngine({ user, trips, actions, onApplied }) {
               </div>
             ))}
           </div>
+
+          {plan.summary && (!ai || ai.status !== "ai") && (
+            <div className="rounded-2xl px-4 py-3 mb-3" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+              <div className="text-[11px] font-semibold tracking-[.12em] uppercase mb-1" style={{ color: C.goldText }}>Summary</div>
+              <p className="text-[14px] leading-relaxed" style={{ color: C.ink }}>{plan.summary}</p>
+            </div>
+          )}
+          {ai && (
+            <div className="rounded-2xl p-4 mb-4" style={{ background: ai.status === "fallback" ? C.goldSoft : C.pineSoft }}>
+              <div className="text-[11px] font-semibold tracking-[.12em] uppercase" style={{ color: ai.status === "fallback" ? C.goldText : C.pine }}>
+                {ai.status === "ai" ? `AI draft · ${ai.templateName}` : ai.status === "placed" ? `Drukpah's draft · ${ai.templateName}` : "Drukpah's draft"}
+              </div>
+              {ai.status === "ai" && ai.summary && <p className="text-[14px] mt-1.5 leading-relaxed" style={{ color: C.ink }}>{ai.summary}</p>}
+              {ai.status === "placed" && (
+                <p className="text-[13px] mt-1.5 leading-snug" style={{ color: C.pine }}>
+                  {(template ? "Your template activities are placed below." : "The experiences Drukpah picked from your description are placed below.")
+                    + (aiOn ? (template ? " For writing around them, use Draft with AI." : " For writing around them, choose a template and use Draft with AI.") : "")}
+                </p>
+              )}
+              {ai.status === "fallback" && (
+                <p className="text-[13px] mt-1.5 leading-snug" style={{ color: C.goldText }}>
+                  {ai.reason} Your template activities are placed below; the rest uses Drukpah's own suggestions.
+                </p>
+              )}
+              {ai.unplaced.length > 0 && (
+                <p className="text-[12px] mt-2 leading-snug" style={{ color: C.muted }}>Not on this route: {ai.unplaced.map((u) => u.title).join(", ")}.</p>
+              )}
+            </div>
+          )}
 
           <DkRouteMap plan={plan} />
 
@@ -9026,8 +9264,13 @@ function DrukpahEngine({ user, trips, actions, onApplied }) {
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="text-[14px] font-semibold leading-snug" style={{ color: C.ink }}>
-                      {d.moving && d.to ? `${DK_TOWNS[d.from].n} → ${DK_TOWNS[d.to].n}` : DK_TOWNS[d.from].n}
+                      {d.aiTitle || d.title || (d.moving && d.to ? `${DK_TOWNS[d.from].n} → ${DK_TOWNS[d.to].n}` : DK_TOWNS[d.from].n)}
                     </div>
+                    {(d.aiTitle || d.title) && (
+                      <div className="text-[12px] mt-0.5" style={{ color: C.muted }}>
+                        {d.moving && d.to ? `${DK_TOWNS[d.from].n} → ${DK_TOWNS[d.to].n}` : DK_TOWNS[d.from].n}
+                      </div>
+                    )}
                     {d.moving && d.h > 0 && (
                       <div className="text-[12px] mt-0.5 inline-flex items-center gap-1" style={{ color: C.muted }}>
                         <Car size={12} /> {dkFmtHours(d.h)} · {d.km} km
@@ -9037,10 +9280,17 @@ function DrukpahEngine({ user, trips, actions, onApplied }) {
                       {d.acts.map((a, k) => (
                         <li key={k} className="text-[13px] leading-snug flex gap-2" style={{ color: C.ink }}>
                           <span className="mt-[7px] w-1 h-1 rounded-full shrink-0" style={{ background: C.gold }} />
-                          <span>{a}</span>
+                          <span>{a}{(d.signature || []).some((sg) => String(a).toLowerCase().includes(String(sg).toLowerCase())) && (
+                            <span className="ml-1.5 text-[10px] font-bold tracking-[.06em] uppercase rounded-full px-1.5 py-0.5 align-middle whitespace-nowrap"
+                              style={{ background: C.goldSoft, color: C.goldText }}>Yours</span>
+                          )}{(d.brief || []).some((bf) => String(a).toLowerCase().includes(String(bf).toLowerCase())) && (
+                            <span className="ml-1.5 text-[10px] font-bold tracking-[.06em] uppercase rounded-full px-1.5 py-0.5 align-middle whitespace-nowrap"
+                              style={{ background: C.pineSoft, color: C.pine }}>From your brief</span>
+                          )}</span>
                         </li>
                       ))}
                     </ul>
+                    {d.note && <p className="text-[12px] mt-1.5 leading-snug" style={{ color: C.muted }}>{d.note}</p>}
                     {d.night && (
                       <div className="text-[12px] mt-2" style={{ color: d.hotelFallback ? C.goldText : C.muted }}>
                         Night in {DK_TOWNS[d.night].n} · {DK_HOTEL[d.hotel]}{d.hotelFallback ? " (best available)" : ""}
@@ -9051,6 +9301,15 @@ function DrukpahEngine({ user, trips, actions, onApplied }) {
               </div>
             ))}
           </div>
+
+          {ai && ai.tips.length > 0 && (
+            <div className="rounded-2xl p-4 mt-4" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+              <div className="text-[11px] font-semibold tracking-[.12em] uppercase mb-2" style={{ color: C.goldText }}>Tips for you</div>
+              <ul className="space-y-1.5">
+                {ai.tips.map((t, k) => <li key={k} className="text-[13px] leading-snug" style={{ color: C.ink }}>{t}</li>)}
+              </ul>
+            </div>
+          )}
 
           {note && <p className="text-[13px] mt-3" style={{ color: note.startsWith("Copied") ? C.pine : C.maroon }}>{note}</p>}
 
@@ -9105,6 +9364,7 @@ function DrukpahEngine({ user, trips, actions, onApplied }) {
             </button>
           </div>
 
+          {getMore && <GetMoreSheet user={user} settings={cr.settings} openRequest={cr.openRequest} onClose={() => setGetMore(false)} onSent={() => cr.reload()} />}
           <p className="text-[12px] leading-snug mt-4" style={{ color: C.muted }}>
             Drive times are typical figures and change with weather and roadworks. Hotel availability is indicative —
             confirm current options. SDF: USD 100 per adult per night, USD 50 for ages 6–12, nothing under 6, valid to
@@ -9614,4 +9874,698 @@ function CrewRequests({ user, actions }) {
       {editing && me && <ProfileEditor talent={me} onClose={() => setEditing(false)} onSaved={() => actions.reloadDirectory && actions.reloadDirectory()} />}
     </div>
   );
+}
+
+/* ── templates: an operator's signature activities, placed into a plan ───── */
+// Where common Bhutanese experiences happen, for "Let Drukpah decide".
+// First matching rule wins; towns are tried in order and must be on the route.
+const DK_PLACE_RULES = [
+  [/tiger|taktsang/i, ["paro"]],
+  [/hot.?stone|dotsho|farm.?house|farmstay/i, ["paro", "haa", "punakha", "bumthang", "gangtey"]],
+  [/archery|khuru|darts/i, ["thimphu", "paro", "punakha", "bumthang"]],
+  [/raft|kayak|river/i, ["punakha", "wangdue"]],
+  [/crane|phobjikha|black.?necked/i, ["gangtey", "yangtse"]],
+  [/weav|textile|kishuthara|kira|gho\b/i, ["thimphu", "lhuentse", "trashigang", "bumthang"]],
+  [/cheese|brew|beer|apple|swiss/i, ["bumthang"]],
+  [/chele|haa|white temple|black temple/i, ["haa", "paro"]],
+  [/dochula|108 chorten/i, ["punakha", "thimphu"]],
+  [/fertility|chimi|phallus/i, ["punakha"]],
+  [/burning lake|mebar/i, ["bumthang"]],
+  [/meditat|monk|blessing|astrolog|butter lamp|prayer|monastery|lhakhang|dzong/i, ["punakha", "paro", "thimphu", "bumthang", "gangtey"]],
+  [/hike|trek|walk|trail/i, ["paro", "thimphu", "gangtey", "bumthang", "haa"]],
+  [/market|craft|paper|incense|zorig|art school/i, ["thimphu", "paro"]],
+  [/cook|cooking|ema datshi|momo|food|dinner|lunch|picnic|tea/i, []],   // fits anywhere: the longest stay
+];
+
+/** place template items into a plan; returns { days, placed, unplaced } (does not mutate the plan) */
+function dkPlaceTemplate(plan, items) {
+  const days = plan.days.map((d) => ({ ...d, acts: d.acts.slice(), signature: [], brief: [] }));
+  const nights = {};                                         // town → indexes of days ending there
+  days.forEach((d, i) => { if (d.night) (nights[d.night] = nights[d.night] || []).push(i); });
+  const stay = Object.keys(nights).sort((a, b) => nights[b].length - nights[a].length);
+  // a day has room if it isn't a long drive, and it isn't full yet
+  // the Tiger's Nest day is already demanding: one extra at most (a hot-stone bath is ideal afterwards)
+  const hard = (d) => d.acts.some((a) => /Tiger's Nest/.test(a));
+  const room = (i) => { const d = days[i]; return (d.moving ? (d.h <= 3.5 ? 1 : 0) : hard(d) ? 1 : 2) - d.signature.length - d.brief.length; };
+  const bestDayIn = (town) => {
+    const idx = (nights[town] || []).filter((i) => room(i) > 0);
+    // prefer full days in town, then the lightest day
+    idx.sort((a, b) => (days[a].moving - days[b].moving) || (days[a].acts.length - days[b].acts.length));
+    return idx.length ? idx[0] : -1;
+  };
+  const placed = [], unplaced = [];
+  for (const it of items || []) {
+    const title = String((it && it.title) || "").trim();
+    if (!title) continue;
+    let candidates;
+    if (it.town && it.town !== "auto") candidates = [it.town];
+    else {
+      const rule = DK_PLACE_RULES.find(([re]) => re.test(title));
+      candidates = rule && rule[1].length ? rule[1] : stay;      // no rule, or "anywhere": longest stay first
+    }
+    let at = -1, where = null;
+    for (const town of candidates) { at = bestDayIn(town); if (at >= 0) { where = town; break; } }
+    if (at < 0) { unplaced.push({ title, town: it.town && it.town !== "auto" ? it.town : null }); continue; }
+    if (days[at].acts.some((a) => a.toLowerCase() === title.toLowerCase())) { placed.push({ title, day: days[at].day, town: where }); continue; }
+    (it.source === "brief" ? days[at].brief : days[at].signature).push(title);
+    days[at].acts.push(title);
+    placed.push({ title, day: days[at].day, town: where });
+  }
+  return { days, placed, unplaced };
+}
+
+
+
+/* ── Drukpah writes titles and a summary itself: no AI needed ────────────── */
+function dkDayTitle2(d, i, n) {
+  const T = (k) => (DK_TOWNS[k] ? DK_TOWNS[k].n : k);
+  if (!d.night) return "Farewell to Bhutan";
+  if (d.acts.some((a) => /Tiger's Nest/.test(a))) return "The Tiger's Nest";
+  if (i === 0) return `Arrival and on to ${T(d.to)}`;
+  if (d.moving && d.to) {
+    const pass = d.passes && d.passes.length ? DK_PASSES[d.passes[d.passes.length - 1]] : null;
+    return pass ? `Over ${pass.n} to ${T(d.to)}` : `${T(d.from)} to ${T(d.to)}`;
+  }
+  return `A day in ${T(d.from)}`;
+}
+
+function dkSummary(f, plan, templateName, signature) {
+  const seq = plan.seq || [];
+  const region = seq.some((t) => ["mongar", "trashigang", "yangtse", "lhuentse", "sjongkhar"].includes(t)) ? "across Bhutan from west to east"
+    : seq.some((t) => ["trongsa", "bumthang"].includes(t)) ? "through western and central Bhutan" : "through western Bhutan";
+  const who = [f.adults ? `${f.adults} adult${f.adults > 1 ? "s" : ""}` : "", f.seniors ? `${f.seniors} senior${f.seniors > 1 ? "s" : ""}` : "",
+               f.kids ? `${f.kids} child${f.kids > 1 ? "ren" : ""}` : "", f.under6 ? `${f.under6} under six` : ""].filter(Boolean).join(", ");
+  const pace = { relaxed: "relaxed", standard: "well-paced", active: "active" }[f.pace] || "well-paced";
+  const month = f.month ? ` in ${["", "January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"][f.month]}` : "";
+  const ending = plan.exit === "sjongkhar" ? ", leaving by road at Samdrup Jongkhar" : plan.exit === "phuentsholing" ? ", leaving by road at Phuentsholing" : "";
+  let s = `A ${pace} ${plan.nights}-night journey ${region}${who ? ` for ${who}` : ""}${month}${ending}.`;
+  const sig = (signature || []).filter(Boolean);
+  if (templateName && sig.length) s += ` Built around ${templateName}: ${sig.slice(0, 3).join(", ")}${sig.length > 3 ? ` and ${sig.length - 3} more` : ""}.`;
+  return s;
+}
+
+/* ========================================================================== */
+/*  DRUKPAH TEMPLATES — an operator's signature activities                    */
+/* ========================================================================== */
+const DK_TOWN_CHOICES = Object.entries(DK_TOWNS).filter(([, t]) => t.stay).map(([k, t]) => [k, t.n]);
+
+function useDrukpahTemplates(user) {
+  const [state, setState] = useState({ templates: [], loading: true, error: null });
+  const meId = user ? (user.talentId || user.id) : null;
+  const reload = async () => {
+    if (!CLOUD || !meId) { setState({ templates: [], loading: false, error: null }); return; }
+    const { data, error } = await supabase.from("drukpah_templates").select("*").eq("operator_id", meId).order("updated_at", { ascending: false });
+    if (error) { console.warn("drukpah_templates:", error.message); setState({ templates: [], loading: false, error: error.message }); return; }
+    setState({ templates: (data || []).map((r) => ({ id: r.id, name: r.name || "Untitled", items: Array.isArray(r.items) ? r.items : [] })), loading: false, error: null });
+  };
+  useEffect(() => { reload(); }, [meId]);
+  return { ...state, reload };
+}
+
+function TemplateEditor({ user, template, onSaved, onCancel }) {
+  const t = template || {};
+  const [name, setName] = useState(t.name || "");
+  const [items, setItems] = useState((t.items && t.items.length ? t.items : [{ title: "", town: "auto" }]).map((x) => ({ title: x.title || "", town: x.town || "auto" })));
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const setItem = (i, k, v) => setItems((xs) => xs.map((x, j) => (j === i ? { ...x, [k]: v } : x)));
+  const field = { background: C.bg, border: `1px solid ${C.line}`, color: C.ink };
+
+  const save = async () => {
+    const clean = items.map((x) => ({ title: x.title.trim(), town: x.town || "auto" })).filter((x) => x.title);
+    if (!name.trim()) { setErr("Give the template a name."); return; }
+    if (!clean.length) { setErr("Add at least one activity."); return; }
+    setBusy(true); setErr(null);
+    const meId = user.talentId || user.id;
+    const row = { operator_id: meId, name: name.trim(), items: clean, updated_at: new Date().toISOString() };
+    const res = t.id
+      ? await supabase.from("drukpah_templates").update(row).eq("id", t.id)
+      : await supabase.from("drukpah_templates").insert(row);
+    setBusy(false);
+    if (res.error) { setErr("Couldn't save — " + res.error.message); return; }
+    onSaved && onSaved();
+  };
+
+  return (
+    <div className="fade">
+      <button type="button" onClick={onCancel} className="tap inline-flex items-center gap-1 text-[13px] font-semibold mb-3" style={{ color: C.pine }}>
+        <ChevronLeft size={16} /> My templates
+      </button>
+      <div className="rounded-2xl p-4 mb-3" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+        <label className="block">
+          <span className="block text-[13px] font-medium mb-1.5" style={{ color: C.ink }}>Template name</span>
+          <input value={name} onChange={(e) => setName(e.target.value)} maxLength={60} placeholder="e.g. Our signature western loop"
+            className="w-full h-12 px-4 rounded-xl text-[15px]" style={field} />
+        </label>
+      </div>
+
+      <div className="text-[11px] font-semibold tracking-[.14em] uppercase mb-1" style={{ color: C.goldText }}>Things you do differently</div>
+      <p className="text-[12px] mb-3 leading-snug" style={{ color: C.muted }}>
+        One per line, with the town where it happens — or let Drukpah decide. These go into every itinerary you draft with this template.
+      </p>
+      <div className="space-y-2 mb-3">
+        {items.map((it, i) => (
+          <div key={i} className="rounded-xl p-3" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+            <div className="flex gap-2">
+              <input value={it.title} onChange={(e) => setItem(i, "title", e.target.value)} maxLength={120}
+                placeholder="e.g. Hot-stone bath at a farmhouse" aria-label={`Activity ${i + 1}`}
+                className="flex-1 min-w-0 h-11 px-3 rounded-lg text-[14px]" style={field} />
+              <button type="button" onClick={() => setItems((xs) => xs.filter((_, j) => j !== i))} aria-label={`Remove activity ${i + 1}`}
+                className="tap w-11 h-11 rounded-lg flex items-center justify-center shrink-0" style={{ background: C.bg }}>
+                <X size={15} color={C.muted} />
+              </button>
+            </div>
+            <select value={it.town} onChange={(e) => setItem(i, "town", e.target.value)} aria-label={`Where activity ${i + 1} happens`}
+              className="w-full h-10 px-3 rounded-lg text-[13px] mt-2" style={field}>
+              <option value="auto">Let Drukpah decide</option>
+              {DK_TOWN_CHOICES.map(([k, n]) => <option key={k} value={k}>{n}</option>)}
+            </select>
+          </div>
+        ))}
+      </div>
+      {items.length < 30 && (
+        <button type="button" onClick={() => setItems((xs) => [...xs, { title: "", town: "auto" }])}
+          className="tap w-full h-11 rounded-xl text-[14px] font-semibold inline-flex items-center justify-center gap-2 mb-4"
+          style={{ background: C.goldSoft, color: C.goldText }}>
+          <Plus size={16} strokeWidth={2.6} /> Add an activity
+        </button>
+      )}
+      {err && <p className="text-[13px] mb-3" style={{ color: C.maroon }}>{err}</p>}
+      <button type="button" onClick={save} disabled={busy}
+        className="tap w-full h-12 rounded-xl text-[15px] font-semibold inline-flex items-center justify-center gap-2"
+        style={{ background: C.pine, color: "#FFFFFF" }}>
+        {busy ? <Loader2 size={18} className="animate-spin" /> : "Save template"}
+      </button>
+    </div>
+  );
+}
+
+function TemplatesTab({ user, onDraft }) {
+  const { templates, loading, error, reload } = useDrukpahTemplates(user);
+  const [editing, setEditing] = useState(null);      // null | {} for new | a template
+  const [confirmDel, setConfirmDel] = useState(null);
+
+  if (editing) return <TemplateEditor user={user} template={editing.id ? editing : null}
+    onSaved={() => { setEditing(null); reload(); }} onCancel={() => setEditing(null)} />;
+
+  const del = async (id) => {
+    await supabase.from("drukpah_templates").delete().eq("id", id);
+    setConfirmDel(null); reload();
+  };
+  const townName = (k) => (k && k !== "auto" && DK_TOWNS[k] ? DK_TOWNS[k].n : "Drukpah decides");
+
+  return (
+    <div>
+      <div className="rounded-2xl p-4 mb-4" style={{ background: C.pineSoft }}>
+        <div className="text-[14px] font-semibold" style={{ color: C.pine }}>Your way of showing Bhutan</div>
+        <p className="text-[13px] mt-1 leading-snug" style={{ color: C.pine }}>
+          List the experiences you offer that others don't. When you draft a trip with a template, Drukpah fits them into the
+          route and the AI writes the days around them and the trip description.
+        </p>
+      </div>
+      <button type="button" onClick={() => setEditing({})}
+        className="tap w-full h-12 rounded-xl text-[15px] font-semibold inline-flex items-center justify-center gap-2 mb-4"
+        style={{ background: C.pine, color: "#FFFFFF" }}>
+        <Plus size={17} strokeWidth={2.6} /> New template
+      </button>
+
+      {loading ? (
+        <div className="flex justify-center py-8"><Loader2 size={20} className="animate-spin" color={C.muted} /></div>
+      ) : error ? (
+        <Empty Icon={CalendarDays} title="Templates aren't available yet" body="They switch on once the templates table is set up in the database." />
+      ) : templates.length === 0 ? (
+        <Empty Icon={CalendarDays} title="No templates yet" body="Start with three or four signature experiences — you can always add more." />
+      ) : (
+        <div className="space-y-3">
+          {templates.map((tp) => (
+            <div key={tp.id} className="rounded-2xl p-4" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-[15px] font-semibold leading-snug" style={{ color: C.ink }}>{tp.name}</div>
+                  <div className="text-[12px] mt-0.5" style={{ color: C.muted }}>{tp.items.length} {tp.items.length === 1 ? "activity" : "activities"}</div>
+                </div>
+                <button type="button" onClick={() => setEditing(tp)} className="tap h-9 px-3 rounded-lg text-[13px] font-semibold shrink-0"
+                  style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }}>Edit</button>
+              </div>
+              <ul className="mt-2.5 space-y-1">
+                {tp.items.slice(0, 4).map((it, k) => (
+                  <li key={k} className="text-[13px] flex items-baseline gap-2" style={{ color: C.ink }}>
+                    <span className="w-1 h-1 rounded-full shrink-0 translate-y-[-2px]" style={{ background: C.gold }} />
+                    <span className="flex-1 min-w-0">{it.title} <span style={{ color: C.muted }}>· {townName(it.town)}</span></span>
+                  </li>
+                ))}
+                {tp.items.length > 4 && <li className="text-[12px]" style={{ color: C.muted }}>and {tp.items.length - 4} more</li>}
+              </ul>
+              {confirmDel === tp.id ? (
+                <div className="flex gap-2 mt-3">
+                  <button type="button" onClick={() => setConfirmDel(null)} className="tap flex-1 h-10 rounded-lg text-[13px] font-semibold"
+                    style={{ background: C.bg, color: C.muted }}>Keep it</button>
+                  <button type="button" onClick={() => del(tp.id)} className="tap flex-1 h-10 rounded-lg text-[13px] font-semibold"
+                    style={{ background: C.maroon, color: "#FFFFFF" }}>Delete template</button>
+                </div>
+              ) : (
+                <div className="flex gap-2 mt-3">
+                  <button type="button" onClick={() => setConfirmDel(tp.id)} aria-label={`Delete ${tp.name}`}
+                    className="tap w-10 h-10 rounded-lg flex items-center justify-center shrink-0" style={{ background: C.bg }}>
+                    <Trash2 size={15} color={C.muted} />
+                  </button>
+                  <button type="button" onClick={() => onDraft && onDraft(tp.id)}
+                    className="tap flex-1 h-10 rounded-lg text-[13px] font-semibold inline-flex items-center justify-center gap-1.5"
+                    style={{ background: C.pine, color: "#FFFFFF" }}>
+                    Draft a trip with this <ArrowRight size={14} strokeWidth={2.4} />
+                  </button>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// interests → experiences Drukpah adds, placed by the same rules as a template
+const DK_INTERESTS = [
+  [/photograph|camera|photo/i, "photography", [{ title: "Sunrise over the Himalaya from Dochula", town: "auto" }, { title: "Golden-hour walk through Paro valley's rice terraces", town: "paro" }]],
+  [/bird|birding|crane/i, "birds", [{ title: "Birdwatching on the Phobjikha valley trail", town: "gangtey" }, { title: "Early birdwatching along the Mo Chhu", town: "punakha" }]],
+  [/hik|trek|walk/i, "walking", [{ title: "Walk to Cheri Monastery through blue pine forest", town: "thimphu" }, { title: "Hike to Khamsum Yulley Namgyal Chorten", town: "punakha" }]],
+  [/food|cook|cuisine|eat|dinner|meal/i, "food", [{ title: "Cook a Bhutanese meal with a local family", town: "auto" }]],
+  [/textile|weav|craft|art/i, "crafts", [{ title: "Weavers and the Textile Museum", town: "thimphu" }, { title: "Painting school and paper-making", town: "thimphu" }]],
+  [/wellness|spa|bath|hot.?stone|relax/i, "wellness", [{ title: "Hot-stone bath at a farmhouse", town: "auto" }]],
+  [/archery/i, "archery", [{ title: "An archery match with local players", town: "auto" }]],
+  [/raft|kayak/i, "rafting", [{ title: "Rafting on the Mo Chhu", town: "punakha" }]],
+  [/meditat|spiritual|buddh|monk|retreat/i, "spiritual", [{ title: "A morning meditation with a monk", town: "auto" }, { title: "Butter-lamp offering at an old lhakhang", town: "auto" }]],
+  [/garden|flower|plant|botan/i, "gardens", [{ title: "Royal Botanical Park at Lamperi", town: "punakha" }]],
+  [/histor|dzong|museum|cultur|temple|monaster/i, "culture", []],
+  [/nature|scenery|mountain|valley/i, "nature", []],
+];
+
+/* ── reading a plain description, without any AI ──────────────────────────── */
+const DK_WORDNUM = { a: 1, an: 1, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10,
+  eleven: 11, twelve: 12, thirteen: 13, fourteen: 14, fifteen: 15 };
+const dkNum = (w) => (w === undefined ? null : /^\d+$/.test(w) ? Number(w) : DK_WORDNUM[w.toLowerCase()] ?? null);
+const DK_MONTH_RE = /\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\b/i;
+const DK_MONTH_IDX = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 };
+
+/** Read nights, travellers, pace, hotels, month and exit from free text.
+    Returns { fields, understood: [...], assumed: [...] } — never throws. */
+function dkReadDescription(text) {
+  const t = String(text || "").replace(/\s+/g, " ").trim();
+  const low = t.toLowerCase();
+  const NUM = "(\\d+|a|an|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen)";
+  const f = { nights: null, exit: "paro", adults: 0, seniors: 0, kids: 0, under6: 0, pace: "standard", culture: true, nature: true, hotel: "3", month: 0 };
+  const understood = [], assumed = [];
+
+  // length
+  let m;
+  if ((m = low.match(new RegExp(`\\b${NUM}[ -]*nights?\\b`)))) f.nights = dkNum(m[1]);
+  else if ((m = low.match(new RegExp(`\\b${NUM}[ -]*days?\\b`)))) f.nights = Math.max(1, (dkNum(m[1]) || 1) - 1);
+  else if (/\bfortnight|two weeks|2 weeks\b/.test(low)) f.nights = 14;
+  else if (/\b(a|one) week\b/.test(low)) f.nights = 7;
+  else if (/\b(10|ten)[ -]day\b/.test(low)) f.nights = 9;
+  if (f.nights != null) { f.nights = Math.max(3, Math.min(14, f.nights)); understood.push(`${f.nights} nights`); }
+  else { f.nights = 7; assumed.push("7 nights — say how long if different"); }
+
+  // travellers
+  const ages = [...low.matchAll(/\b(\d{1,2})[ -]?(?:year|yr)s?[ -]?old/g)].map((x) => Number(x[1]));
+  const agedPhrase = low.match(/\bage[sd]?\s+((?:\d{1,2}(?:\s*(?:,|and|&)\s*)?)+)/);          // "aged 4 and 9", "ages 7, 10"
+  if (agedPhrase) for (const n of agedPhrase[1].match(/\d{1,2}/g) || []) ages.push(Number(n));
+  for (const a of ages) { if (a < 6) f.under6++; else if (a <= 12) f.kids++; else if (a >= 65) f.seniors++; else f.adults++; }
+  if ((m = low.match(new RegExp(`\\b${NUM} adults?\\b`)))) f.adults += dkNum(m[1]) || 0;
+  if ((m = low.match(new RegExp(`\\b${NUM} (?:senior|elderly|retired|older) (?:people|guests|travellers|travelers|adults|couple)`)))) f.seniors += dkNum(m[1]) || 0;
+  if ((m = low.match(new RegExp(`\\b${NUM} (?:teen|teenager)s?\\b`)))) f.adults += dkNum(m[1]) || 0;   // 13+ pay full SDF
+  if ((m = low.match(new RegExp(`\\b${NUM} (?:young )?(?:kids?|children|child)\\b`))) && !ages.length) f.kids += dkNum(m[1]) || 0;
+  if (/\b(toddler|baby|infant)s?\b/.test(low) && !ages.length) f.under6++;
+  const seniorWords = /\b(in their (sixties|seventies|eighties|60s|70s|80s)|grandparents?|my (mother|father|mum|dad|parents)|seniors?|elderly|retired|pensioners?|aged (6[5-9]|[7-9]\d))\b/;
+  if (seniorWords.test(low) && f.seniors === 0) {
+    const two = /\b(couple|parents|grandparents|both)\b/.test(low);
+    f.seniors += two ? 2 : 1;
+    if (two && f.adults >= 2 && /\b(couple)\b/.test(low) && !/\badults?\b/.test(low)) f.adults -= 2;   // "a couple in their seventies"
+  }
+  if (/\b(and (me|i)|myself)\b/.test(low) && (f.seniors > 0 || f.kids > 0 || f.under6 > 0) && f.adults === 0) f.adults += 1;   // "my parents and me"
+  if ((m = low.match(new RegExp(`\\bfamily of ${NUM}\\b`)))) {
+    const total = dkNum(m[1]) || 0; const have = f.adults + f.seniors + f.kids + f.under6;
+    if (total > have) f.adults += Math.max(0, total - have - (have ? 0 : 0)); // the rest are adults
+  }
+  if ((m = low.match(new RegExp(`\\b(?:group|party) of ${NUM}\\b`))) && f.adults + f.seniors + f.kids + f.under6 === 0) f.adults += dkNum(m[1]) || 0;
+  if (/\b(a couple|two of us|my (wife|husband|partner) and i|honeymoon)\b/.test(low) && f.adults + f.seniors === 0) f.adults = 2;
+  if (/\b(solo|on my own|alone|just me|myself)\b/.test(low) && f.adults + f.seniors + f.kids + f.under6 === 0) f.adults = 1;
+  if (f.adults + f.seniors + f.kids + f.under6 === 0) { f.adults = 2; assumed.push("2 adults — say who's travelling if different"); }
+  else {
+    const who = [f.adults && `${f.adults} adult${f.adults > 1 ? "s" : ""}`, f.seniors && `${f.seniors} senior${f.seniors > 1 ? "s" : ""}`,
+                 f.kids && `${f.kids} child${f.kids > 1 ? "ren" : ""} 6–12`, f.under6 && `${f.under6} under 6`].filter(Boolean).join(", ");
+    understood.push(who);
+  }
+
+  // pace
+  if (/\b(relaxed|relaxing|slow|slowly|gentle|gently|easy|easy-going|leisurely|unhurried|no long hikes?|not too much (driving|walking)|take it easy|rest days?)\b/.test(low)) { f.pace = "relaxed"; understood.push("relaxed pace"); }
+  else if (/\b(active|adventurous|adventure|energetic|packed|trek\w*|lots of hiking|hike a lot|keen hikers?|fit and keen)\b/.test(low)) { f.pace = "active"; understood.push("active pace"); }
+  else assumed.push("standard pace");
+  if (f.seniors > 0 || f.under6 > 0) f.pace = f.pace === "active" ? "standard" : f.pace;   // the engine keeps days gentle anyway
+
+  // interests
+  const cult = /\b(temple|dzong|monaster|cultur|histor|festival|tshechu|buddhis|heritage|museum)\w*/.test(low);
+  // "no long hikes" is not a wish to hike; photography sits between culture and nature
+  const negatedWalk = /\b(no|not|avoid|without|skip|hate|can't|cannot)\s+(long\s+|much\s+|big\s+)?(hik|trek|walk)/.test(low);
+  const nat = /\b(nature|bird|wildlife|mountain|valley|crane|scenery|outdoors|forest)\w*/.test(low)
+    || (!negatedWalk && /\b(hik|trek|walk)\w*/.test(low));
+  if (cult && !nat) { f.nature = false; understood.push("culture first"); }
+  else if (nat && !cult) { f.culture = false; understood.push("nature and walks first"); }
+  if (/\b(no|skip|not interested in|tired of) (temples|dzongs|monasteries)\b/.test(low)) { f.culture = false; f.nature = true; }
+
+  // hotels
+  if (/\b(luxury|luxurious|5[- ]star|five[- ]star|high[- ]end|top[- ]end|aman|amankora|six senses|como|pemako|best hotels?)\b/.test(low)) { f.hotel = "lux"; understood.push("luxury lodges"); }
+  else if (/\b(homestays?|farmstays?|farm stays?|village stays?|with a (local )?family|local family|authentic stays?)\b/.test(low)) { f.hotel = "home"; understood.push("homestays"); }
+  else if (/\b(4[- ]star|four[- ]star|boutique|comfortable|upscale|good hotels?|nice hotels?)\b/.test(low)) { f.hotel = "4"; understood.push("4-star hotels"); }
+  else if (/\b(budget|3[- ]star|three[- ]star|simple hotels?|standard hotels?)\b/.test(low)) { f.hotel = "3"; understood.push("3-star hotels"); }
+  else assumed.push("3-star hotels");
+
+  // month
+  if ((m = t.match(DK_MONTH_RE))) { f.month = DK_MONTH_IDX[m[1].slice(0, 3).toLowerCase()] || 0; if (f.month) understood.push(`travelling in ${["", "January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"][f.month]}`); }
+
+  // how they leave
+  if (/\b(phuentsholing|overland (to|into) india|out by road|drive out|exit by road|siliguri|bagdogra)\b/.test(low)) { f.exit = "phuentsholing"; understood.push("leaving via Phuentsholing"); }
+  else if (/\b(samdrup ?jongkhar|guwahati|assam|cross (the|the whole) country|east to west|all the way east|exit (in the )?east)\b/.test(low)) { f.exit = "sjongkhar"; understood.push("leaving via Samdrup Jongkhar"); }
+
+  // places that need length
+  const wantsEast = /\b(mongar|trashigang|trashiyangtse|lhuentse|eastern bhutan|the east)\b/.test(low);
+  const wantsCentral = /\b(bumthang|central bhutan|trongsa|jakar)\b/.test(low);
+  if (wantsEast && f.exit === "paro") assumed.push("the east is mentioned: it needs 10+ nights and usually leaving via Samdrup Jongkhar");
+  else if (wantsCentral && f.nights < 10) assumed.push(`Bumthang is mentioned but ${f.nights} nights is short for it — Drukpah fits central Bhutan from 10 nights`);
+
+  // interests become experiences, placed by the same rules as a template
+  const items = []; const named = [];
+  for (const [re, name, extras] of DK_INTERESTS) {
+    if (!re.test(t)) continue;
+    if (name === "walking" && negatedWalk) continue;                 // they said no to hikes
+    if (extras.length) named.push(name);
+    for (const it of extras) items.push({ ...it, source: "brief" });
+  }
+  if (named.length) understood.push(`picks for ${named.join(", ")}`);
+  return { fields: f, understood, assumed, items: items.slice(0, 6) };
+}
+
+
+/* ========================================================================== */
+/*  DRUKPAH CREDITS — free monthly drafts, packs, requests, admin release      */
+/* ========================================================================== */
+const DK_PACKS = [25, 50, 100];
+
+async function dkLoadSettings() {
+  const out = { note: "", account: "", free: 10, aiOn: false };
+  if (!CLOUD) return out;
+  const { data } = await supabase.from("drukpah_settings").select("*");
+  for (const r of data || []) {
+    if (r.key === "credits_payment_note") out.note = r.value || "";
+    if (r.key === "credits_payment_account") out.account = r.value || "";
+    if (r.key === "free_drafts_per_month") out.free = Number(r.value) || 10;
+    if (r.key === "ai_drafts_enabled") out.aiOn = String(r.value).toLowerCase() === "on";
+  }
+  return out;
+}
+
+/** how many AI drafts the signed-in operator has, plus any open request */
+function useDrukpahCredits(user) {
+  const meId = user ? (user.talentId || user.id) : null;
+  const [credits, setCredits] = useState(null);         // { free_left, purchased, total_left, allowance } | null = unknown
+  const [openRequest, setOpenRequest] = useState(null);
+  const [settings, setSettings] = useState(null);
+  const reload = async () => {
+    if (!CLOUD || !meId) return;
+    const [{ data: st, error }, { data: reqs }] = await Promise.all([
+      supabase.rpc("drukpah_credit_status"),
+      supabase.from("drukpah_credit_requests").select("*").eq("operator_id", meId).eq("status", "open"),
+    ]);
+    if (error) { console.warn("drukpah_credit_status:", error.message); setCredits(null); }
+    else if (st) setCredits({ free_left: Number(st.free_left) || 0, purchased: Math.max(0, Number(st.purchased) || 0),
+                              total_left: Number(st.total_left) || 0, allowance: Number(st.allowance) || 0 });
+    setOpenRequest((reqs || [])[0] || null);
+    setSettings(await dkLoadSettings());
+  };
+  useEffect(() => { reload(); }, [meId]);
+  return { credits, openRequest, settings, reload, setCredits };
+}
+
+function CreditsLine({ credits, onGetMore }) {
+  if (!credits) return null;
+  const none = credits.total_left <= 0;
+  return (
+    <div className="flex items-center justify-between gap-3 mt-3 rounded-xl px-3 py-2.5" style={{ background: none ? C.goldSoft : C.bg, border: `1px solid ${none ? C.gold + "66" : C.line}` }}>
+      <div className="text-[12px] leading-snug" style={{ color: none ? C.goldText : C.muted }}>
+        <b style={{ color: none ? C.goldText : C.ink }}>AI drafts:</b>{" "}
+        {none ? "none left this month" : `${credits.free_left} free this month${credits.purchased ? ` · ${credits.purchased} purchased` : ""}`}
+      </div>
+      <button type="button" onClick={onGetMore} className="tap shrink-0 h-8 px-3 rounded-lg text-[12px] font-semibold"
+        style={{ background: none ? C.pine : C.card, color: none ? "#FFFFFF" : C.pine, border: none ? "none" : `1px solid ${C.line}` }}>
+        Get more
+      </button>
+    </div>
+  );
+}
+
+/* the operator asks for a pack; the admin releases it from the Users screen */
+function GetMoreSheet({ user, settings, openRequest, onClose, onSent }) {
+  const [pack, setPack] = useState(50);
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const send = async () => {
+    setBusy(true); setErr(null);
+    const { error } = await supabase.from("drukpah_credit_requests").insert({ operator_id: user.talentId || user.id, pack, note: note.trim() || null });
+    setBusy(false);
+    if (error) { setErr("Couldn't send the request — " + error.message); return; }
+    onSent && onSent();
+  };
+  return createPortal((
+    <div className="fixed inset-0 flex items-end" style={{ background: "rgba(8,10,8,.55)", zIndex: 235 }} onClick={onClose}>
+      <div className="w-full rounded-t-3xl flex flex-col safe-bottom" style={{ background: C.card, maxHeight: "90dvh" }} onClick={(e) => e.stopPropagation()}>
+        <div className="p-5 pb-3 shrink-0">
+          <div className="w-10 h-1 rounded-full mx-auto mb-4" style={{ background: C.line }} />
+          <div className="text-[17px] font-semibold" style={{ color: C.ink }}>More AI drafts</div>
+          <p className="text-[13px] mt-1 leading-snug" style={{ color: C.muted }}>
+            Every operator gets {settings ? settings.free : 10} free drafts a month. Packs are added by the admin once you've paid.
+          </p>
+        </div>
+        <div className="flex-1 overflow-y-auto hidescroll px-5 pb-5" style={{ scrollbarWidth: "none" }}>
+          {openRequest ? (
+            <div className="rounded-2xl p-4" style={{ background: C.pineSoft }}>
+              <div className="text-[14px] font-semibold" style={{ color: C.pine }}>Request sent {fmtDate(String(openRequest.created_at || "").slice(0, 10))}</div>
+              <p className="text-[13px] mt-1 leading-snug" style={{ color: C.pine }}>
+                {openRequest.pack} drafts requested. The admin adds them once your payment is seen — usually the same day. You'll get a message when they're in.
+              </p>
+            </div>
+          ) : (
+            <>
+              <div className="rounded-2xl p-4 mb-4" style={{ background: C.goldSoft }}>
+                <div className="text-[11px] font-semibold tracking-[.12em] uppercase mb-1" style={{ color: C.goldText }}>How to pay</div>
+                <p className="text-[13px] leading-relaxed whitespace-pre-line" style={{ color: C.ink }}>{(settings && settings.note) || "Ask the admin for payment details."}</p>
+                {settings && settings.account && !/^set this/i.test(settings.account) ? (
+                  <p className="text-[13px] mt-2 font-semibold whitespace-pre-line" style={{ color: C.ink }}>{settings.account}</p>
+                ) : (
+                  <p className="text-[13px] mt-2" style={{ color: C.goldText }}>The admin hasn't added payment details yet — message them for the account to pay into.</p>
+                )}
+              </div>
+              <div className="text-[13px] font-medium mb-2" style={{ color: C.ink }}>Pack</div>
+              <div className="flex gap-2 mb-4">
+                {DK_PACKS.map((p) => <Chip key={p} on={pack === p} onClick={() => setPack(p)}>{p} drafts</Chip>)}
+              </div>
+              <label className="block mb-4">
+                <span className="block text-[13px] font-medium mb-1.5" style={{ color: C.ink }}>Payment reference <span style={{ color: C.muted }}>· so the admin can match it</span></span>
+                <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={2} maxLength={300}
+                  placeholder="e.g. Paid Nu 500 by mBoB on 4 Oct, ref 48213"
+                  className="w-full px-3.5 py-3 rounded-xl text-[14px] resize-none" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
+              </label>
+              {err && <p className="text-[13px] mb-3" style={{ color: C.maroon }}>{err}</p>}
+              <button type="button" onClick={send} disabled={busy}
+                className="tap w-full h-12 rounded-xl text-[15px] font-semibold inline-flex items-center justify-center gap-2"
+                style={{ background: C.pine, color: "#FFFFFF" }}>
+                {busy ? <Loader2 size={18} className="animate-spin" /> : `Request ${pack} drafts`}
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  ), document.body);
+}
+
+/* ── admin ── */
+async function dkReleaseCredits({ adminId, operatorId, amount, reason, requestId }) {
+  const { error } = await supabase.from("drukpah_credits").insert({ operator_id: operatorId, delta: amount, reason: reason || "pack", by_admin: adminId });
+  if (error) return { ok: false, reason: error.message };
+  if (requestId) await supabase.from("drukpah_credit_requests").update({ status: "done", granted: amount, handled_by: adminId, handled_at: new Date().toISOString() }).eq("id", requestId);
+  // tell them, as an official message (the app already shows these as notifications)
+  const body = `${amount} AI drafts have been added to your Drukpah account. Thank you.`;
+  const dm = await supabase.from("direct_messages").insert({ sender_id: adminId, recipient_id: operatorId, body, is_official: true });
+  if (dm.error) await supabase.from("direct_messages").insert({ sender_id: adminId, recipient_id: operatorId, body });
+  return { ok: true };
+}
+
+function AdminDraftsPanel({ adminId, onChanged }) {
+  const [reqs, setReqs] = useState(null);
+  const [settings, setSettings] = useState(null);
+  const [editSettings, setEditSettings] = useState(false);
+  const [busy, setBusy] = useState(null);
+  const [custom, setCustom] = useState(null);     // request id choosing another amount
+  const [flash, setFlash] = useState(null);
+  const say = (m) => { setFlash(m); setTimeout(() => setFlash(null), 2600); };
+  const load = async () => {
+    if (!CLOUD) { setReqs([]); return; }
+    const { data } = await supabase.from("drukpah_credit_requests").select("*").eq("status", "open").order("created_at", { ascending: true });
+    setReqs(data || []); setSettings(await dkLoadSettings());
+  };
+  useEffect(() => { load(); }, []);
+
+  const release = async (r, amount) => {
+    setBusy(r.id);
+    const res = await dkReleaseCredits({ adminId, operatorId: r.operator_id, amount, reason: "pack", requestId: r.id });
+    setBusy(null); setCustom(null);
+    if (!res.ok) { say("Couldn't add drafts — " + res.reason); return; }
+    say(`${amount} drafts added for ${(PROFILE_DIR[r.operator_id] || {}).name || "the operator"}`);
+    load(); onChanged && onChanged();
+  };
+  const decline = async (r) => {
+    setBusy(r.id);
+    await supabase.from("drukpah_credit_requests").update({ status: "declined", handled_by: adminId, handled_at: new Date().toISOString() }).eq("id", r.id);
+    setBusy(null); load();
+  };
+  const saveSettings = async (next) => {
+    setBusy("settings");
+    const rows = [["credits_payment_note", next.note], ["credits_payment_account", next.account], ["free_drafts_per_month", String(next.free)],
+                  ["ai_drafts_enabled", next.aiOn ? "on" : "off"]]
+      .map(([key, value]) => ({ key, value, updated_at: new Date().toISOString() }));
+    const { error } = await supabase.from("drukpah_settings").upsert(rows);
+    setBusy(null);
+    if (error) { say("Couldn't save — " + error.message); return; }
+    setSettings(next); setEditSettings(false); say("Saved");
+  };
+
+  if (reqs === null) return null;
+  return (
+    <div className="rounded-2xl p-4 mb-4" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <div className="text-[14px] font-semibold" style={{ color: C.ink }}>AI drafts</div>
+          <div className="text-[12px]" style={{ color: C.muted }}>{reqs.length ? `${reqs.length} ${reqs.length === 1 ? "request" : "requests"} waiting` : "No requests waiting"}</div>
+        </div>
+        <button type="button" onClick={() => setEditSettings((v) => !v)} className="tap h-9 px-3 rounded-lg text-[12px] font-semibold"
+          style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }}>{editSettings ? "Close" : "Payment details"}</button>
+      </div>
+      {flash && <div className="text-[12px] mt-2 font-semibold" style={{ color: C.pine }}>{flash}</div>}
+
+      {editSettings && settings && <AdminDraftSettings settings={settings} busy={busy === "settings"} onSave={saveSettings} />}
+
+      {reqs.map((r) => {
+        const p = PROFILE_DIR[r.operator_id];
+        return (
+          <div key={r.id} className="rounded-xl p-3 mt-3" style={{ background: C.bg }}>
+            <div className="flex items-center gap-3">
+              <Avatar initials={p ? p.initials : "?"} size={34} />
+              <div className="flex-1 min-w-0">
+                <div className="text-[14px] font-semibold truncate" style={{ color: C.ink }}>{p ? p.name : r.operator_id}</div>
+                <div className="text-[12px]" style={{ color: C.muted }}>Asked for {r.pack} drafts · {fmtDate(String(r.created_at || "").slice(0, 10))}</div>
+              </div>
+            </div>
+            {r.note && <p className="text-[13px] mt-2 leading-snug" style={{ color: C.ink }}>“{r.note}”</p>}
+            {custom === r.id ? (
+              <div className="flex flex-wrap gap-2 mt-3">
+                {DK_PACKS.map((n) => (
+                  <button key={n} type="button" onClick={() => release(r, n)} disabled={busy === r.id}
+                    className="tap h-9 px-3 rounded-lg text-[12px] font-semibold" style={{ background: C.pine, color: "#FFFFFF" }}>Release {n}</button>
+                ))}
+                <button type="button" onClick={() => setCustom(null)} className="tap h-9 px-3 rounded-lg text-[12px] font-semibold" style={{ background: C.card, color: C.muted }}>Cancel</button>
+              </div>
+            ) : (
+              <div className="flex gap-2 mt-3">
+                <button type="button" onClick={() => decline(r)} disabled={busy === r.id} className="tap h-10 px-3 rounded-lg text-[12px] font-semibold"
+                  style={{ background: C.card, border: `1px solid ${C.line}`, color: C.muted }}>Decline</button>
+                <button type="button" onClick={() => setCustom(r.id)} disabled={busy === r.id} className="tap h-10 px-3 rounded-lg text-[12px] font-semibold"
+                  style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }}>Other</button>
+                <button type="button" onClick={() => release(r, r.pack || 50)} disabled={busy === r.id}
+                  className="tap flex-1 h-10 rounded-lg text-[13px] font-semibold inline-flex items-center justify-center gap-1.5"
+                  style={{ background: C.pine, color: "#FFFFFF" }}>
+                  {busy === r.id ? <Loader2 size={14} className="animate-spin" /> : <><Check size={14} strokeWidth={3} /> Release {r.pack || 50}</>}
+                </button>
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function AdminDraftSettings({ settings, busy, onSave }) {
+  const [s, setS] = useState({ note: settings.note, account: settings.account, free: settings.free, aiOn: !!settings.aiOn });
+  const field = { background: C.bg, border: `1px solid ${C.line}`, color: C.ink };
+  return (
+    <div className="mt-3 rounded-xl p-3" style={{ background: C.bg }}>
+      <div className="flex items-center justify-between gap-3 mb-3 rounded-lg px-3 py-2.5" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+        <div className="min-w-0">
+          <div className="text-[13px] font-semibold" style={{ color: C.ink }}>AI drafting {s.aiOn ? "on" : "off"}</div>
+          <div className="text-[11px] leading-snug" style={{ color: C.muted }}>
+            {s.aiOn ? "Operators see Draft with AI and their draft count." : "Operators see only Drukpah's free builder. Turn on once the drukpah-draft function and API key are set up."}
+          </div>
+        </div>
+        <button type="button" onClick={() => setS({ ...s, aiOn: !s.aiOn })} role="switch" aria-checked={s.aiOn} aria-label="AI drafting"
+          className="tap shrink-0 w-12 h-7 rounded-full relative" style={{ background: s.aiOn ? C.pine : C.line }}>
+          <span className="absolute top-0.5 w-6 h-6 rounded-full" style={{ background: "#FFFFFF", left: s.aiOn ? 22 : 2, transition: "left .15s" }} />
+        </button>
+      </div>
+      <label className="block mb-3">
+        <span className="block text-[12px] font-medium mb-1" style={{ color: C.ink }}>Free drafts per operator per month</span>
+        <input type="number" min={0} max={500} value={s.free} onChange={(e) => setS({ ...s, free: Math.max(0, Number(e.target.value) || 0) })}
+          className="w-full h-10 px-3 rounded-lg text-[14px]" style={{ ...field, background: C.card }} />
+      </label>
+      <label className="block mb-3">
+        <span className="block text-[12px] font-medium mb-1" style={{ color: C.ink }}>Prices and how to pay <span style={{ color: C.muted }}>· operators see this</span></span>
+        <textarea value={s.note} onChange={(e) => setS({ ...s, note: e.target.value })} rows={4} maxLength={600}
+          className="w-full px-3 py-2.5 rounded-lg text-[13px] resize-none" style={{ ...field, background: C.card }} />
+      </label>
+      <label className="block mb-3">
+        <span className="block text-[12px] font-medium mb-1" style={{ color: C.ink }}>Account to pay into</span>
+        <textarea value={s.account} onChange={(e) => setS({ ...s, account: e.target.value })} rows={2} maxLength={300}
+          placeholder="e.g. Bank of Bhutan 2001 0000 0000 · Ugyen Singye · mBoB 17 12 34 56"
+          className="w-full px-3 py-2.5 rounded-lg text-[13px] resize-none" style={{ ...field, background: C.card }} />
+      </label>
+      <button type="button" onClick={() => onSave(s)} disabled={busy} className="tap w-full h-10 rounded-lg text-[13px] font-semibold"
+        style={{ background: C.pine, color: "#FFFFFF" }}>{busy ? <Loader2 size={14} className="animate-spin" /> : "Save"}</button>
+    </div>
+  );
+}
+
+/* on an operator's card in Users: add drafts directly (a payment made outside a request) */
+function AdminAddDrafts({ adminId, operator, onClose, onDone }) {
+  const [amount, setAmount] = useState(50);
+  const [status, setStatus] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  useEffect(() => {
+    if (!CLOUD) return;
+    supabase.rpc("drukpah_credit_status", { p_user: operator.id }).then(({ data }) => { if (data) setStatus(data); });
+  }, [operator.id]);
+  const go = async () => {
+    setBusy(true); setErr(null);
+    const res = await dkReleaseCredits({ adminId, operatorId: operator.id, amount, reason: "pack" });
+    setBusy(false);
+    if (!res.ok) { setErr("Couldn't add drafts — " + res.reason); return; }
+    onDone && onDone(amount); onClose();
+  };
+  return createPortal((
+    <div className="fixed inset-0 flex items-end" style={{ background: "rgba(8,10,8,.55)", zIndex: 235 }} onClick={onClose}>
+      <div className="w-full rounded-t-3xl safe-bottom p-5" style={{ background: C.card }} onClick={(e) => e.stopPropagation()}>
+        <div className="w-10 h-1 rounded-full mx-auto mb-4" style={{ background: C.line }} />
+        <div className="text-[17px] font-semibold" style={{ color: C.ink }}>Add AI drafts for {operator.name}</div>
+        <p className="text-[13px] mt-1" style={{ color: C.muted }}>
+          {status ? `Now: ${status.free_left} free left this month · ${Math.max(0, Number(status.purchased) || 0)} purchased` : "Loading their balance…"}
+        </p>
+        <div className="flex gap-2 mt-4 mb-4">
+          {DK_PACKS.map((n) => <Chip key={n} on={amount === n} onClick={() => setAmount(n)}>{n}</Chip>)}
+        </div>
+        {err && <p className="text-[13px] mb-3" style={{ color: C.maroon }}>{err}</p>}
+        <button type="button" onClick={go} disabled={busy} className="tap w-full h-12 rounded-xl text-[15px] font-semibold"
+          style={{ background: C.pine, color: "#FFFFFF" }}>{busy ? <Loader2 size={18} className="animate-spin" /> : `Add ${amount} drafts`}</button>
+      </div>
+    </div>
+  ), document.body);
 }
