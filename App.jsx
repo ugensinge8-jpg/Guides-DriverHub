@@ -34,7 +34,7 @@ const profileToTalent = (p) => ({
   id: p.id, role: p.role, name: p.full_name || "Member", base: p.base || "",
   initials: initialsOf(p.full_name || "?"), years: p.years || 0, trips: 0, rating: null,
   verified: p.license_status === "verified", licenseStatus: p.license_status || "none",
-  licenseNumber: p.license_number || null, licenseExpiry: p.license_expiry || null,
+  licenseNumber: p.license_number || null, licenseExpiry: p.license_expiry || null, licensePhoto: !!p.license_path,
   grades: {}, tags: Array.isArray(p.tags) ? p.tags : [],
   languages: Array.isArray(p.languages) ? p.languages : [],
   phone: p.phone || "", email: p.email || "", pitch: p.pitch || "", vehicle: p.vehicle || null,
@@ -49,7 +49,7 @@ const sysMsg = (text) => ({ id: uid(), senderId: null, kind: "system", body: tex
 /* ── Cloud (Supabase) ── posts are global when configured; everything falls back to local demo mode when not. */
 const CLOUD = Boolean(supabase);
 const DEMO_MODE = false;   // set true only for local demos without a database
-const BUILD = "BUILD 20 — 3 Oct";   // bump every deploy; shown at the top of the welcome screen
+const BUILD = "BUILD 23 — 3 Oct";   // bump every deploy; shown at the top of the welcome screen
 // which device someone is on — shown beside the build so a screenshot tells us both
 const DEVICE = (() => {
   try {
@@ -525,6 +525,91 @@ export default function App() {
   const user = realUser || (DEMO_MODE ? ACCOUNTS.find((a) => a.id === accountId) : null) || null;
   realUserRef.current = user ? (user.talentId || user.id) : null;
 
+  // ── crew invitations ──────────────────────────────────────────────────────
+  const [invites, setInvites] = useState([]);
+  const [inviteToken, setInviteToken] = useState(() => {
+    try {
+      const fromUrl = new URLSearchParams(window.location.search).get("invite");
+      if (fromUrl) {
+        localStorage.setItem("bth_invite", fromUrl);
+        window.history.replaceState(null, "", window.location.pathname);   // keep the address bar clean
+        return fromUrl;
+      }
+      return localStorage.getItem("bth_invite");
+    } catch (e) { return null; }
+  });
+  const [invitePreview, setInvitePreview] = useState(null);
+  const rowToInvite = (r) => ({
+    id: r.id, token: r.token, tripId: r.trip_id, operatorId: r.operator_id, role: r.role,
+    name: r.invitee_name, phone: r.invitee_phone, talentId: r.talent_id, status: r.status,
+    tripTitle: r.trip_title || "a trip", tripStart: r.trip_start, tripEnd: r.trip_end, operatorName: r.operator_name,
+    createdAt: r.created_at ? new Date(r.created_at).getTime() : Date.now(),
+    respondedAt: r.responded_at ? new Date(r.responded_at).getTime() : null,
+  });
+  const fetchInvites = async () => {
+    if (!CLOUD || !realUserRef.current) return;
+    const { data, error } = await supabase.from("crew_invites").select("*").order("created_at", { ascending: false });
+    if (error) { console.warn("crew_invites:", error.message); return; }
+    setInvites((data || []).map(rowToInvite));
+  };
+  const inviteMe = user ? (user.talentId || user.id) : null;
+  const inviteKind = user ? user.kind : null;
+  useEffect(() => {
+    if (!CLOUD || !inviteMe) { setInvites([]); return; }
+    fetchInvites();
+    const ch = supabase.channel("crew-invites-live")
+      .on("postgres_changes", { event: "*", schema: "public", table: "crew_invites" }, fetchInvites)
+      .subscribe();
+    return () => { supabase.removeChannel(ch); };
+  }, [inviteMe]);
+  // before they sign up: who invited them, and to what
+  useEffect(() => {
+    if (!CLOUD || !inviteToken || inviteMe) return;
+    supabase.rpc("preview_crew_invite", { p_token: inviteToken }).then(({ data, error }) => {
+      if (!error && data) setInvitePreview(data);
+    });
+  }, [inviteToken, inviteMe]);
+  // once signed in as a guide or driver: the invitation becomes theirs
+  useEffect(() => {
+    if (!CLOUD || !inviteToken || !inviteMe) return;
+    const forget = () => { try { localStorage.removeItem("bth_invite"); } catch (e) {} setInviteToken(null); setInvitePreview(null); };
+    if (inviteKind !== "guide" && inviteKind !== "driver") { forget(); return; }
+    supabase.rpc("claim_crew_invite", { p_token: inviteToken }).then(({ error }) => {
+      if (error) console.warn("claim_crew_invite:", error.message);
+      forget(); fetchInvites();
+    });
+  }, [inviteToken, inviteMe, inviteKind]);
+
+  const createInvite = async ({ trip, role, name, phone, talentId }) => {
+    const me = realUserRef.current;
+    if (!CLOUD || !me || !trip) return { ok: false, reason: "not signed in" };
+    const row = {
+      token: makeReviewToken(), trip_id: trip.id, operator_id: me, role,
+      invitee_name: String(name || "").trim(), invitee_phone: String(phone || "").trim() || null,
+      talent_id: talentId || null, status: talentId ? "pending" : "invited",
+      trip_title: trip.title || null, trip_start: trip.start || null, trip_end: trip.end || null,
+      operator_name: (PROFILE_DIR[me] && PROFILE_DIR[me].name) || trip.operator || null,
+    };
+    const { error } = await supabase.from("crew_invites").insert(row);
+    if (error) { console.error("createInvite failed:", error.message); return { ok: false, reason: error.message }; }
+    fetchInvites();
+    const invite = rowToInvite({ ...row, id: "new", created_at: new Date().toISOString() });
+    return { ok: true, token: row.token, link: `${window.location.origin}/?invite=${row.token}`, invite };
+  };
+  const cancelInvite = async (id) => {
+    if (!CLOUD) return;
+    const { error } = await supabase.from("crew_invites").update({ status: "cancelled" }).eq("id", id);
+    if (error) console.error("cancelInvite failed:", error.message);
+    fetchInvites();
+  };
+  const respondInvite = async (id, accept) => {
+    if (!CLOUD) return { ok: false };
+    const { data, error } = await supabase.rpc("respond_crew_invite", { p_id: id, p_accept: accept });
+    if (error) return { ok: false, reason: error.message };
+    fetchInvites(); fetchTrips();
+    return { ok: true, status: data && data.status };
+  };
+
   const fetchPosts = async () => {
     if (!CLOUD) return;
     const { data, error } = await supabase.from("posts").select("*").order("created_at", { ascending: false });
@@ -935,38 +1020,59 @@ export default function App() {
         textarea:focus, input:focus{ outline:none; border-color:${C.pine}!important; box-shadow:0 0 0 3px ${C.pine}1f; }
         textarea::placeholder, input::placeholder{ color:${C.muted}; opacity:.7; }
 
-        /* phone first: a single column */
-        .app-shell{ max-width: 28rem; }
-        .side-rail{ display:none; }
+        /* ── layout: one source of truth for every screen size ─────────────── */
+        /* always exactly screen-height: dvh where the browser supports it, vh where it doesn't */
+        .app-shell{ height: 100vh; height: 100dvh; width: 100%; max-width: 28rem; }
+        .side-rail{ display: none; }
+        /* header + content + bottom bar, as a column at EVERY width; min-height:0 lets content scroll */
+        .main-col{ flex: 1 1 0%; min-height: 0; min-width: 0; display: flex; flex-direction: column; }
+        button, select, label[for]{ cursor: pointer; }
+        /* pop-up sheets and the story viewer always sit ABOVE the bottom bar (layer 240),
+           so their last button can never be trapped underneath it */
+        .fixed.inset-0.items-end{ z-index: 260 !important; }
+        .story-viewer{ z-index: 255 !important; }
+        button:disabled{ cursor: default; }
 
-        /* desktop: a side rail appears and the bottom bar steps aside */
+        /* tablets: the whole width, content at a readable measure */
+        @media (min-width: 640px){
+          .app-shell.signed-in{ max-width: none; }
+          .signed-in .content-pad{ max-width: 640px; margin: 0 auto; width: 100%; }
+        }
+
+        /* landscape tablets, laptops, desktops: full screen, navigation at the side */
         @media (min-width: 900px){
-          .app-shell{
-            max-width: 1180px;
-            flex-direction: row !important;
-            gap: 0;
-            background: ${C.bg};
+          .app-shell.signed-in{ flex-direction: row !important; }
+          .signed-in .side-rail{
+            display: flex; flex-direction: column;
+            width: 232px; flex: 0 0 232px; height: 100%;
+            background: ${C.card}; border-right: 1px solid ${C.line};
+            padding: 18px 12px; overflow-y: auto;
           }
-          .side-rail{
-            display:flex; flex-direction:column;
-            width: 232px; flex: 0 0 232px;
-            background: ${C.card};
-            border-right: 1px solid ${C.line};
-            padding: 18px 12px;
-            overflow-y: auto;
-          }
-          .main-col{ flex:1; min-width:0; display:flex; flex-direction:column; }
-          .bottom-bar{ display:none !important; }
-          .content-pad{ max-width: 720px; margin: 0 auto; width: 100%; }
+          .bottom-bar, .hide-wide{ display: none !important; }
+          .signed-in .content-pad{ max-width: 760px; }
+          .signed-in .topbar{ justify-content: center; padding-left: 24px; padding-right: 24px; }
+          .signed-in .topbar > .flex-1{ max-width: 760px; }
+          /* sheets become centred dialogs, not full-width drawers */
+          .fixed.inset-0.items-end{ align-items: center !important; justify-content: center; padding: 24px; }
+          .fixed.inset-0.items-end > .rounded-t-3xl{ max-width: 560px; border-radius: 24px !important; }
+          /* full-screen views keep the rail visible and centre their content */
+          .post-detail{ left: 232px !important; padding-bottom: 0 !important; }
+          .post-detail > .overflow-y-auto > *{ max-width: 760px; margin-left: auto; margin-right: auto; }
+          .story-viewer > div{ max-width: 460px; width: 100%; margin: 0 auto; }
+        }
+        @media (min-width: 1440px){
+          .signed-in .content-pad{ max-width: 840px; }
         }
       `}</style>
 
-      <div className="w-full app-shell flex flex-col" style={{ height: "100dvh", color: C.ink }}>
+      <div className={`app-shell flex flex-col${user ? " signed-in" : ""}`} style={{ color: C.ink }}>
         {!user ? (
-          <Login onPick={setAccountId} session={session} myProfile={myProfile} onAuthed={reloadMe} onBusy={setAuthBusy} />
+          <Login onPick={setAccountId} session={session} myProfile={myProfile} onAuthed={reloadMe} onBusy={setAuthBusy} invitePreview={invitePreview} />
         ) : (
+          <InvitesCtx.Provider value={{ invites }}>
           <Shell key={user.id} user={user} posts={posts} jobs={jobs} trips={trips} listings={listings} enquiries={enquiries} dirTick={dirTick}
-            actions={{ addPost, approve, reject, deletePost, reloadDirectory: loadProfiles, setAvailability, toggleFollow, sendJob, setJobStatus, postChat, openChat, postListing, applyToListing, setApplicant, hireApplicant, saveEnquiry, setEnquiryStatus, convertEnquiry, reloadTrips: fetchTrips, binListing, destroyListing, binRequest, destroyRequest, saveTripDetails }} engagement={{ likes, comments, toggleLike, addComment, deleteComment, follows, toggleFollow, stories, addStory, deleteStory }} dm={{ dms, sendDm, markRead, sharePostTo }} onLogout={() => { if (session) supabase.auth.signOut(); setAccountId(null); }} />
+            actions={{ addPost, approve, reject, deletePost, reloadDirectory: loadProfiles, setAvailability, toggleFollow, sendJob, setJobStatus, postChat, openChat, postListing, applyToListing, setApplicant, hireApplicant, saveEnquiry, setEnquiryStatus, convertEnquiry, reloadTrips: fetchTrips, binListing, destroyListing, binRequest, destroyRequest, saveTripDetails, createInvite, cancelInvite, respondInvite }} engagement={{ likes, comments, toggleLike, addComment, deleteComment, follows, toggleFollow, stories, addStory, deleteStory }} dm={{ dms, sendDm, markRead, sharePostTo }} onLogout={() => { if (session) supabase.auth.signOut(); setAccountId(null); }} />
+          </InvitesCtx.Provider>
         )}
       </div>
     </div>
@@ -975,13 +1081,13 @@ export default function App() {
 }
 
 /* ================================ Welcome ================================= */
-function Login({ onPick, session, myProfile, onAuthed, onBusy }) {
+function Login({ onPick, session, myProfile, onAuthed, onBusy, invitePreview }) {
   const [authView, setAuthView] = useState(null);
   useEffect(() => { onBusy && onBusy(!!authView); return () => onBusy && onBusy(false); }, [authView]);
   if (authView) {
     return (
       <div className="flex-1 overflow-y-auto hidescroll fade" style={{ scrollbarWidth: "none" }}>
-        <Onboard mode={authView} session={session}
+        <Onboard mode={authView} session={session} invite={invitePreview}
           onBack={() => { setAuthView(null); onBusy && onBusy(false); }}
           onDone={() => { onBusy && onBusy(false); setAuthView(null); onAuthed(); }} />
       </div>
@@ -999,6 +1105,23 @@ function Login({ onPick, session, myProfile, onAuthed, onBusy }) {
             <div className="text-[10px] font-semibold tracking-[.14em] uppercase mt-1.5" style={{ color: C.goldText }}>Guides · Drivers · Operators</div>
           </div>
         </div>
+
+        {invitePreview && (
+          <div className="mt-5 rounded-2xl p-4" style={{ background: C.pineSoft, border: `1px solid ${C.pine}22` }}>
+            <div className="text-[11px] font-semibold tracking-[.12em] uppercase" style={{ color: C.pine }}>You've been invited</div>
+            <div className="text-[15px] font-semibold mt-1 leading-snug" style={{ color: C.ink }}>
+              {invitePreview.operator} wants you as <span className="capitalize">{invitePreview.role}</span> for “{invitePreview.trip}”
+            </div>
+            {invitePreview.start && (
+              <div className="text-[13px] mt-0.5" style={{ color: C.muted }}>
+                {fmtDate(invitePreview.start)}{invitePreview.end ? ` – ${fmtDate(invitePreview.end)}` : ""}
+              </div>
+            )}
+            <div className="text-[13px] mt-2 leading-snug" style={{ color: C.pine }}>
+              Join the hub, add your licence and profile, then accept the trip.
+            </div>
+          </div>
+        )}
 
         <div className="mt-5">
           <div className="inline-flex items-center gap-2 rounded-full pl-2.5 pr-3 py-1.5" style={{ background: C.goldSoft }}>
@@ -1048,12 +1171,14 @@ function Login({ onPick, session, myProfile, onAuthed, onBusy }) {
   );
 }
 
-/* The dzong mark — one source for the logo, wherever it appears */
+/* The dzong mark — drawn in code, so the logo never depends on a file loading */
 function BrandMark({ size = 40, label = "", className = "" }) {
   return (
-    <img src="/icon-192.png" alt={label} width={size} height={size} draggable="false"
-      className={`shrink-0 select-none ${className}`}
-      style={{ width: size, height: size, display: "block" }} />
+    <svg viewBox="0 0 1024 1024" width={size} height={size} role={label ? "img" : undefined}
+      aria-label={label || undefined} aria-hidden={label ? undefined : "true"}
+      className={`shrink-0 select-none ${className}`} style={{ width: size, height: size, display: "block" }}>
+      <defs> <linearGradient id="bthMarkBg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="#2A4A38"/><stop offset="1" stopColor="#14241A"/></linearGradient> </defs> <rect width="1024" height="1024" rx="228" fill="url(#bthMarkBg)"/> <polygon points="255.8,821.88 768.2,821.88 734.04,504.68 289.96,504.68" fill="#F2EADB"/> <polygon points="512,821.88 768.2,821.88 734.04,504.68 512,504.68" fill="#DCD0BA"/> <polygon points="289.96,504.68 734.04,504.68 742.58,577.88 281.42,577.88" fill="#8E3B2C"/> <polygon points="233.84,504.68 790.16,504.68 695,433.92 329,433.92" fill="#D6A23E"/> <polygon points="512,504.68 790.16,504.68 695,433.92 512,433.92" fill="#B6852D"/> <rect x="399.76" y="370.48" width="224.48" height="63.44" rx="0" fill="#8E3B2C"/> <polygon points="355.84,370.48 668.16,370.48 592.52,314.36 431.48,314.36" fill="#D6A23E"/> <polygon points="512,370.48 668.16,370.48 592.52,314.36 512,314.36" fill="#B6852D"/> <rect x="485.16" y="272.88" width="53.68" height="41.48" rx="0" fill="#D6A23E"/> <polygon points="477.84,277.76 546.16,277.76 512,189.92" fill="#D6A23E"/>
+    </svg>
   );
 }
 
@@ -1067,6 +1192,7 @@ const NAV = {
 const DEFAULT_TAB = { guide: "post", driver: "post", operator: "bookings", admin: "review" };
 
 function Shell({ user, posts, jobs, trips, listings, enquiries, actions, engagement, dm, dirTick, onLogout }) {
+  const { invites: crewInvites } = React.useContext(InvitesCtx);
   const [tab, setTab] = useState(DEFAULT_TAB[user.kind]);
   const [overlay, setOverlay] = useState(null); // {type:'profile'|'request', talentId}
   const [dmWith, setDmWith] = useState(null);
@@ -1148,6 +1274,14 @@ function Shell({ user, posts, jobs, trips, listings, enquiries, actions, engagem
         add({ id: `new-${p.id}`, kind: "joined", who: p.id, text: roleLabel(p.role), ts: p.joinedAt });
     });
 
+    /* ---- Crew invitations ---- */
+    (crewInvites || []).forEach((inv) => {
+      if (inv.talentId === actorId && inv.status === "pending")
+        add({ id: `crew-${inv.id}`, kind: "crewRequest", who: null, text: `${inv.operatorName || "An operator"} · ${inv.tripTitle}`, ts: inv.createdAt, urgent: true });
+      if (inv.operatorId === actorId && inv.status === "accepted" && inv.respondedAt && Date.now() - inv.respondedAt < 7 * 86400e3)
+        add({ id: `crewjoin-${inv.id}`, kind: "crewJoined", who: inv.talentId, text: inv.tripTitle, ts: inv.respondedAt });
+    });
+
     /* ---- Reminders about your own account ---- */
     const me = PROFILE_DIR[actorId];
     const DAY = 86400e3;
@@ -1227,7 +1361,7 @@ function Shell({ user, posts, jobs, trips, listings, enquiries, actions, engagem
 
     return out.sort((a, b) => (b.ts || 0) - (a.ts || 0)).slice(0, 50);
     } catch (e) { console.error('alertItems failed:', e); return []; }
-  }, [dm?.dms, engagement?.likes, engagement?.comments, engagement?.follows, jobs, listings, posts, trips, actorId, dirTick, user.licenseStatus]);
+  }, [dm?.dms, engagement?.likes, engagement?.comments, engagement?.follows, jobs, listings, posts, trips, actorId, dirTick, user.licenseStatus, crewInvites]);
 
   // notify the device when something new arrives
   useEffect(() => {
@@ -1269,7 +1403,7 @@ function Shell({ user, posts, jobs, trips, listings, enquiries, actions, engagem
       <TopBar user={user} onLogout={onLogout} alerts={alertItems.length} onOpenAlerts={() => setAlertsOpen(true)}
         onSearch={(term) => { setOverlay(null); setTab(user.kind === "operator" ? "discover" : "post"); setSearchTerm(term); }} />
 
-      <div className="flex-1 overflow-y-auto hidescroll" style={{ scrollbarWidth: "none" }}>
+      <div className="flex-1 min-h-0 overflow-y-auto hidescroll" style={{ scrollbarWidth: "none" }}>
         <div className="content-pad">
         <VerifyBanner user={user} />
         {overlay ? (
@@ -1291,7 +1425,7 @@ function Shell({ user, posts, jobs, trips, listings, enquiries, actions, engagem
             {tab === "jobs" && <JobsHub user={user} jobs={jobs} listings={listings} actions={actions} />}
             {tab === "trips" && <TripsTab user={user} trips={trips} actions={actions} />}
             {tab === "chats" && <ChatsTab user={user} me={actorId} dm={dm} trips={trips} actions={actions} posts={posts} dirTick={dirTick} onOpenPost={setSharedPost} openWith={dmWith} onOpened={() => setDmWith(null)} onOpenProfile={openProfile} />}
-            {tab === "profile" && <TalentProfile talent={talentById(user.talentId)} posts={posts} eng={eng} self onSetAvailability={actions.setAvailability} onOpenProfile={openProfile} onBack={null} />}
+            {tab === "profile" && <TalentProfile talent={talentById(user.talentId)} posts={posts} eng={eng} self onSetAvailability={actions.setAvailability} onProfileSaved={actions.reloadDirectory} onOpenProfile={openProfile} onBack={null} />}
             {tab === "bookings" && <BookingsTab user={user} enquiries={enquiries} trips={trips} actions={actions} onOpenProfile={openProfile} />}
             {tab === "itinerary" && <QuickItinerary user={user} trips={trips} actions={actions} />}
             {tab === "discover" && <Discover onOpen={openProfile} initialQuery={searchTerm} dirTick={dirTick} />}
@@ -1347,8 +1481,8 @@ function TopBar({ user, onLogout, onSearch, alerts, onOpenAlerts }) {
   const submit = () => { const t = q.trim(); if (t && onSearch) onSearch(t); };
 
   return (
-    <div className="shrink-0 flex items-center gap-2 px-2.5" style={{ height: "calc(56px + var(--sa-top))", paddingTop: "var(--sa-top)", background: C.bg, borderBottom: `1px solid ${C.lineSoft}` }}>
-      <BrandMark size={34} label="Bhutan Tourism Hub" />
+    <div className="topbar shrink-0 flex items-center gap-2 px-2.5" style={{ height: "calc(56px + var(--sa-top))", paddingTop: "var(--sa-top)", background: C.bg, borderBottom: `1px solid ${C.lineSoft}` }}>
+      <BrandMark size={34} label="Bhutan Tourism Hub" className="hide-wide" />
 
       <div className="relative flex-1 min-w-0">
         <Search size={15} color={C.muted} className="absolute left-3 top-1/2 -translate-y-1/2" />
@@ -1358,7 +1492,7 @@ function TopBar({ user, onLogout, onSearch, alerts, onOpenAlerts }) {
           style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }} />
       </div>
 
-      <button onClick={onOpenAlerts} className="tap relative w-9 h-9 rounded-full flex items-center justify-center shrink-0"
+      <button onClick={onOpenAlerts} className="hide-wide tap relative w-9 h-9 rounded-full flex items-center justify-center shrink-0"
         style={{ border: `1px solid ${C.line}`, background: C.card }} aria-label="Notifications">
         <Bell size={16} color={C.ink} />
         {alerts > 0 && (
@@ -1367,7 +1501,7 @@ function TopBar({ user, onLogout, onSearch, alerts, onOpenAlerts }) {
         )}
       </button>
 
-      <button onClick={onLogout} className="tap w-9 h-9 rounded-full flex items-center justify-center shrink-0"
+      <button onClick={onLogout} className="hide-wide tap w-9 h-9 rounded-full flex items-center justify-center shrink-0"
         style={{ border: `1px solid ${C.line}`, background: C.card }} aria-label="Sign out">
         <LogOut size={15} color={C.muted} />
       </button>
@@ -1390,7 +1524,7 @@ function BottomNav({ nav, tab, setTab, badges }) {
   const scrolls = nav.length > 5;
 
   return (
-    <div className="shrink-0 safe-bottom" style={{ background: C.card, borderTop: `1px solid ${C.line}`, position: "relative", zIndex: 240 }}>
+    <div className="bottom-bar shrink-0 safe-bottom" style={{ background: C.card, borderTop: `1px solid ${C.line}`, position: "relative", zIndex: 240 }}>
       <div ref={ref}
         className={scrolls ? "flex overflow-x-auto hidescroll" : "flex"}
         style={{ scrollbarWidth: "none", WebkitOverflowScrolling: "touch" }}>
@@ -1398,7 +1532,7 @@ function BottomNav({ nav, tab, setTab, badges }) {
           const on = tab === n.id;
           const badge = badges[n.id] || 0;
           return (
-            <button key={n.id} data-on={on ? "1" : "0"} onClick={() => setTab(n.id)}
+            <button key={n.id} data-tab={n.id} data-on={on ? "1" : "0"} onClick={() => setTab(n.id)}
               className="tap py-2.5 flex flex-col items-center gap-1 relative shrink-0"
               style={{ flex: scrolls ? "0 0 76px" : "1 1 0", minWidth: scrolls ? 76 : 0 }}>
               <div className="relative">
@@ -2094,7 +2228,7 @@ function ModCard({ post, onApprove, onReject, eng }) {
 }
 
 /* ============================= Talent profile ============================ */
-function TalentProfile({ talent, posts, canRequest, self, contactOnly, eng, onRequest, onMessage, onSetAvailability, onOpenProfile, onBack }) {
+function TalentProfile({ talent, posts, canRequest, self, contactOnly, eng, onRequest, onMessage, onSetAvailability, onOpenProfile, onBack, onProfileSaved }) {
   const t = talent;
   const live = posts.filter((p) => p.talentId === t.id && p.status === "approved").length;
   const located = posts.filter((p) => p.talentId === t.id && p.status === "approved" && p.location);
@@ -2179,6 +2313,7 @@ function TalentProfile({ talent, posts, canRequest, self, contactOnly, eng, onRe
 
       <div className="px-5">
         {self && t.role !== "operator" && <AvailabilityEditor talent={t} onSet={onSetAvailability} />}
+        {self && t.role !== "operator" && <ProfileSetupCard talent={t} onSaved={onProfileSaved} />}
 
         <ProfileTabs
           cv={
@@ -2419,6 +2554,7 @@ function TripsTab({ user, trips, actions }) {
   return (
     <div className="px-5 py-4">
       <SectionLabel trailing={`${mine.length}`}>Trips</SectionLabel>
+      <CrewRequests user={user} actions={actions} />
 
       <div className="flex gap-2 mb-4">
         <Chip on={view === "upcoming"} onClick={() => setView("upcoming")}>Upcoming · {upcoming.length}</Chip>
@@ -2533,6 +2669,8 @@ function TripHub({ user, meId, trip, actions, onBack }) {
             </div>
           ))}
         </div>
+
+        {!isTalent && <CrewInvites trip={trip} actions={actions} />}
 
         {!isTalent && (
           <div className="mb-5">
@@ -3186,7 +3324,9 @@ function BhutanMap({ value, onPick, readOnly, pins, showMeta }) {
         onTouchStart={startPress} onTouchMove={movePress} onTouchEnd={endPress}
         onMouseDown={startPress} onMouseMove={movePress} onMouseUp={endPress} onMouseLeave={endPress}
         className="relative rounded-xl overflow-hidden select-none"
-        style={{ aspectRatio: BT_MAP_AR, background: "#eef1ee", cursor: readOnly ? "default" : "crosshair", touchAction: "none" }}>
+        style={{ aspectRatio: BT_MAP_AR, background: "#eef1ee", cursor: readOnly ? "default" : "crosshair",
+                 // a display map lets swipes scroll the page until someone zooms in; a picker keeps every touch
+                 touchAction: readOnly && zoom === 1 ? "pan-y" : "none" }}>
 
         <div className="absolute inset-0" style={{
           transform: `scale(${zoom})`, transformOrigin: `${origin.x}% ${origin.y}%`,
@@ -3504,7 +3644,7 @@ function PostDetail({ items, index, author, eng, onShareStory, onClose }) {
   }, []);
 
   return createPortal((
-    <div className="fixed inset-0 flex flex-col" style={{ background: C.bg, zIndex: 200, height: "100dvh", paddingBottom: "calc(62px + var(--sa-bottom))" }}>
+    <div className="post-detail fixed inset-0 flex flex-col" style={{ background: C.bg, zIndex: 200, height: "100dvh", paddingBottom: "calc(62px + var(--sa-bottom))" }}>
       <div ref={scroller} className="flex-1 overflow-y-auto hidescroll" style={{ scrollbarWidth: "none" }}>
         <div className="h-14 px-3 flex items-center gap-3" style={{ background: C.card, borderBottom: `1px solid ${C.line}` }}>
           <button onClick={onClose} className="tap w-9 h-9 rounded-full flex items-center justify-center" style={{ border: `1px solid ${C.line}` }} aria-label="Back">
@@ -3878,15 +4018,16 @@ function OCta({ children, onClick, disabled, busy }) {
   );
 }
 
-function Onboard({ mode: initialMode, session, onBack, onDone }) {
+function Onboard({ mode: initialMode, session, onBack, onDone, invite }) {
   const [mode, setMode] = useState(initialMode);
   const signin = mode === "signin";
-  const [step, setStep] = useState(signin ? "auth" : "role");
+  // invited as a guide or driver? their role is already decided — start at their details
+  const [step, setStep] = useState(signin ? "auth" : (invite && (invite.role === "guide" || invite.role === "driver") ? "about" : "role"));
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
   const [uid, setUid] = useState(session?.user?.id || null);
-  const [role, setRole] = useState(null);
-  const [name, setName] = useState("");
+  const [role, setRole] = useState(invite && (invite.role === "guide" || invite.role === "driver") ? invite.role : null);
+  const [name, setName] = useState((invite && invite.name) || "");
   const [phone, setPhone] = useState("");
   const [base, setBase] = useState("");
   const [company, setCompany] = useState("");
@@ -5101,7 +5242,7 @@ function StoryViewer({ stories, author, canDelete, onDelete, onClose }) {
   };
 
   return createPortal((
-    <div className="fixed inset-0 flex flex-col" style={{ background: "#08090880", backdropFilter: "blur(2px)", WebkitBackdropFilter: "blur(2px)", zIndex: 220 }}>
+    <div className="story-viewer fixed inset-0 flex flex-col" style={{ background: "#08090880", backdropFilter: "blur(2px)", WebkitBackdropFilter: "blur(2px)", zIndex: 220 }}>
       <div className="flex-1 flex flex-col" style={{ background: "#0b0d0b" }}>
         <div className="flex gap-1 px-3 pt-3">
           {stories.map((_, k) => (
@@ -5264,6 +5405,8 @@ function AlertsSheet({ items, onClose, onOpenProfile, onOpenMessages, onOpenJobs
     askReview:       { Icon: Star,        bg: C.goldSoft,   fg: C.goldText, verb: "Ask your guests for a review", self: true },
     briefMissing:    { Icon: ShieldAlert, bg: C.goldSoft,   fg: C.goldText, verb: "Flight details not set yet", self: true },
     profileThin:     { Icon: User,        bg: C.goldSoft,   fg: C.goldText, verb: "Finish your profile", self: true },
+    crewRequest:     { Icon: UserPlus,    bg: C.pineSoft,   fg: C.pine,     verb: "You've been asked to join a crew", self: true },
+    crewJoined:      { Icon: Check,       bg: C.pineSoft,   fg: C.pine,     verb: "joined your crew" },
     official:        { Icon: ShieldCheck, bg: C.pineSoft,   fg: C.pine,    verb: "Message from Bhutan Tourism Hub" },
   };
 
@@ -5314,7 +5457,7 @@ function AlertsSheet({ items, onClose, onOpenProfile, onOpenMessages, onOpenJobs
                     const go = () => {
                       if (a.kind === "message" || a.kind === "share" || a.kind === "official") return onOpenMessages();
                       if (a.kind === "job" || a.kind === "listing" || a.kind === "applicant") return onOpenJobs();
-                      if (a.kind === "tripSoon" || a.kind === "askReview") return onOpenTrips && onOpenTrips();
+                      if (a.kind === "tripSoon" || a.kind === "askReview" || a.kind === "crewRequest") return onOpenTrips && onOpenTrips();
                       if (m.self) return onOpenSelf && onOpenSelf();
                       if (p) return onOpenProfile(a.who);
                     };
@@ -5500,9 +5643,35 @@ function Tutorial({ user, nav, setTab, onDone }) {
   const next = () => { if (i < steps.length - 1) setI(i + 1); else onDone(); };
   const back = () => { if (i > 0) setI(i - 1); };
 
-  const tabCount = nav.length;
-  const highlightLeft = navIndex >= 0 ? `${(navIndex / tabCount) * 100}%` : null;
-  const highlightWidth = `${(1 / tabCount) * 100}%`;
+  // Measure where the tab really is — the side rail on wide screens, the bottom bar
+  // (which may be scrolled) on phones. Never assume a position: look it up.
+  const [ring, setRing] = useState(null);
+  useEffect(() => {
+    if (step.kind !== "tab") { setRing(null); return; }
+    let alive = true;
+    const visibleTab = () => Array.from(document.querySelectorAll(`[data-tab="${step.tab}"]`))
+      .find((e) => { const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0; });
+    const first = visibleTab();
+    if (first && first.scrollIntoView) { try { first.scrollIntoView({ block: "nearest", inline: "center" }); } catch (e) {} }
+    const measure = () => {
+      if (!alive) return;
+      const el = visibleTab();
+      if (!el) { setRing(null); return; }
+      const r = el.getBoundingClientRect();
+      setRing({ left: r.left, top: r.top, width: r.width, height: r.height });
+    };
+    measure();
+    const t1 = setTimeout(measure, 150), t2 = setTimeout(measure, 500);   // after any scroll settles
+    window.addEventListener("resize", measure);
+    return () => { alive = false; clearTimeout(t1); clearTimeout(t2); window.removeEventListener("resize", measure); };
+  }, [i]);
+  const vw = typeof window !== "undefined" ? window.innerWidth : 390;
+  const vh = typeof window !== "undefined" ? window.innerHeight : 844;
+  const cardPos =
+    step.kind === "tab" && ring && vw >= 900 ? { left: ring.left + ring.width + 20, top: Math.max(16, Math.min(ring.top - 24, vh - 360)), width: 380 }
+    : step.kind === "tab" && ring ? { left: 0, right: 0, padding: "0 20px", bottom: Math.max(16, vh - ring.top + 14) }
+    : step.kind === "top" ? { left: 0, right: 0, padding: "0 20px", top: 70 }
+    : { left: 0, right: 0, padding: "0 20px", top: "50%", transform: "translateY(-50%)" };
 
   return createPortal((
     <div className="fixed inset-0" style={{ zIndex: 250 }}>
@@ -5510,9 +5679,9 @@ function Tutorial({ user, nav, setTab, onDone }) {
       <div className="absolute inset-0" style={{ background: "rgba(8,10,8,.72)" }} onClick={next} />
 
       {/* ring around the tab being explained */}
-      {navIndex >= 0 && (
-        <div className="absolute" style={{ left: highlightLeft, width: highlightWidth, bottom: 0, height: 62, pointerEvents: "none" }}>
-          <div className="absolute inset-1 rounded-2xl" style={{ border: `2.5px solid ${C.gold}`, boxShadow: `0 0 0 4px ${C.gold}33`, background: "rgba(255,255,255,.10)" }} />
+      {ring && (
+        <div className="absolute" style={{ left: ring.left - 4, top: ring.top - 4, width: ring.width + 8, height: ring.height + 8, pointerEvents: "none" }}>
+          <div className="absolute inset-0 rounded-2xl" style={{ border: `2.5px solid ${C.gold}`, boxShadow: `0 0 0 4px ${C.gold}33`, background: "rgba(255,255,255,.10)" }} />
         </div>
       )}
 
@@ -5522,9 +5691,8 @@ function Tutorial({ user, nav, setTab, onDone }) {
       )}
 
       {/* card */}
-      <div className="absolute left-0 right-0 px-5" style={{ bottom: navIndex >= 0 ? 86 : "auto", top: step.kind === "top" ? 70 : "auto",
-        ...(step.kind === "intro" || step.kind === "outro" ? { top: "50%", transform: "translateY(-50%)" } : {}) }}>
-        <div className="rounded-2xl p-5" style={{ background: C.card, boxShadow: "0 20px 40px rgba(0,0,0,.35)" }}>
+      <div className="absolute" style={cardPos}>
+        <div className="rounded-2xl p-5" style={{ background: C.card, boxShadow: "0 20px 40px rgba(0,0,0,.35)", maxWidth: 420, margin: "0 auto" }}>
           {(step.kind === "intro" || step.kind === "outro") && (
             <BrandMark size={48} className="mb-3" />
           )}
@@ -8126,7 +8294,7 @@ function SideRail({ user, nav, tab, setTab, badges, alerts, onOpenAlerts, onLogo
       <div className="flex items-center gap-2.5 px-2 mb-5">
         <BrandMark size={40} />
         <div className="min-w-0">
-          <div className="text-[14px] font-semibold leading-tight truncate" style={{ color: C.ink }}>Bhutan Tourism Hub</div>
+          <div className="text-[14px] font-semibold leading-tight" style={{ color: C.ink }}>Bhutan Tourism Hub</div>
           <div className="text-[11px] font-semibold tracking-[.1em] uppercase mt-0.5" style={{ color: C.goldText }}>
             {user.kind === "admin" ? "Admin" : roleName}
           </div>
@@ -8139,7 +8307,7 @@ function SideRail({ user, nav, tab, setTab, badges, alerts, onOpenAlerts, onLogo
           const on = tab === n.id;
           const badge = badges[n.id] || 0;
           return (
-            <button key={n.id} onClick={() => setTab(n.id)}
+            <button key={n.id} data-tab={n.id} onClick={() => setTab(n.id)}
               className="tap w-full flex items-center gap-3 px-3 h-11 rounded-xl text-left"
               style={{ background: on ? C.pine : "transparent" }}>
               <n.Icon size={18} color={on ? C.goldSoft : C.muted} strokeWidth={on ? 2.3 : 2} />
@@ -8670,6 +8838,7 @@ function DkRouteMap({ plan }) {
 }
 
 function DrukpahEngine({ user, trips, actions, onApplied }) {
+  const topRef = useRef(null);
   const [f, setF] = useState({ nights: 7, exit: "paro", adults: 2, seniors: 0, kids: 0, under6: 0,
                                pace: "standard", culture: true, nature: true, hotel: "3", month: 0 });
   const [plan, setPlan] = useState(null);
@@ -8690,6 +8859,8 @@ function DrukpahEngine({ user, trips, actions, onApplied }) {
   const build = () => {
     if (people === 0) { setNote("Add at least one traveller."); return; }
     setPlan(dkPlan(f)); setEditing(false); setNote(null); setConfirmTrip(null);
+    // land at the top of the new plan, not wherever the button happened to be
+    setTimeout(() => { try { topRef.current && topRef.current.scrollIntoView({ block: "start", behavior: "smooth" }); } catch (e) {} }, 40);
   };
 
   const apply = async (trip) => {
@@ -8729,7 +8900,7 @@ function DrukpahEngine({ user, trips, actions, onApplied }) {
   };
 
   return (
-    <div>
+    <div ref={topRef} style={{ scrollMarginTop: 12 }}>
       {/* the engine's name, plainly */}
       <div className="flex items-center gap-3 mb-4">
         <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0" style={{ background: C.pine }}>
@@ -8941,6 +9112,506 @@ function DrukpahEngine({ user, trips, actions, onApplied }) {
           </p>
         </div>
       )}
+    </div>
+  );
+}
+
+
+/* ========================================================================== */
+/*  CREW ONBOARDING — profile editor, readiness, and trip invitations         */
+/* ========================================================================== */
+const InvitesCtx = React.createContext({ invites: [] });
+
+/* What a guide or driver needs before accepting a trip. This MUST match the
+   check in respond_crew_invite() — the database enforces it either way. */
+function crewReadiness(t, role) {
+  const r = role || (t && t.role);
+  const items = [
+    { key: "licence number", ok: !!(t && t.licenseNumber) },
+    { key: "licence photo", ok: !!(t && t.licensePhoto) },
+    { key: "specialities", ok: !!(t && (t.tags || []).length) },
+    { key: "languages", ok: !!(t && (t.languages || []).length) },
+  ];
+  if (r === "driver") items.push({ key: "vehicle", ok: !!(t && t.vehicle) });
+  return { items, ready: items.every((i) => i.ok), missing: items.filter((i) => !i.ok).map((i) => i.key) };
+}
+
+function ReadinessList({ readiness }) {
+  return (
+    <div className="space-y-1.5">
+      {readiness.items.map((i) => (
+        <div key={i.key} className="flex items-center gap-2 text-[13px]" style={{ color: i.ok ? C.ink : C.muted }}>
+          <span className="w-4 h-4 rounded-full flex items-center justify-center shrink-0"
+            style={{ background: i.ok ? C.pine : C.card, border: `1.5px solid ${i.ok ? C.pine : C.line}` }}>
+            {i.ok && <Check size={10} color="#FFFFFF" strokeWidth={3.4} />}
+          </span>
+          <span>{i.key.charAt(0).toUpperCase() + i.key.slice(1)}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/* ── the profile editor: licence, specialities, languages, vehicle, about ── */
+function ProfileEditor({ talent, onClose, onSaved }) {
+  const t = talent || {};
+  const isDriver = t.role === "driver";
+  const [f, setF] = useState({
+    licNumber: t.licenseNumber || "", licExpiry: t.licenseExpiry || "", base: t.base || "",
+    years: t.years || 0, pitch: t.pitch || "", phone: t.phone || "",
+    tags: t.tags || [], langs: t.languages || [], vehicle: t.vehicle || "",
+  });
+  const [photo, setPhoto] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const fileRef = useRef(null);
+  const set = (k, v) => setF((x) => ({ ...x, [k]: v }));
+  const toggle = (k, v) => setF((x) => ({ ...x, [k]: x[k].includes(v) ? x[k].filter((y) => y !== v) : [...x[k], v] }));
+  const specs = isDriver ? ONB_DRIVES : ONB_SPECS;
+  const readiness = crewReadiness({ ...t, licenseNumber: f.licNumber.trim(), licensePhoto: !!(t.licensePhoto || photo),
+                                    tags: f.tags, languages: f.langs, vehicle: f.vehicle }, t.role);
+  const status = { none: ["Not added yet", C.muted], submitted: ["Waiting for our team to check", C.goldText],
+                   verified: ["Verified", C.pine], rejected: ["Not approved — upload a clearer photo", C.maroon] }[t.licenseStatus || "none"]
+                 || ["Not added yet", C.muted];
+
+  const pick = (e) => {
+    const file = e.target.files && e.target.files[0]; e.target.value = "";
+    if (!file || !file.type.startsWith("image/")) { setErr("Please choose a photo of your licence."); return; }
+    setErr(null);
+    const r = new FileReader(); r.onload = () => setPhoto(r.result); r.readAsDataURL(file);
+  };
+
+  const save = async () => {
+    if (!CLOUD || !t.id) return;
+    setBusy(true); setErr(null);
+    try {
+      let licensePath = null;
+      if (photo) {
+        const small = await shrinkImage(photo, 1600, 0.85);
+        const blob = await (await fetch(small)).blob();
+        const path = `${t.id}/license.jpg`;
+        const up = await supabase.storage.from("licenses").upload(path, blob, { contentType: "image/jpeg", upsert: true });
+        if (up.error) throw new Error("The licence photo didn't upload — " + up.error.message);
+        licensePath = path;
+      }
+      const number = f.licNumber.trim().toUpperCase() || null;
+      const patch = {
+        license_number: number, license_expiry: f.licExpiry || null,
+        base: f.base.trim() || null, years: f.years || 0, pitch: f.pitch.trim() || null, phone: f.phone.trim() || null,
+        tags: f.tags, languages: f.langs, vehicle: isDriver ? (f.vehicle || null) : null,
+      };
+      // a new photo, or a changed number on a verified licence, goes back to our team to check
+      if (licensePath) { patch.license_path = licensePath; patch.license_status = "submitted"; }
+      else if (number !== (t.licenseNumber || null) && t.licenseStatus === "verified") patch.license_status = "submitted";
+      let res = await supabase.from("profiles").update(patch).eq("id", t.id);
+      if (res.error && patch.license_status) {
+        // if the database reserves the status for admins, save everything else
+        const { license_status, ...rest } = patch;
+        res = await supabase.from("profiles").update(rest).eq("id", t.id);
+      }
+      if (res.error) throw new Error(res.error.message);
+      setBusy(false);
+      onSaved && onSaved();
+      onClose();
+    } catch (e) { setBusy(false); setErr(e.message || "Couldn't save. Please try again."); }
+  };
+
+  const field = { background: C.bg, border: `1px solid ${C.line}`, color: C.ink };
+  return createPortal((
+    <div className="fixed inset-0 flex items-end" style={{ background: "rgba(8,10,8,.55)", zIndex: 235 }} onClick={onClose}>
+      <div className="w-full rounded-t-3xl flex flex-col safe-bottom" style={{ background: C.card, maxHeight: "92dvh" }} onClick={(e) => e.stopPropagation()}>
+        <div className="p-5 pb-3 shrink-0">
+          <div className="w-10 h-1 rounded-full mx-auto mb-4" style={{ background: C.line }} />
+          <div className="text-[17px] font-semibold" style={{ color: C.ink }}>Your profile</div>
+          <p className="text-[13px] mt-1 leading-snug" style={{ color: C.muted }}>
+            Operators book from this. Your licence and specialities are what they check first.
+          </p>
+        </div>
+        <div className="flex-1 overflow-y-auto hidescroll px-5 pb-5" style={{ scrollbarWidth: "none" }}>
+          <div className="rounded-2xl p-4 mb-4" style={{ background: readiness.ready ? C.pineSoft : C.goldSoft }}>
+            <div className="text-[13px] font-semibold mb-2" style={{ color: readiness.ready ? C.pine : C.goldText }}>
+              {readiness.ready ? "Ready to accept trips" : "Needed before you can accept a trip"}
+            </div>
+            <ReadinessList readiness={readiness} />
+          </div>
+
+          <div className="text-[11px] font-semibold tracking-[.14em] uppercase mb-2" style={{ color: C.goldText }}>Licence</div>
+          <div className="text-[12px] mb-3" style={{ color: status[1] }}>{status[0]}</div>
+          <label className="block mb-3">
+            <span className="block text-[13px] font-medium mb-1.5" style={{ color: C.ink }}>Licence number</span>
+            <span className="block text-[12px] -mt-1 mb-1.5" style={{ color: C.muted }}>
+              {{ guide: "Your Department of Tourism guide licence", driver: "Your RSTA driving licence" }[t.role] || "As printed on your licence"}
+            </span>
+            <input value={f.licNumber} onChange={(e) => set("licNumber", e.target.value.toUpperCase())} maxLength={30}
+              placeholder="Exactly as printed on the licence" className="w-full h-12 px-4 rounded-xl text-[15px]"
+              style={{ ...field, letterSpacing: "0.04em" }} />
+          </label>
+          <label className="block mb-3">
+            <span className="block text-[13px] font-medium mb-1.5" style={{ color: C.ink }}>Valid until</span>
+            <input type="date" value={f.licExpiry} onChange={(e) => set("licExpiry", e.target.value)}
+              className="w-full h-12 px-3.5 rounded-xl text-[14px]" style={field} />
+          </label>
+          <input ref={fileRef} type="file" accept="image/*" onChange={pick} className="hidden" />
+          {photo ? (
+            <div className="rounded-xl overflow-hidden mb-2" style={{ border: `1px solid ${C.line}` }}>
+              <img src={photo} alt="Your licence" className="w-full block" style={{ maxHeight: 240, objectFit: "contain", background: C.bg }} />
+            </div>
+          ) : null}
+          <button type="button" onClick={() => fileRef.current && fileRef.current.click()}
+            className="tap w-full h-11 rounded-xl text-[14px] font-semibold inline-flex items-center justify-center gap-2 mb-1"
+            style={{ background: C.card, border: `1px dashed ${C.line}`, color: C.ink }}>
+            <Camera size={16} /> {photo ? "Choose a different photo" : t.licensePhoto ? "Replace the licence photo" : "Add a photo of your licence"}
+          </button>
+          <p className="text-[12px] mb-5" style={{ color: C.muted }}>
+            {t.licensePhoto && !photo ? "A photo is on file. " : ""}Hold the phone flat above the licence with all four corners in frame.
+          </p>
+
+          <div className="text-[11px] font-semibold tracking-[.14em] uppercase mb-2" style={{ color: C.goldText }}>{isDriver ? "Driving" : "Specialities"}</div>
+          <div className="flex flex-wrap gap-2 mb-5">
+            {specs.map((s) => <Chip key={s} on={f.tags.includes(s)} onClick={() => toggle("tags", s)}>{s}</Chip>)}
+          </div>
+
+          <div className="text-[11px] font-semibold tracking-[.14em] uppercase mb-2" style={{ color: C.goldText }}>Languages</div>
+          <div className="flex flex-wrap gap-2 mb-5">
+            {ONB_LANGS.map((l) => <Chip key={l} on={f.langs.includes(l)} onClick={() => toggle("langs", l)}>{l}</Chip>)}
+          </div>
+
+          {isDriver && (
+            <>
+              <div className="text-[11px] font-semibold tracking-[.14em] uppercase mb-2" style={{ color: C.goldText }}>Vehicle</div>
+              <div className="flex flex-wrap gap-2 mb-5">
+                {ONB_VEHICLES.map((v) => <Chip key={v} on={f.vehicle === v} onClick={() => set("vehicle", f.vehicle === v ? "" : v)}>{v}</Chip>)}
+              </div>
+            </>
+          )}
+
+          <div className="text-[11px] font-semibold tracking-[.14em] uppercase mb-2" style={{ color: C.goldText }}>About you</div>
+          <div className="flex flex-wrap gap-2 mb-3">
+            {ONB_YEARS.map(([l, v]) => <Chip key={l} on={f.years === v} onClick={() => set("years", v)}>{l}</Chip>)}
+          </div>
+          <label className="block mb-3">
+            <span className="block text-[13px] font-medium mb-1.5" style={{ color: C.ink }}>Based in</span>
+            <input value={f.base} onChange={(e) => set("base", e.target.value)} maxLength={40} placeholder="e.g. Paro"
+              className="w-full h-12 px-4 rounded-xl text-[15px]" style={field} />
+          </label>
+          <label className="block mb-3">
+            <span className="block text-[13px] font-medium mb-1.5" style={{ color: C.ink }}>Phone</span>
+            <input value={f.phone} onChange={(e) => set("phone", e.target.value)} inputMode="tel" maxLength={20} placeholder="17 12 34 56"
+              className="w-full h-12 px-4 rounded-xl text-[15px]" style={field} />
+          </label>
+          <label className="block mb-5">
+            <span className="block text-[13px] font-medium mb-1.5" style={{ color: C.ink }}>A line about you</span>
+            <textarea value={f.pitch} onChange={(e) => set("pitch", e.target.value)} rows={3} maxLength={280}
+              placeholder="What guests remember about trips with you"
+              className="w-full px-3.5 py-3 rounded-xl text-[14px] resize-none" style={field} />
+          </label>
+
+          {err && <p className="text-[13px] mb-3" style={{ color: C.maroon }}>{err}</p>}
+          <button type="button" onClick={save} disabled={busy}
+            className="tap w-full h-12 rounded-xl text-[15px] font-semibold inline-flex items-center justify-center gap-2"
+            style={{ background: C.pine, color: "#FFFFFF" }}>
+            {busy ? <Loader2 size={18} className="animate-spin" /> : "Save my profile"}
+          </button>
+        </div>
+      </div>
+    </div>
+  ), document.body);
+}
+
+/* ── on your own profile: how complete it is, and the way in to edit ── */
+function ProfileSetupCard({ talent, onSaved }) {
+  const [open, setOpen] = useState(false);
+  const r = crewReadiness(talent, talent && talent.role);
+  return (
+    <div className="px-5 mt-4">
+      <div className="rounded-2xl p-4" style={{ background: r.ready ? C.card : C.goldSoft, border: `1px solid ${r.ready ? C.line : C.gold + "55"}` }}>
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="text-[14px] font-semibold" style={{ color: r.ready ? C.ink : C.goldText }}>
+              {r.ready ? "Your profile is complete" : "Finish your profile"}
+            </div>
+            <div className="text-[12px] mt-0.5 leading-snug" style={{ color: r.ready ? C.muted : C.goldText }}>
+              {r.ready ? "You can accept trips from operators." : `Still needed: ${r.missing.join(", ")}.`}
+            </div>
+          </div>
+          <button type="button" onClick={() => setOpen(true)}
+            className="tap shrink-0 h-10 px-4 rounded-xl text-[13px] font-semibold"
+            style={{ background: C.pine, color: "#FFFFFF" }}>Edit profile</button>
+        </div>
+      </div>
+      {open && <ProfileEditor talent={talent} onClose={() => setOpen(false)} onSaved={onSaved} />}
+    </div>
+  );
+}
+
+/* ── operator: invite crew to a confirmed trip ── */
+function crewInviteLink(token) { return `${window.location.origin}/?invite=${token}`; }
+function crewInviteMessage(inv, link) {
+  const dates = inv.tripStart ? ` (${fmtDate(inv.tripStart)}${inv.tripEnd ? ` – ${fmtDate(inv.tripEnd)}` : ""})` : "";
+  return `Kuzu Zangpo la ${inv.name},\n\n${inv.operatorName || "We"} would like you as ${inv.role} for “${inv.tripTitle}”${dates}.\n\nJoin Bhutan Tourism Hub with this link to see the trip and accept:\n${link}`;
+}
+function openWhatsApp(phone, text) {
+  const digits = String(phone || "").replace(/[^\d]/g, "");
+  const withCode = digits.length === 8 ? `975${digits}` : digits;
+  const url = withCode.length >= 8 ? `https://wa.me/${withCode}?text=${encodeURIComponent(text)}` : `https://wa.me/?text=${encodeURIComponent(text)}`;
+  window.open(url, "_blank", "noopener");
+}
+
+function AddCrewSheet({ trip, actions, onClose }) {
+  const { invites } = React.useContext(InvitesCtx);
+  const [mode, setMode] = useState("hub");
+  const [role, setRole] = useState("guide");
+  const [q, setQ] = useState("");
+  const [name, setName] = useState("");
+  const [phone, setPhone] = useState("");
+  const [busy, setBusy] = useState(null);
+  const [err, setErr] = useState(null);
+  const [made, setMade] = useState(null);
+  const [copied, setCopied] = useState(false);
+
+  const onTrip = new Set((trip.members || []).map((m) => m && m.id));
+  const asked = new Set((invites || []).filter((i) => i.tripId === trip.id && i.talentId && ["pending", "accepted"].includes(i.status)).map((i) => i.talentId));
+  const term = q.trim().toLowerCase();
+  const people = Object.values(PROFILE_DIR)
+    .filter((p) => p && p.role === role && !onTrip.has(p.id))
+    .filter((p) => !term || (p.name || "").toLowerCase().includes(term) || (p.base || "").toLowerCase().includes(term))
+    .sort((a, b) => (b.verified ? 1 : 0) - (a.verified ? 1 : 0) || (a.name || "").localeCompare(b.name || ""))
+    .slice(0, 40);
+
+  const request = async (p) => {
+    setBusy(p.id); setErr(null);
+    const res = await actions.createInvite({ trip, role, name: p.name, phone: p.phone, talentId: p.id });
+    setBusy(null);
+    if (!res.ok) setErr("Couldn't send the request — " + (res.reason || "try again"));
+  };
+  const createLink = async () => {
+    if (name.trim().length < 2) { setErr("Enter their name."); return; }
+    setBusy("new"); setErr(null);
+    const res = await actions.createInvite({ trip, role, name: name.trim(), phone: phone.trim() });
+    setBusy(null);
+    if (!res.ok) { setErr("Couldn't create the link — " + (res.reason || "try again")); return; }
+    setMade({ link: res.link, inv: res.invite });
+  };
+  const copy = async () => {
+    try { await navigator.clipboard.writeText(made.link); setCopied(true); setTimeout(() => setCopied(false), 2000); } catch (e) {}
+  };
+  const field = { background: C.bg, border: `1px solid ${C.line}`, color: C.ink };
+
+  return createPortal((
+    <div className="fixed inset-0 flex items-end" style={{ background: "rgba(8,10,8,.55)", zIndex: 230 }} onClick={onClose}>
+      <div className="w-full rounded-t-3xl flex flex-col safe-bottom" style={{ background: C.card, maxHeight: "90dvh" }} onClick={(e) => e.stopPropagation()}>
+        <div className="p-5 pb-3 shrink-0">
+          <div className="w-10 h-1 rounded-full mx-auto mb-4" style={{ background: C.line }} />
+          <div className="text-[17px] font-semibold" style={{ color: C.ink }}>Add crew</div>
+          <p className="text-[13px] mt-1" style={{ color: C.muted }}>{trip.title} · {fmtDate(trip.start)} – {fmtDate(trip.end)}</p>
+          <div className="mt-3"><Segmented value={mode} onChange={(v) => { setMode(v); setErr(null); setMade(null); }}
+            options={[["hub", "From the hub"], ["new", "Invite someone new"]]} /></div>
+          <div className="flex gap-2 mt-3">
+            <Chip on={role === "guide"} onClick={() => setRole("guide")}>Guide</Chip>
+            <Chip on={role === "driver"} onClick={() => setRole("driver")}>Driver</Chip>
+          </div>
+        </div>
+        <div className="flex-1 overflow-y-auto hidescroll px-5 pb-5" style={{ scrollbarWidth: "none" }}>
+          {err && <p className="text-[13px] mb-3" style={{ color: C.maroon }}>{err}</p>}
+
+          {mode === "hub" ? (
+            <>
+              <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={`Search ${role}s by name or town`}
+                aria-label={`Search ${role}s`} className="w-full h-11 px-3.5 rounded-xl text-[14px] mb-3" style={field} />
+              {people.length === 0 ? (
+                <p className="text-[13px] py-4 text-center" style={{ color: C.muted }}>
+                  No {role}s found. Try “Invite someone new” to bring them onto the hub.
+                </p>
+              ) : (
+                <div className="rounded-2xl overflow-hidden" style={{ border: `1px solid ${C.line}` }}>
+                  {people.map((p, k) => {
+                    const done = asked.has(p.id);
+                    const r = crewReadiness(p, role);
+                    return (
+                      <div key={p.id} className="flex items-center gap-3 px-3.5 py-3" style={{ borderTop: k ? `1px solid ${C.lineSoft}` : "none", background: C.card }}>
+                        <Avatar initials={p.initials} size={36} />
+                        <div className="flex-1 min-w-0">
+                          <div className="text-[14px] font-semibold truncate inline-flex items-center gap-1" style={{ color: C.ink }}>
+                            {p.name}{p.verified && <BadgeCheck size={14} color={C.pine} />}
+                          </div>
+                          <div className="text-[12px] truncate" style={{ color: r.ready ? C.muted : C.goldText }}>
+                            {p.base ? `${p.base} · ` : ""}{r.ready ? "Profile complete" : "Profile not finished yet"}
+                          </div>
+                        </div>
+                        <button type="button" onClick={() => request(p)} disabled={done || busy === p.id}
+                          className="tap shrink-0 h-9 px-3.5 rounded-lg text-[13px] font-semibold"
+                          style={{ background: done ? C.pineSoft : C.pine, color: done ? C.pine : "#FFFFFF" }}>
+                          {busy === p.id ? <Loader2 size={14} className="animate-spin" /> : done ? "Asked" : "Ask"}
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+              <p className="text-[12px] mt-3 leading-snug" style={{ color: C.muted }}>
+                They'll see the request in their Trips tab, and can accept once their licence and profile are complete.
+              </p>
+            </>
+          ) : made ? (
+            <div className="rounded-2xl p-4" style={{ background: C.pineSoft }}>
+              <div className="text-[14px] font-semibold mb-1" style={{ color: C.pine }}>Invite ready for {made.inv.name}</div>
+              <p className="text-[12px] mb-3 leading-snug" style={{ color: C.pine }}>
+                They sign up with this link, add their licence and profile, then accept the trip.
+              </p>
+              <div className="rounded-lg px-3 py-2 mb-3 break-all text-[12px]" style={{ background: C.card, color: C.ink, fontFamily: "ui-monospace, Menlo, monospace" }}>{made.link}</div>
+              <button type="button" onClick={() => openWhatsApp(made.inv.phone, crewInviteMessage(made.inv, made.link))}
+                className="tap w-full h-12 rounded-xl text-[15px] font-semibold inline-flex items-center justify-center gap-2 mb-2"
+                style={{ background: "#25D366", color: "#FFFFFF" }}>
+                <MessageCircle size={17} /> Send on WhatsApp
+              </button>
+              <div className="flex gap-2">
+                <button type="button" onClick={copy} className="tap flex-1 h-10 rounded-lg text-[13px] font-semibold"
+                  style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }}>{copied ? "Copied" : "Copy link"}</button>
+                <button type="button" onClick={() => { setMade(null); setName(""); setPhone(""); }}
+                  className="tap flex-1 h-10 rounded-lg text-[13px] font-semibold" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }}>
+                  Invite another
+                </button>
+              </div>
+            </div>
+          ) : (
+            <>
+              <label className="block mb-3">
+                <span className="block text-[13px] font-medium mb-1.5" style={{ color: C.ink }}>Their name</span>
+                <input value={name} onChange={(e) => setName(e.target.value)} maxLength={60} placeholder="e.g. Sonam Penjor"
+                  className="w-full h-12 px-4 rounded-xl text-[15px]" style={field} />
+              </label>
+              <label className="block mb-1.5">
+                <span className="block text-[13px] font-medium mb-1.5" style={{ color: C.ink }}>WhatsApp number <span style={{ color: C.muted }}>· optional</span></span>
+                <input value={phone} onChange={(e) => setPhone(e.target.value)} inputMode="tel" maxLength={20} placeholder="17 12 34 56"
+                  className="w-full h-12 px-4 rounded-xl text-[15px]" style={field} />
+              </label>
+              <p className="text-[12px] mb-4" style={{ color: C.muted }}>With a number, WhatsApp opens straight to their chat.</p>
+              <button type="button" onClick={createLink} disabled={busy === "new"}
+                className="tap w-full h-12 rounded-xl text-[15px] font-semibold inline-flex items-center justify-center gap-2"
+                style={{ background: C.pine, color: "#FFFFFF" }}>
+                {busy === "new" ? <Loader2 size={18} className="animate-spin" /> : "Create the invite link"}
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  ), document.body);
+}
+
+const CREW_STATUS = {
+  invited:  ["Link sent — not signed up yet", C.goldText],
+  pending:  ["Asked — waiting for them", C.goldText],
+  accepted: ["Joined the crew", C.pine],
+  declined: ["Declined", C.maroon],
+};
+
+function CrewInvites({ trip, actions }) {
+  const { invites } = React.useContext(InvitesCtx);
+  const [adding, setAdding] = useState(false);
+  const mine = (invites || []).filter((i) => i.tripId === trip.id && i.status !== "cancelled" && i.status !== "accepted");
+  return (
+    <div className="mb-5">
+      {mine.length > 0 && (
+        <div className="rounded-2xl overflow-hidden mb-2" style={{ border: `1px solid ${C.line}` }}>
+          {mine.map((i, k) => {
+            const p = i.talentId ? PROFILE_DIR[i.talentId] : null;
+            const ready = p ? crewReadiness(p, i.role).ready : false;
+            const label = i.status === "pending" && p ? (ready ? ["Ready — waiting for them to accept", C.pine] : ["Signed up — finishing their profile", C.goldText])
+                         : CREW_STATUS[i.status] || [i.status, C.muted];
+            return (
+              <div key={i.id} className="px-3.5 py-3 flex items-center gap-3" style={{ borderTop: k ? `1px solid ${C.lineSoft}` : "none", background: C.card }}>
+                <Avatar initials={initialsOf(i.name)} size={34} />
+                <div className="flex-1 min-w-0">
+                  <div className="text-[14px] font-semibold truncate" style={{ color: C.ink }}>{i.name} <span className="font-normal capitalize" style={{ color: C.muted }}>· {i.role}</span></div>
+                  <div className="text-[12px]" style={{ color: label[1] }}>{label[0]}</div>
+                </div>
+                {i.status === "invited" && (
+                  <button type="button" onClick={() => openWhatsApp(i.phone, crewInviteMessage(i, crewInviteLink(i.token)))}
+                    className="tap h-9 px-3 rounded-lg text-[12px] font-semibold shrink-0" style={{ background: C.pineSoft, color: C.pine }}>Resend</button>
+                )}
+                {(i.status === "invited" || i.status === "pending" || i.status === "declined") && (
+                  <button type="button" onClick={() => actions.cancelInvite(i.id)} aria-label={`Cancel the invitation to ${i.name}`}
+                    className="tap w-9 h-9 rounded-lg flex items-center justify-center shrink-0" style={{ background: C.bg }}>
+                    <X size={14} color={C.muted} />
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+      <button type="button" onClick={() => setAdding(true)}
+        className="tap w-full h-11 rounded-xl text-[14px] font-semibold inline-flex items-center justify-center gap-2"
+        style={{ background: C.goldSoft, color: C.goldText }}>
+        <UserPlus size={16} /> Add crew
+      </button>
+      {adding && <AddCrewSheet trip={trip} actions={actions} onClose={() => setAdding(false)} />}
+    </div>
+  );
+}
+
+/* ── guide or driver: trips you've been asked to join ── */
+function CrewRequests({ user, actions }) {
+  const { invites } = React.useContext(InvitesCtx);
+  const [editing, setEditing] = useState(false);
+  const [busy, setBusy] = useState(null);
+  const [note, setNote] = useState(null);
+  const meId = user.talentId || user.id;
+  const me = PROFILE_DIR[meId] || talentById(meId);
+  const asks = (invites || []).filter((i) => i.talentId === meId && i.status === "pending");
+  if (!asks.length && !note) return null;
+
+  const respond = async (inv, accept) => {
+    setBusy(inv.id + (accept ? "y" : "n")); setNote(null);
+    const res = await actions.respondInvite(inv.id, accept);
+    setBusy(null);
+    if (!res.ok) { setNote({ bad: true, text: res.reason || "Something went wrong. Please try again." }); return; }
+    setNote({ bad: false, text: accept ? `You've joined the crew for “${inv.tripTitle}”. It's now in your trips.` : "Declined. The operator has been told." });
+  };
+
+  return (
+    <div className="mb-4">
+      {note && (
+        <div className="rounded-xl px-3.5 py-3 mb-3 text-[13px] leading-snug" style={{ background: note.bad ? C.maroonSoft : C.pineSoft, color: note.bad ? C.maroon : C.pine }}>
+          {note.text}
+        </div>
+      )}
+      {asks.map((inv) => {
+        const r = crewReadiness(me, inv.role);
+        return (
+          <div key={inv.id} className="rounded-2xl p-4 mb-3" style={{ background: C.card, border: `1.5px solid ${C.gold}66` }}>
+            <div className="text-[11px] font-semibold tracking-[.12em] uppercase" style={{ color: C.goldText }}>Trip request</div>
+            <div className="text-[16px] font-semibold mt-1 leading-snug" style={{ color: C.ink }}>{inv.tripTitle}</div>
+            <div className="text-[13px] mt-0.5" style={{ color: C.muted }}>
+              {inv.operatorName || "An operator"} wants you as <b className="capitalize" style={{ color: C.ink }}>{inv.role}</b>
+              {inv.tripStart ? ` · ${fmtDate(inv.tripStart)}${inv.tripEnd ? ` – ${fmtDate(inv.tripEnd)}` : ""}` : ""}
+            </div>
+            {!r.ready && (
+              <div className="rounded-xl p-3 mt-3" style={{ background: C.goldSoft }}>
+                <div className="text-[12px] font-semibold mb-2" style={{ color: C.goldText }}>Before you can accept</div>
+                <ReadinessList readiness={r} />
+                <button type="button" onClick={() => setEditing(true)}
+                  className="tap w-full h-10 rounded-lg text-[13px] font-semibold mt-3" style={{ background: C.pine, color: "#FFFFFF" }}>
+                  Complete my profile
+                </button>
+              </div>
+            )}
+            <div className="flex gap-2 mt-3">
+              <button type="button" onClick={() => respond(inv, false)} disabled={!!busy}
+                className="tap flex-1 h-11 rounded-xl text-[13px] font-semibold" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.muted }}>
+                {busy === inv.id + "n" ? <Loader2 size={14} className="animate-spin" /> : "Decline"}
+              </button>
+              <button type="button" onClick={() => respond(inv, true)} disabled={!r.ready || !!busy}
+                className="tap flex-[1.4] h-11 rounded-xl text-[14px] font-semibold inline-flex items-center justify-center gap-1.5"
+                style={{ background: r.ready ? C.pine : "#C7CEC7", color: "#FFFFFF" }}>
+                {busy === inv.id + "y" ? <Loader2 size={14} className="animate-spin" /> : <><Check size={15} strokeWidth={3} /> Accept the trip</>}
+              </button>
+            </div>
+          </div>
+        );
+      })}
+      {editing && me && <ProfileEditor talent={me} onClose={() => setEditing(false)} onSaved={() => actions.reloadDirectory && actions.reloadDirectory()} />}
     </div>
   );
 }
