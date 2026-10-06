@@ -49,7 +49,7 @@ const sysMsg = (text) => ({ id: uid(), senderId: null, kind: "system", body: tex
 /* ── Cloud (Supabase) ── posts are global when configured; everything falls back to local demo mode when not. */
 const CLOUD = Boolean(supabase);
 const DEMO_MODE = false;   // set true only for local demos without a database
-const BUILD = "BUILD 29 — 6 Oct";   // bump every deploy; shown at the top of the welcome screen
+const BUILD = "BUILD 30 — 6 Oct";   // bump every deploy; shown at the top of the welcome screen
 // which device someone is on — shown beside the build so a screenshot tells us both
 const DEVICE = (() => {
   try {
@@ -539,6 +539,22 @@ export default function App() {
     } catch (e) { return null; }
   });
   const [invitePreview, setInvitePreview] = useState(null);
+  // a past-trip confirmation link (?attest=token) works the same way
+  const [attestToken, setAttestToken] = useState(() => {
+    try {
+      const fromUrl = new URLSearchParams(window.location.search).get("attest");
+      if (fromUrl) { localStorage.setItem("bth_attest", fromUrl); window.history.replaceState(null, "", window.location.pathname); return fromUrl; }
+      return localStorage.getItem("bth_attest");
+    } catch (e) { return null; }
+  });
+  const [attestPreview, setAttestPreview] = useState(null);
+  const forgetAttest = () => { try { localStorage.removeItem("bth_attest"); } catch (e) {} setAttestToken(null); setAttestPreview(null); };
+  useEffect(() => {
+    if (!CLOUD || !attestToken) return;
+    supabase.rpc("preview_attestation", { p_token: attestToken }).then(({ data, error }) => {
+      if (!error && data) setAttestPreview(data); else forgetAttest();
+    });
+  }, [attestToken]);
   const rowToInvite = (r) => ({
     id: r.id, token: r.token, tripId: r.trip_id, operatorId: r.operator_id, role: r.role,
     name: r.invitee_name, phone: r.invitee_phone, talentId: r.talent_id, status: r.status,
@@ -1086,10 +1102,10 @@ export default function App() {
 
       <div className={`app-shell flex flex-col${user ? " signed-in" : ""}`} style={{ color: C.ink }}>
         {!user ? (
-          <Login onPick={setAccountId} session={session} myProfile={myProfile} onAuthed={reloadMe} onBusy={setAuthBusy} invitePreview={invitePreview} />
+          <Login onPick={setAccountId} session={session} myProfile={myProfile} onAuthed={reloadMe} onBusy={setAuthBusy} invitePreview={invitePreview} attestPreview={attestPreview} />
         ) : (
           <InvitesCtx.Provider value={{ invites, creditRequests }}>
-          <Shell key={user.id} user={user} posts={posts} jobs={jobs} trips={trips} listings={listings} enquiries={enquiries} dirTick={dirTick}
+          <Shell key={user.id} user={user} posts={posts} jobs={jobs} trips={trips} listings={listings} enquiries={enquiries} dirTick={dirTick} attest={{ attestToken, attestPreview, forgetAttest }}
             actions={{ addPost, approve, reject, deletePost, reloadDirectory: loadProfiles, setAvailability, toggleFollow, sendJob, setJobStatus, postChat, openChat, postListing, applyToListing, setApplicant, hireApplicant, saveEnquiry, setEnquiryStatus, convertEnquiry, reloadTrips: fetchTrips, binListing, destroyListing, binRequest, destroyRequest, saveTripDetails, createInvite, cancelInvite, respondInvite }} engagement={{ likes, comments, toggleLike, addComment, deleteComment, follows, toggleFollow, stories, addStory, deleteStory }} dm={{ dms, sendDm, markRead, sharePostTo }} onLogout={() => { if (session) supabase.auth.signOut(); setAccountId(null); }} />
           </InvitesCtx.Provider>
         )}
@@ -1100,13 +1116,13 @@ export default function App() {
 }
 
 /* ================================ Welcome ================================= */
-function Login({ onPick, session, myProfile, onAuthed, onBusy, invitePreview }) {
+function Login({ onPick, session, myProfile, onAuthed, onBusy, invitePreview, attestPreview }) {
   const [authView, setAuthView] = useState(null);
   useEffect(() => { onBusy && onBusy(!!authView); return () => onBusy && onBusy(false); }, [authView]);
   if (authView) {
     return (
       <div className="flex-1 overflow-y-auto hidescroll fade" style={{ scrollbarWidth: "none" }}>
-        <Onboard mode={authView} session={session} invite={invitePreview}
+        <Onboard mode={authView} session={session} invite={invitePreview || (attestPreview ? { role: "operator", name: "" } : null)}
           onBack={() => { setAuthView(null); onBusy && onBusy(false); }}
           onDone={() => { onBusy && onBusy(false); setAuthView(null); onAuthed(); }} />
       </div>
@@ -1125,6 +1141,15 @@ function Login({ onPick, session, myProfile, onAuthed, onBusy, invitePreview }) 
           </div>
         </div>
 
+        {attestPreview && !invitePreview && (
+          <div className="mt-5 rounded-2xl p-4" style={{ background: C.goldSoft, border: `1px solid ${C.gold}33` }}>
+            <div className="text-[11px] font-semibold tracking-[.12em] uppercase" style={{ color: C.goldText }}>A past trip to confirm</div>
+            <div className="text-[15px] font-semibold mt-1 leading-snug" style={{ color: C.ink }}>
+              {attestPreview.talent} asks {attestPreview.operator} to confirm “{attestPreview.trip}”{attestPreview.year ? ` (${attestPreview.year})` : ""}
+            </div>
+            <div className="text-[13px] mt-2 leading-snug" style={{ color: C.goldText }}>Sign in, or join as a tour operator, and you can answer in one tap.</div>
+          </div>
+        )}
         {invitePreview && (
           <div className="mt-5 rounded-2xl p-4" style={{ background: C.pineSoft, border: `1px solid ${C.pine}22` }}>
             <div className="text-[11px] font-semibold tracking-[.12em] uppercase" style={{ color: C.pine }}>You've been invited</div>
@@ -1210,7 +1235,8 @@ const NAV = {
 };
 const DEFAULT_TAB = { guide: "post", driver: "post", operator: "bookings", admin: "review" };
 
-function Shell({ user, posts, jobs, trips, listings, enquiries, actions, engagement, dm, dirTick, onLogout }) {
+function Shell({ user, posts, jobs, trips, listings, enquiries, actions, engagement, dm, dirTick, onLogout, attest }) {
+  const { attestToken, attestPreview, forgetAttest } = attest || {};
   const { invites: crewInvites, creditRequests: openCreditRequests } = React.useContext(InvitesCtx);
   const [tab, setTab] = useState(DEFAULT_TAB[user.kind]);
   const [overlay, setOverlay] = useState(null); // {type:'profile'|'request', talentId}
@@ -1464,6 +1490,9 @@ function Shell({ user, posts, jobs, trips, listings, enquiries, actions, engagem
         </div>
       </div>
 
+      {attestToken && attestPreview && user && (
+        <AttestSheet user={user} token={attestToken} preview={attestPreview} onDone={forgetAttest} />
+      )}
       {sharedPost && (
         <PostDetail items={[sharedPost]} index={0} author={talentById(sharedPost.talentId)} eng={eng} onClose={() => setSharedPost(null)} />
       )}
@@ -2342,6 +2371,7 @@ function TalentProfile({ talent, posts, canRequest, self, contactOnly, eng, onRe
         {self && t.role !== "operator" && <AvailabilityEditor talent={t} onSet={onSetAvailability} />}
         {self && t.role !== "operator" && <ProfileSetupCard talent={t} onSaved={onProfileSaved} />}
 
+        <PastTrips talent={t} self={!!self} />
         <ProfileTabs
           cv={
             <>
@@ -2629,11 +2659,13 @@ function TripCard({ trip, onOpen, past }) {
 
 function TripHub({ user, meId, trip, actions, onBack }) {
   const state = tripStateNow(trip);
+  const [chatOpen, setChatOpen] = useState(false);
   const [inviting, setInviting] = useState(false);
   const [askingOperator, setAskingOperator] = useState(false);
   const tripDone = state === "active" || state === "completed";
   const canInvite = tripDone && (user.kind === "operator" || user.kind === "admin");
   const isTalent = user.kind === "guide" || user.kind === "driver";
+  if (chatOpen) return <TripChatView user={user} meId={meId} trip={trip} actions={actions} onBack={() => setChatOpen(false)} />;
   return (
     <div className="pb-6 fade">
       <div className="h-14 px-4 flex items-center gap-3" style={{ borderBottom: `1px solid ${C.lineSoft}` }}>
@@ -2706,11 +2738,25 @@ function TripHub({ user, meId, trip, actions, onBack }) {
           </div>
         )}
 
-        <SectionLabel>Group chat</SectionLabel>
-        <div className="rounded-xl px-4 py-3.5 flex items-center gap-3" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+        <SectionLabel trailing={(trip.chat?.messages || []).length ? `${trip.chat.messages.length} messages` : ""}>Trip chat</SectionLabel>
+        <button type="button" onClick={() => setChatOpen(true)} className="tap w-full text-left rounded-xl px-4 py-3.5 flex items-center gap-3" style={{ background: C.card, border: `1px solid ${C.line}` }}>
           <div className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0" style={{ background: C.pine }}><MessageSquare size={17} color={C.goldSoft} /></div>
-          <div className="flex-1 text-[14px]" style={{ color: C.muted }}>Crew chat for this trip lives in <b style={{ color: C.ink }}>Messages</b>.</div>
-        </div>
+          <div className="flex-1 min-w-0">
+            {(() => { const ms = trip.chat?.messages || []; const last = ms[ms.length - 1];
+              return last ? (
+                <>
+                  <div className="text-[14px] font-semibold truncate" style={{ color: C.ink }}>{last.senderName || "Crew"}</div>
+                  <div className="text-[13px] truncate" style={{ color: C.muted }}>{last.kind === "photo" ? "Photo" : last.body}</div>
+                </>
+              ) : (
+                <>
+                  <div className="text-[14px] font-semibold" style={{ color: C.ink }}>Open the trip chat</div>
+                  <div className="text-[13px]" style={{ color: C.muted }}>Everyone on this trip, in one place — the operator and the crew.</div>
+                </>
+              ); })()}
+          </div>
+          <ArrowRight size={16} color={C.muted} />
+        </button>
       </div>
     </div>
   );
@@ -4061,11 +4107,11 @@ function Onboard({ mode: initialMode, session, onBack, onDone, invite }) {
   const [mode, setMode] = useState(initialMode);
   const signin = mode === "signin";
   // invited as a guide or driver? their role is already decided — start at their details
-  const [step, setStep] = useState(signin ? "auth" : (invite && (invite.role === "guide" || invite.role === "driver") ? "about" : "role"));
+  const [step, setStep] = useState(signin ? "auth" : (invite && ["guide", "driver", "operator"].includes(invite.role) ? "about" : "role"));
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
   const [uid, setUid] = useState(session?.user?.id || null);
-  const [role, setRole] = useState(invite && (invite.role === "guide" || invite.role === "driver") ? invite.role : null);
+  const [role, setRole] = useState(invite && ["guide", "driver", "operator"].includes(invite.role) ? invite.role : null);
   const [name, setName] = useState((invite && invite.name) || "");
   const [phone, setPhone] = useState("");
   const [base, setBase] = useState("");
@@ -4548,51 +4594,12 @@ function ChatsTab({ user, me, dm, trips, actions, posts, dirTick, onOpenPost, op
     return Object.values(byPerson).sort((a, b) => (b.ts || 0) - (a.ts || 0));
   }, [msgs, me]);
 
-  const openTrip = myTrips.find((t) => t.id === tripId);
-  if (openTrip) return <TripChatView user={user} meId={me} trip={openTrip} actions={actions} onBack={() => setTripId(null)} />;
   if (withId) return <DmThread me={me} otherId={withId} dm={dm} posts={posts} onOpenPost={onOpenPost} onBack={() => setWithId(null)} onOpenProfile={onOpenProfile} />;
   if (find) return <PickContact me={me} dirTick={dirTick} onPick={(id) => { setFind(false); setWithId(id); }} onBack={() => setFind(false)} />;
 
   return (
     <div className="px-5 py-4">
-      {/* TRIP CHANNELS */}
-      <div className="flex items-center justify-between mb-2.5">
-        <div className="text-[12px] font-semibold tracking-[.14em] uppercase" style={{ color: C.goldText }}>Trip channels</div>
-        <span className="text-[12px]" style={{ color: C.muted }}>{myTrips.length}</span>
-      </div>
-      {myTrips.length === 0 ? (
-        <div className="rounded-xl px-4 py-3 mb-6 text-[13px]" style={{ background: C.card, border: `1px dashed ${C.line}`, color: C.muted }}>
-          No trips yet — a channel opens automatically when a booking is confirmed.
-        </div>
-      ) : (
-        <div className="rounded-2xl overflow-hidden mb-6" style={{ border: `1px solid ${C.line}` }}>
-          {myTrips.map((tr, idx) => {
-            const state = tripStateNow(tr);
-            const last = [...tr.chat.messages].reverse().find((m) => m.kind !== "system");
-            const live = state === "active";
-            return (
-              <button key={tr.id} onClick={() => setTripId(tr.id)} className="tap w-full text-left px-4 py-3.5 flex items-center gap-3"
-                style={{ background: C.card, borderTop: idx ? `1px solid ${C.lineSoft}` : "none" }}>
-                <div className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0" style={{ background: live ? C.pine : C.bg }}>
-                  <span className="text-[15px] font-bold" style={{ color: live ? C.goldSoft : C.muted }}>#</span>
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="text-[15px] font-semibold truncate" style={{ color: C.ink }}>{tr.title}</div>
-                  <div className="text-[12px] truncate" style={{ color: C.muted }}>
-                    {last ? `${last.senderId === me ? "You: " : ""}${last.kind === "photo" ? "Photo" : last.body}` : `${fmtDate(tr.start)} – ${fmtDate(tr.end)}`}
-                  </div>
-                </div>
-                <div className="shrink-0 flex items-center gap-2">
-                  <CrewAvatars members={tr.members} size={22} />
-                  <TripStateBadge state={state} />
-                </div>
-              </button>
-            );
-          })}
-        </div>
-      )}
-
-      {/* DIRECT MESSAGES */}
+      {/* DIRECT MESSAGES — trip talk lives inside each trip */}
       <div className="flex items-center justify-between mb-2.5">
         <div className="text-[12px] font-semibold tracking-[.14em] uppercase" style={{ color: C.goldText }}>Direct messages</div>
         <button onClick={() => setFind(true)} className="tap inline-flex items-center gap-1.5 text-[13px] font-semibold" style={{ color: C.pine }}>
@@ -4641,7 +4648,7 @@ function TripChatView({ user, meId, trip, actions, onBack }) {
   return (
     <div className="fade">
       <div className="h-14 px-3 flex items-center gap-2.5" style={{ borderBottom: `1px solid ${C.lineSoft}`, background: C.card }}>
-        <button onClick={onBack} className="tap w-9 h-9 rounded-full flex items-center justify-center" style={{ border: `1px solid ${C.line}` }}><ChevronLeft size={19} color={C.ink} /></button>
+        <button onClick={onBack} aria-label="Back" className="tap w-9 h-9 rounded-full flex items-center justify-center" style={{ border: `1px solid ${C.line}` }}><ChevronLeft size={19} color={C.ink} /></button>
         <div className="flex-1 min-w-0">
           <div className="text-[15px] font-semibold truncate" style={{ color: C.ink }}># {trip.title}</div>
           <div className="text-[12px]" style={{ color: C.muted }}>{trip.members.length} in crew · {fmtDate(trip.start)} – {fmtDate(trip.end)}</div>
@@ -11042,5 +11049,247 @@ function InsightsTab({ user, trips, enquiries }) {
         Worked out from what's recorded in the hub: trips by start date, enquiries by the date they came in. The SDF figure uses the adult rate and is an upper bound. Suggestions are rules, not guesses — each one names the numbers behind it.
       </p>
     </div>
+  );
+}
+
+/* the same sheet every other sheet draws, as one wrapper */
+function Sheet({ onClose, children }) {
+  return (
+    <div className="fixed inset-0 flex items-end" style={{ background: "rgba(8,10,8,.55)", zIndex: 260 }} onClick={onClose}>
+      <div className="w-full rounded-t-3xl flex flex-col safe-bottom" style={{ background: C.card, maxHeight: "90dvh" }} onClick={(e) => e.stopPropagation()}>
+        <div className="p-5 overflow-y-auto">
+          <div className="w-10 h-1 rounded-full mx-auto mb-4" style={{ background: C.line }} />
+          {children}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ========================================================================== */
+/*  PAST TRIPS, ATTESTED — a guide's history, confirmed by the operators who ran it */
+/* ========================================================================== */
+const MONTHS_LONG = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+const attestWhen = (a) => `${a.month ? MONTHS_LONG[a.month - 1] + " " : ""}${a.year}`;
+const attestLink = (token) => `${window.location.origin}/?attest=${token}`;
+function attestMessage(a, fromName) {
+  const verb = a.role === "driver" ? "drove for" : "guided";
+  return `Kuzu Zangpo la, could you confirm I ${verb} "${a.tripTitle}" for ${a.operatorName} in ${attestWhen(a)}? One tap here: ${attestLink(a.token)} — ${fromName}`;
+}
+const rowToAttest = (r) => ({
+  id: r.id, talentId: r.talent_id, talentName: r.talent_name, role: r.role, operatorName: r.operator_name, operatorId: r.operator_id,
+  tripTitle: r.trip_title, month: r.month, year: r.year, nights: r.nights, token: r.token, status: r.status,
+  attestedBy: r.attested_by_name, operatorVerified: !!r.operator_verified, createdAt: r.created_at, decidedAt: r.decided_at,
+});
+
+function useAttestations(talentId, self) {
+  const [rows, setRows] = useState(null);
+  const load = async () => {
+    if (!CLOUD || !talentId) { setRows([]); return; }
+    let q = supabase.from("trip_attestations").select("*").eq("talent_id", talentId).order("year", { ascending: false }).order("month", { ascending: false });
+    if (!self) q = q.eq("status", "attested");
+    const { data, error } = await q;
+    setRows(error ? [] : (data || []).map(rowToAttest));
+  };
+  useEffect(() => { load(); }, [talentId, self]);
+  return { rows, reload: load };
+}
+
+function AttestedLine({ a }) {
+  return (
+    <div className="text-[11px] mt-0.5 inline-flex items-center gap-1" style={{ color: C.muted }}>
+      Attested by <span style={{ color: C.ink }}>{a.attestedBy || a.operatorName}</span>
+      {a.operatorVerified && <ShieldCheck size={11} color={C.pine} aria-label="verified operator" />}
+    </div>
+  );
+}
+
+function PastTrips({ talent, self }) {
+  const { rows, reload } = useAttestations(talent.id, self);
+  const [adding, setAdding] = useState(false);
+  const [share, setShare] = useState(null);                 // the claim just created, to send
+  const now = new Date();
+  const [f, setF] = useState({ operator: "", title: "", month: String(now.getMonth() + 1), year: String(now.getFullYear()), nights: "", role: talent.role === "driver" ? "driver" : "guide" });
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const [confirmDel, setConfirmDel] = useState(null);
+  const set = (k, v) => setF((x) => ({ ...x, [k]: v }));
+  const field = { background: C.card, border: `1px solid ${C.line}`, color: C.ink };
+  if (rows === null) return null;
+  const attested = rows.filter((a) => a.status === "attested");
+  const pending = self ? rows.filter((a) => a.status === "pending") : [];
+  if (!self && attested.length === 0) return null;
+
+  const add = async () => {
+    if (f.operator.trim().length < 2 || f.title.trim().length < 3) { setErr("Name the operator and the trip."); return; }
+    const year = Number(f.year); if (!(year >= 2000 && year <= now.getFullYear())) { setErr("Check the year."); return; }
+    setBusy(true); setErr(null);
+    const row = { talent_id: talent.id, talent_name: talent.name, role: f.role, operator_name: f.operator.trim(), trip_title: f.title.trim(),
+                  month: Number(f.month) || null, year, nights: Number(f.nights) || null, token: makeReviewToken(), status: "pending" };
+    const { data, error } = await supabase.from("trip_attestations").insert(row).select("*").single();
+    setBusy(false);
+    if (error) { setErr("Couldn't save — " + error.message); return; }
+    setAdding(false); setF({ ...f, operator: "", title: "", nights: "" });
+    setShare(rowToAttest(data)); reload();
+  };
+  const remove = async (id) => { await supabase.from("trip_attestations").delete().eq("id", id); setConfirmDel(null); reload(); };
+
+  const Item = ({ a, muted }) => (
+    <div className="px-3.5 py-3 flex items-start gap-3" style={{ borderTop: `1px solid ${C.lineSoft}` }}>
+      <div className="flex-1 min-w-0">
+        <div className="text-[14px] font-semibold" style={{ color: muted ? C.muted : C.ink }}>{a.tripTitle}</div>
+        <div className="text-[12px]" style={{ color: C.muted }}>
+          {attestWhen(a)}{a.nights ? ` · ${a.nights} nights` : ""} · {a.role === "driver" ? "Driver" : "Guide"} · for {a.operatorName}
+        </div>
+        {a.status === "attested" ? <AttestedLine a={a} /> : (
+          <div className="text-[11px] mt-0.5" style={{ color: C.goldText }}>Waiting for {a.operatorName} to confirm</div>
+        )}
+      </div>
+      {self && (confirmDel === a.id ? (
+        <div className="flex gap-1 shrink-0">
+          <button type="button" onClick={() => setConfirmDel(null)} className="tap h-8 px-2 rounded-lg text-[12px]" style={{ background: C.bg, color: C.muted }}>Keep</button>
+          <button type="button" onClick={() => remove(a.id)} className="tap h-8 px-2 rounded-lg text-[12px] font-semibold" style={{ background: C.maroon, color: "#FFFFFF" }}>Remove</button>
+        </div>
+      ) : (
+        <div className="flex gap-1 shrink-0">
+          {a.status === "pending" && (
+            <button type="button" onClick={() => setShare(a)} className="tap h-8 px-2.5 rounded-lg text-[12px] font-semibold" style={{ background: C.pineSoft, color: C.pine }}>Send again</button>
+          )}
+          <button type="button" onClick={() => setConfirmDel(a.id)} aria-label={`Remove ${a.tripTitle}`} className="tap w-8 h-8 rounded-lg flex items-center justify-center" style={{ background: C.bg }}><X size={13} color={C.muted} /></button>
+        </div>
+      ))}
+    </div>
+  );
+
+  return (
+    <div className="mb-4">
+      <div className="flex items-center justify-between mb-2">
+        <div>
+          <div className="text-[12px] font-semibold tracking-[.14em] uppercase" style={{ color: C.goldText }}>Past trips</div>
+          <div className="text-[12px]" style={{ color: C.muted }}>
+            {attested.length ? `${attested.length} confirmed by the operators who ran them` : self ? "Trips from before the hub, confirmed by the operator you did them for" : ""}
+          </div>
+        </div>
+        {self && !adding && (
+          <button type="button" onClick={() => setAdding(true)} aria-label="Add a past trip" className="tap h-9 px-3 rounded-lg text-[13px] font-semibold shrink-0 inline-flex items-center gap-1" style={{ background: C.goldSoft, color: C.goldText }}>
+            <Plus size={14} /> Add
+          </button>
+        )}
+      </div>
+
+      {(attested.length > 0 || pending.length > 0) && (
+        <div className="rounded-xl overflow-hidden mb-2" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+          {attested.map((a) => <Item key={a.id} a={a} />)}
+          {pending.map((a) => <Item key={a.id} a={a} muted />)}
+        </div>
+      )}
+
+      {adding && (
+        <div className="rounded-xl p-3" style={{ background: C.bg, border: `1px solid ${C.line}` }}>
+          <input value={f.operator} onChange={(e) => set("operator", e.target.value)} maxLength={80} placeholder="Tour operator you did the trip for" aria-label="Tour operator"
+            className="w-full h-11 px-3 rounded-lg text-[14px] mb-2" style={field} />
+          <input value={f.title} onChange={(e) => set("title", e.target.value)} maxLength={100} placeholder="The trip, e.g. Whitfield family — 7 nights west" aria-label="Trip"
+            className="w-full h-11 px-3 rounded-lg text-[14px] mb-2" style={field} />
+          <div className="grid grid-cols-3 gap-2 mb-2">
+            <select value={f.month} onChange={(e) => set("month", e.target.value)} aria-label="Month" className="h-11 px-2 rounded-lg text-[13px]" style={field}>
+              {MONTHS_LONG.map((m, i) => <option key={m} value={i + 1}>{m.slice(0, 3)}</option>)}
+            </select>
+            <input type="number" value={f.year} onChange={(e) => set("year", e.target.value)} min={2000} max={now.getFullYear()} aria-label="Year" className="h-11 px-2 rounded-lg text-[13px]" style={field} />
+            <input type="number" value={f.nights} onChange={(e) => set("nights", e.target.value)} min={1} max={60} placeholder="Nights" aria-label="Nights" className="h-11 px-2 rounded-lg text-[13px]" style={field} />
+          </div>
+          <Segmented value={f.role} onChange={(v) => set("role", v)} options={[["guide", "I was the guide"], ["driver", "I was the driver"]]} />
+          <p className="text-[11px] mt-2 mb-3 leading-snug" style={{ color: C.muted }}>Only the operator you name can confirm it, from their own account. It appears on your profile once they do.</p>
+          {err && <p className="text-[13px] mb-2" style={{ color: C.maroon }}>{err}</p>}
+          <div className="flex gap-2">
+            <button type="button" onClick={() => { setAdding(false); setErr(null); }} className="tap flex-1 h-10 rounded-lg text-[13px] font-semibold" style={{ background: C.card, color: C.muted }}>Cancel</button>
+            <button type="button" onClick={add} disabled={busy} className="tap flex-[1.4] h-10 rounded-lg text-[13px] font-semibold inline-flex items-center justify-center" style={{ background: C.pine, color: "#FFFFFF" }}>
+              {busy ? <Loader2 size={14} className="animate-spin" /> : "Save and ask them"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {share && <AttestShareSheet a={share} fromName={talent.name} onClose={() => setShare(null)} />}
+    </div>
+  );
+}
+
+function AttestShareSheet({ a, fromName, onClose }) {
+  const msg = attestMessage(a, fromName);
+  const [copied, setCopied] = useState(false);
+  const copy = async () => { try { await navigator.clipboard.writeText(attestLink(a.token)); setCopied(true); setTimeout(() => setCopied(false), 1500); } catch (e) {} };
+  return (
+    <Sheet onClose={onClose}>
+      <div className="text-[18px] font-bold mb-1" style={{ color: C.ink }}>Ask {a.operatorName} to confirm</div>
+      <p className="text-[14px] mb-3" style={{ color: C.muted }}>Send this to the person who ran the trip. If they aren't on the hub yet, the link brings them in as an operator first.</p>
+      <div className="rounded-xl p-3 text-[13px] leading-relaxed mb-3" style={{ background: C.bg, color: C.ink, border: `1px solid ${C.line}` }} data-testid="attest-message">{msg}</div>
+      <a href={`https://wa.me/?text=${encodeURIComponent(msg)}`} target="_blank" rel="noopener noreferrer"
+        className="tap w-full h-12 rounded-xl text-[15px] font-semibold inline-flex items-center justify-center gap-2 mb-2" style={{ background: "#25D366", color: "#FFFFFF" }}>
+        <MessageCircle size={17} /> Send on WhatsApp
+      </a>
+      <button type="button" onClick={copy} className="tap w-full h-11 rounded-xl text-[14px] font-semibold" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }}>
+        {copied ? "Link copied" : "Copy the link instead"}
+      </button>
+    </Sheet>
+  );
+}
+
+/* the operator, arriving from the link */
+function AttestSheet({ user, token, preview, onDone }) {
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState(null);
+  const [err, setErr] = useState(null);
+  const isOperator = user.kind === "operator";
+  const answer = async (accept) => {
+    setBusy(true); setErr(null);
+    const { data, error } = await supabase.rpc("respond_attestation", { p_token: token, p_accept: accept });
+    setBusy(false);
+    if (error) { setErr(error.message); return; }
+    setResult(data);
+    if (accept && data && data.talent_id) {
+      const me = user.talentId || user.id;
+      try {
+        await supabase.from("direct_messages").insert({ sender_id: me, recipient_id: data.talent_id,
+          body: `${data.attested_by} confirmed your trip “${data.trip}”. It now shows on your profile as attested.` });
+      } catch (e) {}
+    }
+  };
+  return (
+    <Sheet onClose={onDone}>
+      <div className="text-[11px] font-semibold tracking-[.12em] uppercase mb-1" style={{ color: C.goldText }}>A past trip to confirm</div>
+      <div className="text-[18px] font-bold leading-snug mb-1" style={{ color: C.ink }}>
+        {preview.talent} says {preview.role === "driver" ? "they drove for" : "they guided"} “{preview.trip}” for {preview.operator}
+      </div>
+      <div className="text-[14px] mb-4" style={{ color: C.muted }}>{preview.month ? MONTHS_LONG[preview.month - 1] + " " : ""}{preview.year}{preview.nights ? ` · ${preview.nights} nights` : ""}</div>
+
+      {result ? (
+        <div className="rounded-xl p-4 mb-3" style={{ background: result.status === "attested" ? C.pineSoft : C.bg, border: `1px solid ${C.line}` }}>
+          <div className="text-[15px] font-semibold" style={{ color: result.status === "attested" ? C.pine : C.ink }}>
+            {result.status === "attested" ? "Confirmed — thank you" : "Noted — nothing will show"}
+          </div>
+          <div className="text-[13px] mt-1" style={{ color: C.muted }}>
+            {result.status === "attested" ? `${preview.talent}'s profile now says “Attested by ${result.attested_by}”.` : `${preview.talent} can correct the details and ask again.`}
+          </div>
+        </div>
+      ) : !isOperator ? (
+        <div className="rounded-xl p-4 mb-3 text-[14px]" style={{ background: C.goldSoft, color: C.goldText }}>
+          This request is for {preview.operator}. Only the tour operator who ran the trip can confirm it, from their own account.
+        </div>
+      ) : preview.status !== "pending" ? (
+        <div className="rounded-xl p-4 mb-3 text-[14px]" style={{ background: C.bg, color: C.muted, border: `1px solid ${C.line}` }}>This request has already been answered.</div>
+      ) : (
+        <>
+          <p className="text-[13px] mb-3 leading-snug" style={{ color: C.muted }}>Confirm only if the details are right as written. If a date or the trip is wrong, choose “Not accurate” — {preview.talent} can fix it and ask again.</p>
+          {err && <p className="text-[13px] mb-2" style={{ color: C.maroon }}>{err}</p>}
+          <div className="flex gap-2 mb-3">
+            <button type="button" onClick={() => answer(false)} disabled={busy} className="tap flex-1 h-12 rounded-xl text-[14px] font-semibold" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }}>Not accurate</button>
+            <button type="button" onClick={() => answer(true)} disabled={busy} className="tap flex-[1.4] h-12 rounded-xl text-[15px] font-semibold inline-flex items-center justify-center gap-2" style={{ background: C.pine, color: "#FFFFFF" }}>
+              {busy ? <Loader2 size={16} className="animate-spin" /> : <><Check size={17} strokeWidth={2.6} /> Yes, that's right</>}
+            </button>
+          </div>
+        </>
+      )}
+      <button type="button" onClick={onDone} className="tap w-full h-10 rounded-lg text-[13px] font-semibold" style={{ color: C.muted }}>{result ? "Done" : "Later"}</button>
+    </Sheet>
   );
 }
