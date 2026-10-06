@@ -8,7 +8,7 @@ import {
   Map as MapIcon, MessageSquare, Users, Download, Mic, Video as VideoIcon, Heart, Share2, Trash2, Maximize2, Upload, Loader2, ArrowRight,
   Award, UserX, RefreshCw, FileCheck2, ExternalLink, UserPlus, Send as SendIcon, Lock, Eye, EyeOff, CalendarDays, UserCheck, Plus, CheckCheck, Camera, Navigation as NavIcon, Bell, Smartphone, Share, PhoneCall,
   ShieldAlert,
-} from "lucide-react";
+  TrendingUp } from "lucide-react";
 import mapImg from "./map.jpg";
 import { supabase } from "./supabase.js";
 
@@ -49,7 +49,7 @@ const sysMsg = (text) => ({ id: uid(), senderId: null, kind: "system", body: tex
 /* ── Cloud (Supabase) ── posts are global when configured; everything falls back to local demo mode when not. */
 const CLOUD = Boolean(supabase);
 const DEMO_MODE = false;   // set true only for local demos without a database
-const BUILD = "BUILD 28 — 4 Oct";   // bump every deploy; shown at the top of the welcome screen
+const BUILD = "BUILD 29 — 6 Oct";   // bump every deploy; shown at the top of the welcome screen
 // which device someone is on — shown beside the build so a screenshot tells us both
 const DEVICE = (() => {
   try {
@@ -786,11 +786,12 @@ export default function App() {
   /* ---- Trips in the database ---- */
   const fetchTrips = async () => {
     if (!CLOUD) return;
-    const [{ data: T, error: tErr }, { data: M }, { data: MS }, { data: IT }] = await Promise.all([
+    const [{ data: T, error: tErr }, { data: M }, { data: MS }, { data: IT }, { data: G }] = await Promise.all([
       supabase.from("trips").select("*").order("start_date", { ascending: true }),
       supabase.from("trip_members").select("*"),
       supabase.from("trip_messages").select("*").order("created_at", { ascending: true }),
       supabase.from("trip_itinerary").select("*").order("day_no", { ascending: true }),
+      supabase.from("trip_guests").select("*").order("created_at", { ascending: true }),
     ]);
     if (tErr) console.error("fetchTrips failed:", tErr.message);
     if (!T) return;
@@ -810,6 +811,10 @@ export default function App() {
         return { id: m.user_id, name: p?.name || m.display_name || "Member", initials: p?.initials || initialsOf(m.display_name || "?"), roleInTrip: m.role_in_trip };
       }),
       itinerary: (IT || []).filter((i) => i.trip_id === tr.id).map((i) => ({ day: i.day_no, title: i.title })),
+      guests: (G || []).filter((g) => g.trip_id === tr.id).map((g) => ({
+        id: g.id, name: g.full_name, nationality: g.nationality || null, dob: g.date_of_birth || null,
+        passportNo: g.passport_no || null, passportExpiry: g.passport_expiry || null, dietary: g.dietary || null, notes: g.notes || null,
+      })),
       chat: {
         state: tr.chat_state || "active",
         messages: (MS || []).filter((m) => m.trip_id === tr.id).map((m) => ({
@@ -1200,8 +1205,8 @@ function BrandMark({ size = 40, label = "", className = "" }) {
 const NAV = {
   guide: [{ id: "post", label: "Feed", Icon: Newspaper }, { id: "jobs", label: "Jobs", Icon: Briefcase }, { id: "trips", label: "Trips", Icon: MapIcon }, { id: "chats", label: "Messages", Icon: MessageSquare }, { id: "profile", label: "Profile", Icon: User }],
   driver: [{ id: "post", label: "Feed", Icon: Newspaper }, { id: "jobs", label: "Jobs", Icon: Briefcase }, { id: "trips", label: "Trips", Icon: MapIcon }, { id: "chats", label: "Messages", Icon: MessageSquare }, { id: "profile", label: "Profile", Icon: User }],
-  operator: [{ id: "bookings", label: "Bookings", Icon: CalendarCheck }, { id: "itinerary", label: "Itinerary", Icon: CalendarDays }, { id: "discover", label: "Crew", Icon: Search }, { id: "requests", label: "Jobs", Icon: Briefcase }, { id: "chats", label: "Messages", Icon: MessageSquare }, { id: "feed", label: "Feed", Icon: Newspaper }],
-  admin: [{ id: "review", label: "Review", Icon: ShieldCheck }, { id: "users", label: "Users", Icon: Users }, { id: "feed", label: "Feed", Icon: Newspaper }, { id: "discover", label: "Discover", Icon: Search }, { id: "chats", label: "Messages", Icon: MessageSquare }],
+  operator: [{ id: "bookings", label: "Bookings", Icon: CalendarCheck }, { id: "insights", label: "Insights", Icon: TrendingUp }, { id: "itinerary", label: "Itinerary", Icon: CalendarDays }, { id: "discover", label: "Crew", Icon: Search }, { id: "requests", label: "Jobs", Icon: Briefcase }, { id: "chats", label: "Messages", Icon: MessageSquare }, { id: "feed", label: "Feed", Icon: Newspaper }],
+  admin: [{ id: "review", label: "Review", Icon: ShieldCheck }, { id: "users", label: "Users", Icon: Users }, { id: "insights", label: "Insights", Icon: TrendingUp }, { id: "feed", label: "Feed", Icon: Newspaper }, { id: "discover", label: "Discover", Icon: Search }, { id: "chats", label: "Messages", Icon: MessageSquare }],
 };
 const DEFAULT_TAB = { guide: "post", driver: "post", operator: "bookings", admin: "review" };
 
@@ -1448,6 +1453,7 @@ function Shell({ user, posts, jobs, trips, listings, enquiries, actions, engagem
             {tab === "profile" && <TalentProfile talent={talentById(user.talentId)} posts={posts} eng={eng} self onSetAvailability={actions.setAvailability} onProfileSaved={actions.reloadDirectory} onOpenProfile={openProfile} onBack={null} />}
             {tab === "bookings" && <BookingsTab user={user} enquiries={enquiries} trips={trips} actions={actions} onOpenProfile={openProfile} />}
             {tab === "itinerary" && <QuickItinerary user={user} trips={trips} actions={actions} />}
+            {tab === "insights" && <InsightsTab user={user} trips={trips} enquiries={enquiries} />}
             {tab === "discover" && <Discover onOpen={openProfile} initialQuery={searchTerm} dirTick={dirTick} />}
             {tab === "requests" && <OperatorJobs user={user} jobs={jobs} listings={listings} posts={posts} actions={actions} eng={eng} onOpen={openProfile} />}
             {tab === "feed" && <Feed posts={posts} eng={eng} admin={user.kind === "admin"} onDelete={actions.deletePost} onOpenProfile={openProfile} following={myFollowing} />}
@@ -2641,6 +2647,7 @@ function TripHub({ user, meId, trip, actions, onBack }) {
         {isTalent
           ? <CrewBrief trip={trip} user={user} />
           : <TripEssentials trip={trip} canEdit actions={actions} />}
+        {!isTalent && <GuestRoster trip={trip} canEdit actions={actions} />}
 
         {canInvite && (
           <button onClick={() => setInviting(true)}
@@ -5658,6 +5665,7 @@ function Tutorial({ user, nav, setTab, onDone }) {
 
   const OPERATOR_STEPS = [
     { kind: "intro", title: `Welcome, ${first}`, body: "Here's how a booking moves through the hub, from first enquiry to finished trip." },
+    { kind: "tab", tab: "insights", title: "Insights", body: "Your business at a glance: trips, guests and nights against last year, where guests come from, why enquiries are lost, and what to do about it." },
     { kind: "tab", tab: "bookings", title: "Bookings", body: "Everything lives here in four stages: Enquiries, Confirmed, Past, and Follow up. Record an enquiry, and when the client says yes, tap Make a Trip." },
     { kind: "tab", tab: "itinerary", title: "Itinerary", body: "Drukpah builds a day-by-day plan from Bhutan's roads — or drafts one with AI from your own template and a trip description — then applies it to a trip or shares it with your client." },
     { kind: "tab", tab: "discover", title: "Crew", body: "Every verified guide and driver, filtered by speciality, language and who's available right now. Phone numbers are visible to you — that's an operator feature." },
@@ -8195,6 +8203,20 @@ function CrewBrief({ trip, user }) {
             </div>
           )}
 
+          {/* who is in the group: names, nationality, dietary — never documents */}
+          {(trip.guests || []).length > 0 && (
+            <>
+              <div className="text-[12px] font-semibold tracking-[.12em] uppercase mb-2" style={{ color: C.goldText }}>Who's travelling</div>
+              <div className="rounded-xl px-3.5 py-3 mb-3" style={{ background: C.bg, border: `1px solid ${C.line}` }}>
+                {trip.guests.map((g, k) => (
+                  <div key={g.id} className="text-[13px] leading-snug" style={{ color: C.muted, marginTop: k ? 4 : 0 }}>
+                    <span className="font-medium" style={{ color: C.ink }}>{g.name}</span>{g.nationality ? ` · ${g.nationality}` : ""}{g.dietary ? ` · ${g.dietary}` : ""}
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+
           {/* 2. where to be, when */}
           <div className="text-[12px] font-semibold tracking-[.12em] uppercase mb-2" style={{ color: C.goldText }}>Collection</div>
           {trip.arrivalFlight || arrival ? (
@@ -10568,4 +10590,457 @@ function AdminAddDrafts({ adminId, operator, onClose, onDone }) {
       </div>
     </div>
   ), document.body);
+}
+
+/* ============================================================================
+   INSIGHTS — what an operator's trips and enquiries say, worked out by rules.
+   Pure functions: given trips and enquiries, return numbers, chart data and
+   plain-language suggestions. No AI, no network.
+   ========================================================================== */
+const DK_COUNTRIES = [
+  "Australia", "Austria", "Bangladesh", "Belgium", "Brazil", "Canada", "China", "Czechia", "Denmark", "Finland", "France", "Germany",
+  "Hong Kong", "India", "Indonesia", "Ireland", "Israel", "Italy", "Japan", "Malaysia", "Maldives", "Mexico", "Nepal", "Netherlands",
+  "New Zealand", "Norway", "Philippines", "Poland", "Portugal", "Russia", "Singapore", "South Africa", "South Korea", "Spain", "Sri Lanka",
+  "Sweden", "Switzerland", "Taiwan", "Thailand", "Turkey", "United Arab Emirates", "United Kingdom", "United States", "Vietnam", "Other",
+];
+const ALIAS = {
+  usa: "United States", us: "United States", america: "United States", "united states of america": "United States",
+  uk: "United Kingdom", britain: "United Kingdom", "great britain": "United Kingdom", england: "United Kingdom", scotland: "United Kingdom",
+  uae: "United Arab Emirates", korea: "South Korea", "republic of korea": "South Korea", holland: "Netherlands", "czech republic": "Czechia",
+  "hong kong sar": "Hong Kong", deutschland: "Germany", aus: "Australia", nz: "New Zealand", prc: "China", "people's republic of china": "China",
+};
+function normCountry(s) {
+  const t = String(s || "").trim();
+  if (!t) return "";
+  const low = t.toLowerCase().replace(/\./g, "").trim();          // "U.S.A." → "usa"
+  if (ALIAS[low]) return ALIAS[low];
+  const hit = DK_COUNTRIES.find((c) => c.toLowerCase() === low);
+  if (hit) return hit;
+  return t[0].toUpperCase() + t.slice(1);
+}
+
+const DK_REGION_TOWNS = {
+  "Western Bhutan": ["Paro", "Thimphu", "Punakha", "Haa", "Gangtey", "Phobjikha", "Wangdue", "Dochula", "Chele La"],
+  "Central Bhutan": ["Trongsa", "Bumthang", "Jakar", "Ura", "Zhemgang", "Gelephu"],
+  "Eastern Bhutan": ["Mongar", "Trashigang", "Trashiyangtse", "Lhuentse", "Samdrup Jongkhar"],
+};
+
+const DAY = 86400e3;
+const yearOf = (iso) => (iso ? Number(String(iso).slice(0, 4)) : NaN);
+const monthOf = (iso) => (iso ? Number(String(iso).slice(5, 7)) - 1 : NaN);
+const DK_MONTHS_SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+function ageBand(dob, onDate) {
+  if (!dob) return null;
+  const d = new Date(dob + "T00:00"), at = new Date((onDate || new Date().toISOString().slice(0, 10)) + "T00:00");
+  if (isNaN(d) || isNaN(at)) return null;
+  let a = at.getFullYear() - d.getFullYear();
+  if (at.getMonth() < d.getMonth() || (at.getMonth() === d.getMonth() && at.getDate() < d.getDate())) a--;
+  if (a < 6) return "under6";
+  if (a < 13) return "child";
+  if (a >= 65) return "senior";
+  return "adult";
+}
+
+/** @param {{trips, enquiries, operatorId, year, now?}} o  year: a number, or "all" */
+function dkInsights(o) {
+  const now = o.now || Date.now();
+  const thisYear = new Date(now).getFullYear();
+  const year = o.year === "all" ? "all" : Number(o.year || thisYear);
+  const prevYear = year === "all" ? null : year - 1;
+  const mine = (o.trips || []).filter((t) => t && (!o.operatorId || t.operatorId === o.operatorId));
+  const enq = (o.enquiries || []).filter((e) => e && (!o.operatorId || e.operatorId === o.operatorId));
+  const inYear = (iso, y) => (y === "all" ? true : yearOf(iso) === y);
+  const tripsY = mine.filter((t) => inYear(t.start, year));
+  const tripsPrev = prevYear ? mine.filter((t) => inYear(t.start, prevYear)) : [];
+  const createdIso = (e) => { const d = new Date(e.createdAt || NaN); return isNaN(d) ? "" : d.toISOString().slice(0, 10); };  // a bad row never crashes the page
+  const enqY = enq.filter((e) => inYear(createdIso(e), year));
+  const enqPrev = prevYear ? enq.filter((e) => inYear(createdIso(e), prevYear)) : [];
+
+  const nights = (t) => { const n = (new Date(t.end + "T00:00") - new Date(t.start + "T00:00")) / DAY; return isFinite(n) ? Math.max(0, Math.round(n)) : 0; };
+  const guestsOf = (t) => ((t.guests && t.guests.length) ? t.guests.length : (t.guestCount || 0));
+  const sum = (xs, f) => xs.reduce((a, x) => a + (f(x) || 0), 0);
+
+  const kpi = {
+    trips: tripsY.length, tripsPrev: tripsPrev.length,
+    nights: sum(tripsY, nights), nightsPrev: sum(tripsPrev, nights),
+    guests: sum(tripsY, guestsOf), guestsPrev: sum(tripsPrev, guestsOf),
+    guestNights: sum(tripsY, (t) => guestsOf(t) * nights(t)),
+    enquiries: enqY.length, enquiriesPrev: enqPrev.length,
+    won: enqY.filter((e) => e.status === "won").length, lost: enqY.filter((e) => e.status === "lost").length,
+    open: enqY.filter((e) => ["new", "quoted", "cold"].includes(e.status)).length,
+  };
+  kpi.conversion = kpi.won + kpi.lost ? kpi.won / (kpi.won + kpi.lost) : null;
+  const prevWon = enqPrev.filter((e) => e.status === "won").length, prevLost = enqPrev.filter((e) => e.status === "lost").length;
+  kpi.conversionPrev = prevWon + prevLost ? prevWon / (prevWon + prevLost) : null;
+  kpi.sdfEstimate = kpi.guestNights * 100;          // USD, adult rate; children pay less, so this is an upper bound
+
+  // trips by month, this year and last
+  const byMonth = DK_MONTHS_SHORT.map((m, i) => ({
+    month: m,
+    trips: tripsY.filter((t) => monthOf(t.start) === i).length,
+    prev: tripsPrev.filter((t) => monthOf(t.start) === i).length,
+    guests: sum(tripsY.filter((t) => monthOf(t.start) === i), guestsOf),
+  }));
+
+  // guests by country: the roster where it exists, otherwise won enquiries
+  const fromRoster = {}; let rosterGuests = 0;
+  for (const t of tripsY) for (const g of t.guests || []) { const c = normCountry(g.nationality) || "Not recorded"; fromRoster[c] = (fromRoster[c] || 0) + 1; rosterGuests++; }
+  const fromEnq = {};
+  for (const e of enqY.filter((x) => x.status === "won")) { const c = normCountry(e.country) || "Not recorded"; fromEnq[c] = (fromEnq[c] || 0) + (Number(e.partySize) || 1); }
+  const countrySource = rosterGuests > 0 ? "roster" : Object.keys(fromEnq).length ? "enquiries" : "none";
+  const countryMap = countrySource === "roster" ? fromRoster : fromEnq;
+  const countries = Object.entries(countryMap).sort((a, b) => b[1] - a[1]).map(([name, n]) => ({ name, n }));
+  const countryTotal = sum(countries, (c) => c.n);
+  const topCountries = countries.slice(0, 8);
+  const rest = countries.slice(8).reduce((a, c) => a + c.n, 0);
+  if (rest) topCountries.push({ name: "Other", n: rest });
+  for (const c of topCountries) c.share = countryTotal ? c.n / countryTotal : 0;
+
+  // where trips go, from itinerary text
+  const regionCounts = Object.keys(DK_REGION_TOWNS).map((r) => ({ name: r, n: 0 }));
+  const townCounts = {};
+  for (const t of tripsY) {
+    const text = ((t.itinerary || []).map((d) => d.title).join(" ") + " " + (t.title || "")).toLowerCase();
+    for (const r of regionCounts) {
+      const towns = DK_REGION_TOWNS[r.name].filter((tw) => text.includes(tw.toLowerCase()));
+      if (towns.length) { r.n++; for (const tw of towns) townCounts[tw] = (townCounts[tw] || 0) + 1; }
+    }
+  }
+  const towns = Object.entries(townCounts).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([name, n]) => ({ name, n }));
+
+  // enquiries: sources, lost reasons, by country conversion
+  const count = (xs, key) => { const m = {}; for (const x of xs) { const k = key(x) || "Not recorded"; m[k] = (m[k] || 0) + 1; } return Object.entries(m).sort((a, b) => b[1] - a[1]).map(([name, n]) => ({ name, n })); };
+  const sources = count(enqY, (e) => e.source);
+  const lostReasons = count(enqY.filter((e) => e.status === "lost"), (e) => e.lostReason);
+  const byCountryConv = {};
+  for (const e of enqY) {
+    if (!["won", "lost"].includes(e.status)) continue;
+    const c = normCountry(e.country) || "Not recorded"; const b = (byCountryConv[c] = byCountryConv[c] || { name: c, won: 0, lost: 0 });
+    b[e.status]++;
+  }
+  const countryConv = Object.values(byCountryConv).map((b) => ({ ...b, decided: b.won + b.lost, rate: b.won / (b.won + b.lost) })).filter((b) => b.decided >= 3).sort((a, b) => b.decided - a.decided);
+
+  // crew readiness for upcoming trips
+  const soon = mine.filter((t) => { const d = (new Date(t.start + "T00:00") - now) / DAY; return d >= 0 && d <= 14; });
+  const crewGaps = soon.filter((t) => (t.members || []).filter((m) => m.roleInTrip !== "operator").length === 0);
+  const unanswered = enq.filter((e) => ["new"].includes(e.status) && !e.lastContacted && (now - e.createdAt) / DAY >= 2);
+
+  // suggestions, only where the data supports them
+  const tips = [];
+  const pct = (x) => `${Math.round(x * 100)}%`;
+  const noRoster = tripsY.filter((t) => !(t.guests && t.guests.length)).length;
+  if (tripsY.length && noRoster) tips.push({ level: "info", text: `${noRoster} of ${tripsY.length} trips ${year === "all" ? "" : `in ${year} `}have no guest list yet. Add guests' nationalities to those trips and the country chart will show who really travels with you.` });
+  if (kpi.conversion !== null) for (const b of countryConv) {
+    if (b.rate < kpi.conversion - 0.15) tips.push({ level: "warn", text: `Enquiries from ${b.name} convert at ${pct(b.rate)}, against ${pct(kpi.conversion)} overall (${b.decided} decided). Worth looking at what those guests ask for and how fast they hear back.` });
+  }
+  if (lostReasons.length && lostReasons[0].n >= 3) {
+    const r = lostReasons[0].name, n = lostReasons[0].n;
+    const tipFor = { "Price too high": "Offer a shorter or simpler version of the same trip in the first reply, so there is a price to say yes to.",
+      "No reply": "These went quiet. A follow-up within two days of quoting recovers some of them — the Bookings tab reminds you.",
+      "Dates unavailable": "Keep a list of alternative dates handy; many guests are flexible by a week.",
+      "Chose another operator": "Ask the ones who tell you why. Speed of the first quote is the commonest reason.",
+      "Trip postponed": "Set a follow-up date on each; postponed trips often come back next season." }[r] || "Look for a pattern in these.";
+    tips.push({ level: "warn", text: `"${r}" is your commonest reason for losing an enquiry (${n} this period). ${tipFor}` });
+  }
+  if (tripsY.length >= 6) {
+    const sorted = [...byMonth].sort((a, b) => b.trips - a.trips); const top2 = sorted[0].trips + sorted[1].trips;
+    if (top2 / tripsY.length >= 0.5) tips.push({ level: "info", text: `${sorted[0].month} and ${sorted[1].month} carry ${pct(top2 / tripsY.length)} of your trips. Spring (March–May) and the quieter months are where new marketing pays off most.` });
+  }
+  if (unanswered.length) tips.push({ level: "warn", text: `${unanswered.length} new ${unanswered.length === 1 ? "enquiry has" : "enquiries have"} waited two days or more without contact. Most are lost after that.` });
+  if (crewGaps.length) tips.push({ level: "warn", text: `${crewGaps.length} ${crewGaps.length === 1 ? "trip starts" : "trips start"} within two weeks with no guide or driver yet. Add crew from the trip's page.` });
+  if (prevYear && kpi.tripsPrev) {
+    const ch = (kpi.trips - kpi.tripsPrev) / kpi.tripsPrev;
+    tips.push({ level: ch >= 0 ? "good" : "info", text: `${kpi.trips} trips in ${year} against ${kpi.tripsPrev} in ${prevYear}: ${ch >= 0 ? "up" : "down"} ${pct(Math.abs(ch))}.` });
+  }
+  if (sources.length >= 2 && sources[0].n / Math.max(1, enqY.length) >= 0.6) tips.push({ level: "info", text: `${pct(sources[0].n / enqY.length)} of enquiries come from ${sources[0].name}. A second steady source — referrals from past guests, or one agent abroad — would make the business less fragile.` });
+  if (!tripsY.length && !enqY.length) tips.push({ level: "info", text: "Nothing to analyse yet. Once trips and enquiries are recorded here, this page fills itself in." });
+
+  return { year, prevYear, kpi, byMonth, countries: topCountries, countrySource, countryTotal, regions: regionCounts, towns, sources, lostReasons, countryConv, crewGaps, unanswered, tips };
+}
+
+
+/* ========================================================================== */
+/*  GUEST ROSTER — who is travelling, for visa clearance, the brief, and insights */
+/* ========================================================================== */
+const AGE_LABEL = { under6: "under 6 · no SDF", child: "6–12 · half SDF", adult: "adult", senior: "65+" };
+
+function guestBands(guests, onDate) {
+  const b = { under6: 0, child: 0, adult: 0, senior: 0, unknown: 0 };
+  for (const g of guests || []) { const k = ageBand(g.dob, onDate); if (k) b[k]++; else b.unknown++; }
+  return b;
+}
+
+function GuestRoster({ trip, canEdit, actions }) {
+  const guests = trip.guests || [];
+  const [adding, setAdding] = useState(false);
+  const [f, setF] = useState({ name: "", nationality: "", dob: "", passport: "", expiry: "", dietary: "" });
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const [confirmDel, setConfirmDel] = useState(null);
+  const set = (k, v) => setF((x) => ({ ...x, [k]: v }));
+  const field = { background: C.bg, border: `1px solid ${C.line}`, color: C.ink };
+  const bands = guestBands(guests, trip.start);
+  const expiryWarn = (g) => g.passportExpiry && trip.end && (new Date(g.passportExpiry) - new Date(trip.end)) / 86400e3 < 183;
+
+  const syncCount = async (n) => {
+    if (n && trip.guestCount !== n) { try { await supabase.from("trips").update({ guest_count: n }).eq("id", trip.id); } catch (e) {} }
+  };
+  const add = async () => {
+    if (f.name.trim().length < 2) { setErr("Enter the guest's name as it appears in the passport."); return; }
+    setBusy(true); setErr(null);
+    const row = { trip_id: trip.id, full_name: f.name.trim(), nationality: normCountry(f.nationality) || null, date_of_birth: f.dob || null,
+                  passport_no: f.passport.trim().toUpperCase() || null, passport_expiry: f.expiry || null, dietary: f.dietary.trim() || null };
+    const { error } = await supabase.from("trip_guests").insert(row);
+    setBusy(false);
+    if (error) { setErr("Couldn't save — " + error.message); return; }
+    await syncCount(guests.length + 1);
+    setF({ name: "", nationality: "", dob: "", passport: "", expiry: "", dietary: "" }); setAdding(false);
+    actions.reloadTrips && actions.reloadTrips();
+  };
+  const remove = async (id) => {
+    const { error } = await supabase.from("trip_guests").delete().eq("id", id);
+    setConfirmDel(null);
+    if (error) { setErr("Couldn't remove — " + error.message); return; }
+    await syncCount(Math.max(0, guests.length - 1));
+    actions.reloadTrips && actions.reloadTrips();
+  };
+
+  return (
+    <div className="rounded-2xl p-4 mb-4" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-[11px] font-semibold tracking-[.14em] uppercase" style={{ color: C.goldText }}>Guests</div>
+          <div className="text-[13px] mt-0.5" style={{ color: C.muted }}>
+            {guests.length === 0 ? "No one listed yet" :
+              [`${guests.length} ${guests.length === 1 ? "guest" : "guests"}`, bands.senior ? `${bands.senior} aged 65+` : "", bands.child ? `${bands.child} aged 6–12` : "",
+               bands.under6 ? `${bands.under6} under 6` : ""].filter(Boolean).join(" · ")}
+          </div>
+        </div>
+        {canEdit && !adding && (
+          <button type="button" onClick={() => setAdding(true)} className="tap h-9 px-3 rounded-lg text-[13px] font-semibold shrink-0 inline-flex items-center gap-1"
+            style={{ background: C.goldSoft, color: C.goldText }}><UserPlus size={14} /> Add guest</button>
+        )}
+      </div>
+
+      {guests.length > 0 && (
+        <div className="mt-3 rounded-xl overflow-hidden" style={{ border: `1px solid ${C.lineSoft}` }}>
+          {guests.map((g, k) => {
+            const band = ageBand(g.dob, trip.start);
+            return (
+              <div key={g.id} className="px-3 py-2.5 flex items-start gap-3" style={{ borderTop: k ? `1px solid ${C.lineSoft}` : "none" }}>
+                <div className="flex-1 min-w-0">
+                  <div className="text-[14px] font-semibold" style={{ color: C.ink }}>{g.name}</div>
+                  <div className="text-[12px]" style={{ color: C.muted }}>
+                    {[g.nationality, band ? AGE_LABEL[band] : null, g.dietary].filter(Boolean).join(" · ") || "No details yet"}
+                  </div>
+                  {canEdit && (g.passportNo || g.passportExpiry) && (
+                    <div className="text-[12px] mt-0.5" style={{ color: expiryWarn(g) ? C.maroon : C.muted }}>
+                      Passport {g.passportNo ? `…${String(g.passportNo).slice(-4)}` : ""}{g.passportExpiry ? ` · valid to ${new Date(g.passportExpiry + "T00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}` : ""}
+                      {expiryWarn(g) ? " · less than 6 months after the trip" : ""}
+                    </div>
+                  )}
+                </div>
+                {canEdit && (confirmDel === g.id ? (
+                  <div className="flex gap-1 shrink-0">
+                    <button type="button" onClick={() => setConfirmDel(null)} className="tap h-8 px-2 rounded-lg text-[12px]" style={{ background: C.bg, color: C.muted }}>Keep</button>
+                    <button type="button" onClick={() => remove(g.id)} className="tap h-8 px-2 rounded-lg text-[12px] font-semibold" style={{ background: C.maroon, color: "#FFFFFF" }}>Remove</button>
+                  </div>
+                ) : (
+                  <button type="button" onClick={() => setConfirmDel(g.id)} aria-label={`Remove ${g.name}`} className="tap w-8 h-8 rounded-lg flex items-center justify-center shrink-0" style={{ background: C.bg }}>
+                    <X size={13} color={C.muted} />
+                  </button>
+                ))}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {adding && (
+        <div className="mt-3 rounded-xl p-3" style={{ background: C.bg }}>
+          <input value={f.name} onChange={(e) => set("name", e.target.value)} maxLength={80} placeholder="Full name, as in the passport" aria-label="Guest name"
+            className="w-full h-11 px-3 rounded-lg text-[14px] mb-2" style={{ ...field, background: C.card }} />
+          <div className="grid grid-cols-2 gap-2 mb-2">
+            <select value={f.nationality} onChange={(e) => set("nationality", e.target.value)} aria-label="Nationality"
+              className="h-11 px-2 rounded-lg text-[13px]" style={{ ...field, background: C.card }}>
+              <option value="">Nationality</option>
+              {DK_COUNTRIES.map((c) => <option key={c} value={c}>{c}</option>)}
+            </select>
+            <input type="date" value={f.dob} onChange={(e) => set("dob", e.target.value)} aria-label="Date of birth"
+              className="h-11 px-2 rounded-lg text-[13px]" style={{ ...field, background: C.card }} />
+          </div>
+          <div className="grid grid-cols-2 gap-2 mb-2">
+            <input value={f.passport} onChange={(e) => set("passport", e.target.value.toUpperCase())} maxLength={20} placeholder="Passport no." aria-label="Passport number"
+              className="h-11 px-3 rounded-lg text-[13px]" style={{ ...field, background: C.card, letterSpacing: ".04em" }} />
+            <input type="date" value={f.expiry} onChange={(e) => set("expiry", e.target.value)} aria-label="Passport expiry"
+              className="h-11 px-2 rounded-lg text-[13px]" style={{ ...field, background: C.card }} />
+          </div>
+          <input value={f.dietary} onChange={(e) => set("dietary", e.target.value)} maxLength={120} placeholder="Dietary or medical notes the crew should know" aria-label="Dietary or medical notes"
+            className="w-full h-11 px-3 rounded-lg text-[13px] mb-1" style={{ ...field, background: C.card }} />
+          <p className="text-[11px] mb-3 leading-snug" style={{ color: C.muted }}>Date of birth sets the SDF band. Passport details stay with you; the crew see only names, nationality and dietary notes.</p>
+          {err && <p className="text-[13px] mb-2" style={{ color: C.maroon }}>{err}</p>}
+          <div className="flex gap-2">
+            <button type="button" onClick={() => { setAdding(false); setErr(null); }} className="tap flex-1 h-10 rounded-lg text-[13px] font-semibold" style={{ background: C.card, color: C.muted }}>Cancel</button>
+            <button type="button" onClick={add} disabled={busy} className="tap flex-[1.4] h-10 rounded-lg text-[13px] font-semibold inline-flex items-center justify-center" style={{ background: C.pine, color: "#FFFFFF" }}>
+              {busy ? <Loader2 size={14} className="animate-spin" /> : "Add to the trip"}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ========================================================================== */
+/*  INSIGHTS — the operator's dashboard                                       */
+/* ========================================================================== */
+function InsBars({ rows, total, unit = "" }) {
+  const max = Math.max(1, ...rows.map((r) => r.n));
+  return (
+    <div className="space-y-1.5">
+      {rows.map((r) => (
+        <div key={r.name} className="flex items-center gap-2" title={`${r.name}: ${r.n}`}>
+          <div className="text-[12px] w-[38%] truncate" style={{ color: C.ink }}>{r.name}</div>
+          <div className="flex-1 h-4 rounded-md overflow-hidden" style={{ background: C.bg }}>
+            <div className="h-full rounded-md" style={{ width: `${(r.n / max) * 100}%`, background: C.pine, minWidth: r.n ? 4 : 0 }} />
+          </div>
+          <div className="text-[12px] w-14 text-right" style={{ color: C.muted }}>{r.n}{unit}{total ? ` · ${Math.round((r.n / total) * 100)}%` : ""}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function InsMonths({ byMonth, prevYear }) {
+  const max = Math.max(1, ...byMonth.map((m) => Math.max(m.trips, m.prev)));
+  const W = 360, H = 120, pad = 6, bw = (W - pad * 2) / 12, top = 14;   // headroom so every label sits above its bar
+  return (
+    <div>
+      <svg viewBox={`0 0 ${W} ${H + 18}`} className="w-full block" role="img" aria-label="Trips by month">
+        {byMonth.map((m, i) => {
+          const x = pad + i * bw, hT = (m.trips / max) * (H - top), hP = (m.prev / max) * (H - top);
+          return (
+            <g key={m.month}>
+              {prevYear && <rect x={x + 2} y={H - hP} width={bw * 0.42} height={hP} rx="2" fill={C.line} />}
+              <rect x={x + 2 + (prevYear ? bw * 0.44 : 0)} y={H - hT} width={prevYear ? bw * 0.42 : bw - 4} height={hT} rx="2" fill={C.pine} />
+              {m.trips > 0 && <text x={x + bw / 2} y={H - hT - 3} textAnchor="middle" fontSize="9" fill={C.ink}>{m.trips}</text>}
+              <text x={x + bw / 2} y={H + 13} textAnchor="middle" fontSize="9" fill={C.muted}>{m.month}</text>
+            </g>
+          );
+        })}
+      </svg>
+      {prevYear && (
+        <div className="flex gap-3 text-[11px] mt-1" style={{ color: C.muted }}>
+          <span className="inline-flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm inline-block" style={{ background: C.pine }} /> this period</span>
+          <span className="inline-flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm inline-block" style={{ background: C.line }} /> {prevYear}</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function InsTile({ label, value, prev, fmt = (x) => x, suffix = "", points = false }) {
+  const delta = prev === null || prev === undefined || value === null ? null : points ? value - prev : prev === 0 ? null : (value - prev) / prev;
+  return (
+    <div className="rounded-xl px-3 py-2.5" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+      <div className="text-[11px] font-semibold tracking-[.06em] uppercase" style={{ color: C.goldText }}>{label}</div>
+      <div className="text-[18px] font-semibold mt-0.5" style={{ color: C.ink }}>{value === null ? "—" : fmt(value)}{value === null ? "" : suffix}</div>
+      {delta !== null && isFinite(delta) && (
+        <div className="text-[11px]" style={{ color: delta >= 0 ? C.pine : C.maroon }}>{delta >= 0 ? "▲" : "▼"} {Math.round(Math.abs(delta) * 100)}{points ? " pts" : "%"} vs last year</div>
+      )}
+    </div>
+  );
+}
+
+function InsightsTab({ user, trips, enquiries }) {
+  const thisYear = new Date().getFullYear();
+  const [year, setYear] = useState(thisYear);
+  const meId = user.talentId || user.id;
+  const r = useMemo(() => dkInsights({ trips, enquiries, operatorId: user.kind === "admin" ? null : meId, year }), [trips, enquiries, meId, year, user.kind]);
+  const levelStyle = { warn: [C.maroonSoft, C.maroon], info: [C.bg, C.ink], good: [C.pineSoft, C.pine] };
+  const pct = (x) => `${Math.round(x * 100)}%`;
+  const card = { background: C.card, border: `1px solid ${C.line}` };
+  const H = ({ children, sub }) => (
+    <div className="mb-2"><div className="text-[11px] font-semibold tracking-[.14em] uppercase" style={{ color: C.goldText }}>{children}</div>
+      {sub && <div className="text-[12px]" style={{ color: C.muted }}>{sub}</div>}</div>
+  );
+  const sdfStr = (x) => `$${x.toLocaleString("en")}`;
+
+  return (
+    <div className="px-5 py-4">
+      <SectionLabel trailing={user.kind === "admin" ? "whole hub" : "your business"}>Insights</SectionLabel>
+      <div className="flex gap-2 mb-4 flex-wrap">
+        {[thisYear, thisYear - 1, thisYear - 2].map((y) => <Chip key={y} on={year === y} onClick={() => setYear(y)}>{y}</Chip>)}
+        <Chip on={year === "all"} onClick={() => setYear("all")}>All time</Chip>
+      </div>
+
+      <div className="grid grid-cols-2 gap-2 mb-4">
+        <InsTile label="Trips" value={r.kpi.trips} prev={r.prevYear ? r.kpi.tripsPrev : null} />
+        <InsTile label="Guests" value={r.kpi.guests} prev={r.prevYear ? r.kpi.guestsPrev : null} />
+        <InsTile label="Nights" value={r.kpi.nights} prev={r.prevYear ? r.kpi.nightsPrev : null} />
+        <InsTile label="Enquiries won" value={r.kpi.conversion} prev={r.prevYear ? r.kpi.conversionPrev : null} fmt={pct} points />
+      </div>
+      <div className="rounded-xl px-3 py-2 mb-4 text-[12px]" style={{ background: C.goldSoft, color: C.goldText }}>
+        {r.kpi.enquiries} {r.kpi.enquiries === 1 ? "enquiry" : "enquiries"} · {r.kpi.won} won · {r.kpi.lost} lost · {r.kpi.open} open
+        {r.kpi.guestNights ? ` · about ${sdfStr(r.kpi.sdfEstimate)} in SDF collected (adult rate, ${r.kpi.guestNights} guest-nights)` : ""}
+      </div>
+
+      {r.tips.length > 0 && (
+        <div className="space-y-2 mb-5">
+          {r.tips.map((t, i) => (
+            <div key={i} className="rounded-xl px-3.5 py-3 text-[13px] leading-snug" style={{ background: levelStyle[t.level][0], color: levelStyle[t.level][1], border: t.level === "info" ? `1px solid ${C.line}` : "none" }}>{t.text}</div>
+          ))}
+        </div>
+      )}
+
+      <div className="rounded-2xl p-4 mb-3" style={card}>
+        <H sub={r.prevYear ? `${r.year} against ${r.prevYear}` : "all years together"}>Trips by month</H>
+        <InsMonths byMonth={r.byMonth} prevYear={r.prevYear} />
+      </div>
+
+      <div className="rounded-2xl p-4 mb-3" style={card}>
+        <H sub={r.countrySource === "roster" ? `${r.countryTotal} guests, from the guest lists on your trips` : r.countrySource === "enquiries" ? "from won enquiries — add guest lists to trips for the real figure" : "add guests to your trips to see this"}>
+          Where your guests come from
+        </H>
+        {r.countries.length ? <InsBars rows={r.countries} total={r.countryTotal} /> : <p className="text-[13px]" style={{ color: C.muted }}>No nationalities recorded yet.</p>}
+      </div>
+
+      <div className="rounded-2xl p-4 mb-3" style={card}>
+        <H sub="from the day plans of your trips">Where your trips go</H>
+        <InsBars rows={r.regions} total={r.kpi.trips || 0} />
+        {r.towns.length > 0 && <div className="text-[12px] mt-3" style={{ color: C.muted }}>Most visited: {r.towns.map((t) => `${t.name} (${t.n})`).join(", ")}</div>}
+      </div>
+
+      <div className="rounded-2xl p-4 mb-3" style={card}>
+        <H>Where enquiries come from</H>
+        {r.sources.length ? <InsBars rows={r.sources} total={r.kpi.enquiries} /> : <p className="text-[13px]" style={{ color: C.muted }}>No enquiries in this period.</p>}
+      </div>
+
+      {r.lostReasons.length > 0 && (
+        <div className="rounded-2xl p-4 mb-3" style={card}>
+          <H sub={`${r.kpi.lost} lost`}>Why enquiries were lost</H>
+          <InsBars rows={r.lostReasons} total={r.kpi.lost} />
+        </div>
+      )}
+
+      {r.countryConv.length > 0 && (
+        <div className="rounded-2xl p-4 mb-3" style={card}>
+          <H sub="countries with at least three decided enquiries">Conversion by country</H>
+          <div className="space-y-1.5">
+            {r.countryConv.map((c) => (
+              <div key={c.name} className="flex items-center justify-between text-[13px]">
+                <span style={{ color: C.ink }}>{c.name}</span>
+                <span style={{ color: c.rate < (r.kpi.conversion || 0) - 0.15 ? C.maroon : C.muted }}>{c.won} of {c.decided} · {pct(c.rate)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <p className="text-[12px] leading-snug mt-2" style={{ color: C.muted }}>
+        Worked out from what's recorded in the hub: trips by start date, enquiries by the date they came in. The SDF figure uses the adult rate and is an upper bound. Suggestions are rules, not guesses — each one names the numbers behind it.
+      </p>
+    </div>
+  );
 }
