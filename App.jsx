@@ -8,7 +8,7 @@ import {
   Map as MapIcon, MessageSquare, Users, Download, Mic, Video as VideoIcon, Heart, Share2, Trash2, Maximize2, Upload, Loader2, ArrowRight,
   Award, UserX, RefreshCw, FileCheck2, ExternalLink, UserPlus, Send as SendIcon, Lock, Eye, EyeOff, CalendarDays, UserCheck, Plus, CheckCheck, Camera, Navigation as NavIcon, Bell, Smartphone, Share, PhoneCall,
   ShieldAlert,
-  TrendingUp } from "lucide-react";
+  TrendingUp, BedDouble } from "lucide-react";
 import mapImg from "./map.jpg";
 import { supabase } from "./supabase.js";
 
@@ -40,6 +40,8 @@ const profileToTalent = (p) => ({
   phone: p.phone || "", email: p.email || "", pitch: p.pitch || "", vehicle: p.vehicle || null,
   availability: p.availability || "open", availableFrom: p.available_from || null, availableNote: p.availability_note || "",
   joinedAt: p.created_at ? new Date(p.created_at).getTime() : null,
+  company: p.company_name || "", hotelTown: p.hotel_town || null, hotelTier: p.hotel_tier || null, starRating: p.star_rating || null,
+  stayKind: p.stay_kind || null, hotelCheckin: p.hotel_checkin || null, hotelPolicy: p.hotel_policy || null,
 });
 const talentById = (id) => TALENT.find((t) => t.id === id) || PROFILE_DIR[id] || null;
 const initialsOf = (name) => (String(name || "?").trim().split(/\s+/).filter(Boolean).map((w) => w[0]).slice(0, 2).join("") || "?").toUpperCase();
@@ -49,7 +51,7 @@ const sysMsg = (text) => ({ id: uid(), senderId: null, kind: "system", body: tex
 /* ── Cloud (Supabase) ── posts are global when configured; everything falls back to local demo mode when not. */
 const CLOUD = Boolean(supabase);
 const DEMO_MODE = false;   // set true only for local demos without a database
-const BUILD = "BUILD 30 — 6 Oct";   // bump every deploy; shown at the top of the welcome screen
+const BUILD = "BUILD 32 — 7 Oct";   // bump every deploy; shown at the top of the welcome screen
 // which device someone is on — shown beside the build so a screenshot tells us both
 const DEVICE = (() => {
   try {
@@ -1103,6 +1105,8 @@ export default function App() {
       <div className={`app-shell flex flex-col${user ? " signed-in" : ""}`} style={{ color: C.ink }}>
         {!user ? (
           <Login onPick={setAccountId} session={session} myProfile={myProfile} onAuthed={reloadMe} onBusy={setAuthBusy} invitePreview={invitePreview} attestPreview={attestPreview} />
+        ) : !NAV[user.kind] ? (
+          <RoleComingSoon user={user} onLogout={() => { if (session) supabase.auth.signOut(); setAccountId(null); }} />
         ) : (
           <InvitesCtx.Provider value={{ invites, creditRequests }}>
           <Shell key={user.id} user={user} posts={posts} jobs={jobs} trips={trips} listings={listings} enquiries={enquiries} dirTick={dirTick} attest={{ attestToken, attestPreview, forgetAttest }}
@@ -1232,8 +1236,28 @@ const NAV = {
   driver: [{ id: "post", label: "Feed", Icon: Newspaper }, { id: "jobs", label: "Jobs", Icon: Briefcase }, { id: "trips", label: "Trips", Icon: MapIcon }, { id: "chats", label: "Messages", Icon: MessageSquare }, { id: "profile", label: "Profile", Icon: User }],
   operator: [{ id: "bookings", label: "Bookings", Icon: CalendarCheck }, { id: "insights", label: "Insights", Icon: TrendingUp }, { id: "itinerary", label: "Itinerary", Icon: CalendarDays }, { id: "discover", label: "Crew", Icon: Search }, { id: "requests", label: "Jobs", Icon: Briefcase }, { id: "chats", label: "Messages", Icon: MessageSquare }, { id: "feed", label: "Feed", Icon: Newspaper }],
   admin: [{ id: "review", label: "Review", Icon: ShieldCheck }, { id: "users", label: "Users", Icon: Users }, { id: "insights", label: "Insights", Icon: TrendingUp }, { id: "feed", label: "Feed", Icon: Newspaper }, { id: "discover", label: "Discover", Icon: Search }, { id: "chats", label: "Messages", Icon: MessageSquare }],
+  hotel: [{ id: "hotel_home", label: "Today", Icon: Building2 }, { id: "bookings", label: "Bookings", Icon: CalendarCheck }, { id: "rooms", label: "Rooms", Icon: BedDouble }, { id: "chats", label: "Messages", Icon: MessageSquare }, { id: "hotel_profile", label: "Property", Icon: User }],
 };
-const DEFAULT_TAB = { guide: "post", driver: "post", operator: "bookings", admin: "review" };
+/* Accounts whose role has no app yet (e.g. "business"/hotel) get a calm holding
+   screen instead of crashing on NAV[role].length. */
+function RoleComingSoon({ user, onLogout }) {
+  const isHotel = /business|hotel/i.test(user.kind || "");
+  return (
+    <div className="flex-1 flex items-center justify-center p-6">
+      <div className="w-full max-w-sm rounded-2xl p-6" style={{ background: C.card, border: `1px solid ${C.lineSoft}` }}>
+        <div className="text-[20px] font-semibold mb-2" style={{ color: C.ink }}>
+          {isHotel ? "Hotel accounts are coming soon" : "Your account type is coming soon"}
+        </div>
+        <p className="text-[15px] mb-6 leading-relaxed" style={{ color: C.muted }}>
+          {user.name ? `Thanks, ${user.name.split(" ")[0]}. ` : ""}You're signed in and your account is saved.
+          {isHotel ? " The hotel tools aren't open yet. We'll let you know as soon as they are." : " This part of the app isn't open yet. We'll let you know as soon as it is."}
+        </p>
+        <OCta onClick={onLogout}>Sign out</OCta>
+      </div>
+    </div>
+  );
+}
+const DEFAULT_TAB = { guide: "post", driver: "post", operator: "bookings", admin: "review", hotel: "hotel_home" };
 
 function Shell({ user, posts, jobs, trips, listings, enquiries, actions, engagement, dm, dirTick, onLogout, attest }) {
   const { attestToken, attestPreview, forgetAttest } = attest || {};
@@ -1267,6 +1291,8 @@ function Shell({ user, posts, jobs, trips, listings, enquiries, actions, engagem
 
   const nav = NAV[user.kind];
   const actorId = user.talentId || user.id;
+  const hotelData = useHotelData(user);
+  const hotelPending = user.kind === "hotel" ? hotelData.bookings.filter((b) => b.status === "requested" && b.checkOut >= new Date().toISOString().slice(0, 10)).length : 0;
   const eng = { ...engagement, me: actorId, isAdmin: user.kind === "admin", sharePostTo: dm?.sharePostTo };
 
   const alertItems = useMemo(() => {
@@ -1447,12 +1473,12 @@ function Shell({ user, posts, jobs, trips, listings, enquiries, actions, engagem
     <>
       <SideRail user={user} nav={nav} tab={tab}
         setTab={(t) => { setOverlay(null); setSharedPost(null); setTab(t); }}
-        badges={{ jobs: jobsBadge, review: pendingModCount, chats: unreadDm, bookings: enquiryBadge }}
+        badges={{ jobs: jobsBadge, review: pendingModCount, chats: unreadDm, bookings: user.kind === "hotel" ? hotelPending : enquiryBadge }}
         alerts={alertItems.length} onOpenAlerts={() => setAlertsOpen(true)} onLogout={onLogout} />
 
       <div className="main-col">
       <TopBar user={user} onLogout={onLogout} alerts={alertItems.length} onOpenAlerts={() => setAlertsOpen(true)}
-        onSearch={(term) => { setOverlay(null); setTab(user.kind === "operator" ? "discover" : "post"); setSearchTerm(term); }} />
+        onSearch={(term) => { setOverlay(null); setTab(user.kind === "operator" ? "discover" : user.kind === "hotel" ? "bookings" : "post"); setSearchTerm(term); }} />
 
       <div className="flex-1 min-h-0 overflow-y-auto hidescroll" style={{ scrollbarWidth: "none" }}>
         <div className="content-pad">
@@ -1477,7 +1503,11 @@ function Shell({ user, posts, jobs, trips, listings, enquiries, actions, engagem
             {tab === "trips" && <TripsTab user={user} trips={trips} actions={actions} />}
             {tab === "chats" && <ChatsTab user={user} me={actorId} dm={dm} trips={trips} actions={actions} posts={posts} dirTick={dirTick} onOpenPost={setSharedPost} openWith={dmWith} onOpened={() => setDmWith(null)} onOpenProfile={openProfile} />}
             {tab === "profile" && <TalentProfile talent={talentById(user.talentId)} posts={posts} eng={eng} self onSetAvailability={actions.setAvailability} onProfileSaved={actions.reloadDirectory} onOpenProfile={openProfile} onBack={null} />}
-            {tab === "bookings" && <BookingsTab user={user} enquiries={enquiries} trips={trips} actions={actions} onOpenProfile={openProfile} />}
+            {tab === "bookings" && user.kind !== "hotel" && <BookingsTab user={user} enquiries={enquiries} trips={trips} actions={actions} onOpenProfile={openProfile} />}
+            {tab === "hotel_home" && <HotelHome user={user} data={hotelData} setTab={setTab} />}
+            {tab === "bookings" && user.kind === "hotel" && <HotelBookings user={user} data={hotelData} />}
+            {tab === "rooms" && <HotelRooms user={user} data={hotelData} />}
+            {tab === "hotel_profile" && <HotelProfile user={user} onSaved={actions.reloadDirectory} />}
             {tab === "itinerary" && <QuickItinerary user={user} trips={trips} actions={actions} />}
             {tab === "insights" && <InsightsTab user={user} trips={trips} enquiries={enquiries} />}
             {tab === "discover" && <Discover onOpen={openProfile} initialQuery={searchTerm} dirTick={dirTick} />}
@@ -1518,15 +1548,15 @@ function Shell({ user, posts, jobs, trips, listings, enquiries, actions, engagem
           onInstall={() => { setAlertsOpen(false); setInstallSheet(true); }}
           onOpenProfile={(id) => { setAlertsOpen(false); openProfile(id); }}
           onOpenMessages={() => { setAlertsOpen(false); setTab("chats"); }}
-          onOpenJobs={() => { setAlertsOpen(false); setTab(user.kind === "operator" ? "requests" : "jobs"); }}
-          onOpenTrips={() => { setAlertsOpen(false); setTab(user.kind === "operator" ? "bookings" : "trips"); }}
-          onOpenSelf={() => { setAlertsOpen(false); setTab(user.kind === "operator" || user.kind === "admin" ? "discover" : "profile"); }}
+          onOpenJobs={() => { setAlertsOpen(false); setTab(user.kind === "operator" ? "requests" : user.kind === "hotel" ? "bookings" : "jobs"); }}
+          onOpenTrips={() => { setAlertsOpen(false); setTab(user.kind === "operator" || user.kind === "hotel" ? "bookings" : "trips"); }}
+          onOpenSelf={() => { setAlertsOpen(false); setTab(user.kind === "operator" || user.kind === "admin" ? "discover" : user.kind === "hotel" ? "hotel_profile" : "profile"); }}
           onOpenUsers={() => { setAlertsOpen(false); setTab("users"); }} />
       )}
 
       <BottomNav nav={nav} tab={tab}
         setTab={(t) => { setOverlay(null); setSharedPost(null); setTab(t); }}
-        badges={{ jobs: jobsBadge, review: pendingModCount, chats: unreadDm, bookings: enquiryBadge }} />
+        badges={{ jobs: jobsBadge, review: pendingModCount, chats: unreadDm, bookings: user.kind === "hotel" ? hotelPending : enquiryBadge }} />
       </div>
     </>
   );
@@ -1696,7 +1726,7 @@ function prettyNumber(raw) {
   return d;
 }
 
-const roleLabel = (r) => (r === "guide" ? "Guide" : r === "operator" ? "Tour Operator" : "Driver");
+const roleLabel = (r) => (r === "guide" ? "Guide" : r === "operator" ? "Tour Operator" : r === "hotel" ? "Hotel" : r === "admin" ? "Admin" : "Driver");
 
 /* ======================== Feed tab (guides & drivers) ===================== */
 function PostTab({ user, posts, onAdd, eng, onOpenProfile }) {
@@ -2680,6 +2710,7 @@ function TripHub({ user, meId, trip, actions, onBack }) {
           ? <CrewBrief trip={trip} user={user} />
           : <TripEssentials trip={trip} canEdit actions={actions} />}
         {!isTalent && <GuestRoster trip={trip} canEdit actions={actions} />}
+        {!isTalent && <TripHotels trip={trip} user={user} actions={actions} />}
 
         {canInvite && (
           <button onClick={() => setInviting(true)}
@@ -3902,7 +3933,7 @@ function AdminUsers({ onChanged, currentAdminId }) {
   const list = (rows || []).filter((r) => {
     if (filter === "submitted" && r.license_status !== "submitted") return false;
     if (filter === "verified" && r.license_status !== "verified") return false;
-    if (["guide", "driver", "operator"].includes(filter) && r.role !== filter) return false;
+    if (["guide", "driver", "operator", "hotel"].includes(filter) && r.role !== filter) return false;
     const hay = `${r.full_name || ""} ${r.email || ""} ${r.base || ""}`.toLowerCase();
     return hay.includes(q.toLowerCase());
   });
@@ -3926,6 +3957,7 @@ function AdminUsers({ onChanged, currentAdminId }) {
         <Chip on={filter === "guide"} onClick={() => setFilter("guide")}>Guides</Chip>
         <Chip on={filter === "driver"} onClick={() => setFilter("driver")}>Drivers</Chip>
         <Chip on={filter === "operator"} onClick={() => setFilter("operator")}>Operators</Chip>
+        <Chip on={filter === "hotel"} onClick={() => setFilter("hotel")}>Hotels</Chip>
       </div>
 
       {note && <div className="rounded-xl px-3 py-2 text-[13px] mb-3" style={{ background: C.pineSoft, color: C.pine }}>{note}</div>}
@@ -4090,7 +4122,7 @@ const ONB_DRIVES = ["Long-distance touring", "Mountain & high passes", "Excursio
 const ONB_VEHICLES = ["Sedan", "SUV", "Hiace Van", "Coaster Bus", "Large Coach"];
 const ONB_LANGS = ["Dzongkha", "English", "Hindi", "Nepali", "Japanese", "Mandarin", "German", "French", "Spanish", "Korean"];
 const ONB_YEARS = [["0–2 yrs", 1], ["3–5 yrs", 4], ["6–10 yrs", 8], ["10+ yrs", 12]];
-const LICENSE_LABEL = { guide: "Guide license (Department of Tourism)", driver: "Driving licence (RSTA)", operator: "Tour Operator licence (Department of Tourism)" };
+const LICENSE_LABEL = { guide: "Guide license (Department of Tourism)", driver: "Driving licence (RSTA)", operator: "Tour Operator licence (Department of Tourism)", hotel: "Hotel certificate (Department of Tourism)" };
 
 function OLabel({ children }) { return <div className="text-[13px] font-medium mb-1.5" style={{ color: C.ink }}>{children}</div>; }
 function OInput(props) { return <input {...props} className="w-full h-12 px-4 rounded-xl text-[15px] mb-4" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }} />; }
@@ -4209,8 +4241,9 @@ function Onboard({ mode: initialMode, session, onBack, onDone, invite }) {
     }
     const { error } = await supabase.from("profiles").upsert({
       id: effUid, email: (email || session?.user?.email || "").trim() || null, role,
-      full_name: name.trim(), phone: phone.trim() || null, base: base.trim() || null,
-      company_name: role === "operator" ? (company.trim() || name.trim()) : null,
+      full_name: name.trim(), phone: phone.trim() || null, base: role === "hotel" ? (DK_TOWNS[base] ? DK_TOWNS[base].n : base) : (base.trim() || null),
+      company_name: role === "operator" || role === "hotel" ? (company.trim() || name.trim()) : null,
+      hotel_town: role === "hotel" ? base : null, hotel_tier: role === "hotel" ? "3" : null,
       years, pitch: pitch.trim() || null, languages: langs, tags,
       vehicle: role === "driver" ? vehicle : null,
       license_path: licensePath || null, license_status: licensePath ? "submitted" : "none",
@@ -4290,6 +4323,8 @@ function Onboard({ mode: initialMode, session, onBack, onDone, invite }) {
               points: ["Pick up trips that need a driver", "See arrival flights and the day plan in your brief", "Freelance owner-drivers welcome"] },
             { id: "operator", label: "Tour Operator", sub: "I book guides and drivers", Icon: Building2,
               points: ["Turn enquiries into confirmed trips", "Find verified guides and drivers by skill and language", "Plan itineraries and request guest reviews"] },
+            { id: "hotel", label: "Hotel", sub: "I host guests on tour", Icon: BedDouble,
+              points: ["Receive room requests from tour operators, night by night", "Confirm with one tap — the hub never lets you overbook", "No commission; you deal with the operator directly"] },
           ].map(({ id, label, sub: subT, Icon, points }) => (
             <button key={id} onClick={() => { setRole(id); setStep("about"); }} className="tap w-full text-left rounded-2xl p-4 mb-3"
               style={{ background: C.card, border: `1.5px solid ${role === id ? C.pine : C.line}` }}>
@@ -4326,7 +4361,8 @@ function Onboard({ mode: initialMode, session, onBack, onDone, invite }) {
       {step === "about" && (
         <div className="fade">
           <h2 className="text-[22px] font-semibold tracking-[-0.01em] mb-5" style={{ color: C.ink }}>Tell us who you are</h2>
-          <OLabel>{role === "operator" ? "Your name" : "Full name"}</OLabel>
+          {role === "hotel" && (<><OLabel>Property name</OLabel><OInput value={company} onChange={(e) => setCompany(e.target.value)} placeholder="Zhiwa Boutique Stay" /></>)}
+          <OLabel>{role === "operator" || role === "hotel" ? "Your name" : "Full name"}</OLabel>
           <OInput value={name} onChange={(e) => setName(e.target.value)} placeholder="Your full name" />
           {role === "operator" && (<><OLabel>Agency name</OLabel><OInput value={company} onChange={(e) => setCompany(e.target.value)} placeholder="Your agency name" /></>)}
           <OLabel>Phone</OLabel>
@@ -4338,8 +4374,15 @@ function Onboard({ mode: initialMode, session, onBack, onDone, invite }) {
               style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }} />
           </div>
           <p className="text-[12px] -mt-2 mb-4" style={{ color: C.muted }}>Operators call this number directly — make sure it's right.</p>
-          {role !== "operator" && (<><OLabel>Home base</OLabel><OInput value={base} onChange={(e) => setBase(e.target.value)} placeholder="Paro" /></>)}
-          <OCta disabled={name.trim().length < 2} onClick={() => (effUid ? finish(null) : setStep("email"))}>Continue</OCta>
+          {role !== "operator" && role !== "hotel" && (<><OLabel>Home base</OLabel><OInput value={base} onChange={(e) => setBase(e.target.value)} placeholder="Paro" /></>)}
+          {role === "hotel" && (<>
+            <OLabel>Town</OLabel>
+            <div className="flex flex-wrap gap-2 mb-4">
+              {Object.entries(DK_TOWNS).filter(([, v]) => v.stay).sort((a, b) => a[1].n.localeCompare(b[1].n)).map(([k, v]) => <Chip key={k} on={base === k} onClick={() => setBase(k)}>{v.n}</Chip>)}
+            </div>
+            <p className="text-[12px] -mt-2 mb-4" style={{ color: C.muted }}>Operators find hotels by the town each night is spent in. Rooms, rates and your DoT certificate come next, from your Property tab.</p>
+          </>)}
+          <OCta disabled={name.trim().length < 2 || (role === "hotel" && (!company.trim() || !base))} onClick={() => (effUid ? finish(null) : setStep("email"))}>Continue</OCta>
         </div>
       )}
 
@@ -5165,7 +5208,11 @@ function FollowListSheet({ mode, talent, eng, onClose, onOpenProfile }) {
 function VerifyBanner({ user }) {
   const st = user.licenseStatus;
   if (!st || st === "verified") return null;
-  const map = {
+  const map = user.kind === "hotel" ? {
+    submitted: { bg: C.goldSoft, fg: C.goldText, Icon: Clock, title: "Verification pending", body: "Our team is checking your DoT certificate. Operators can already request your rooms." },
+    rejected: { bg: C.maroonSoft, fg: C.maroon, Icon: ShieldAlert, title: "Certificate not accepted", body: "Upload a clearer photo of your current DoT hotel certificate from the Property tab." },
+    none: { bg: C.goldSoft, fg: C.goldText, Icon: Upload, title: "DoT certificate needed", body: "Add it from the Property tab — verified hotels carry a tick in the operator's hotel picker." },
+  }[st] : {
     submitted: { bg: C.goldSoft, fg: C.goldText, Icon: Clock,
       title: "Verification pending",
       body: "Our team is checking your licence. You can use the app meanwhile — your Verified badge appears once it clears." },
@@ -5681,7 +5728,16 @@ function Tutorial({ user, nav, setTab, onDone }) {
     { kind: "outro", title: "The one that pays for itself", body: "After a trip ends, open it and ask your guests for a review. Only you can request them — that's what makes the ratings on this platform worth trusting." },
   ];
 
-  const steps = user.kind === "admin" ? ADMIN_STEPS : talent ? TALENT_STEPS : OPERATOR_STEPS;
+  const HOTEL_STEPS = [
+    { kind: "intro", title: `Welcome, ${first}`, body: "Tour operators plan trips here night by night. When a night lands in your town, they can ask you for rooms — and you answer in one tap." },
+    { kind: "tab", tab: "hotel_home", title: "Today", body: "Tonight's rooms in use, who arrives and leaves today, requests waiting for you, and a 14-night view ahead." },
+    { kind: "tab", tab: "bookings", title: "Bookings", body: "Requests to answer, confirmed stays, a calendar of every night, and the record of past stays. The hub never lets a confirmation overbook you." },
+    { kind: "tab", tab: "rooms", title: "Rooms", body: "List your room types once — name, beds, how many. Close rooms for dates when they're not for sale." },
+    { kind: "tab", tab: "chats", title: "Messages", body: "Direct messages with operators. Every booking card also has a WhatsApp shortcut." },
+    { kind: "tab", tab: "hotel_profile", title: "Property", body: "Town, star rating, amenities, policy, and your DoT certificate. Verified hotels carry a tick wherever operators see you." },
+    { kind: "outro", title: "Two things to do now", body: "Add your room types, then upload your DoT certificate. With both done you appear in every operator's hotel picker for your town." },
+  ];
+  const steps = user.kind === "admin" ? ADMIN_STEPS : talent ? TALENT_STEPS : user.kind === "hotel" ? HOTEL_STEPS : OPERATOR_STEPS;
 
   const step = steps[i];
   const navIndex = step.kind === "tab" ? nav.findIndex((n) => n.id === step.tab) : -1;
@@ -8341,6 +8397,7 @@ function CrewBrief({ trip, user }) {
           </button>
         </div>
       )}
+      <CrewHotelsBrief trip={trip} />
     </div>
   );
 }
@@ -11291,5 +11348,956 @@ function AttestSheet({ user, token, preview, onDone }) {
       )}
       <button type="button" onClick={onDone} className="tap w-full h-10 rounded-lg text-[13px] font-semibold" style={{ color: C.muted }}>{result ? "Done" : "Later"}</button>
     </Sheet>
+  );
+}
+
+/* ========================================================================== */
+/*  HOTELS — rooms, requests and confirmations, with no double booking.       */
+/*  The database decides availability (room_capacity_guard); the app only     */
+/*  shows what the hotel has free and lets people ask and answer.             */
+/* ========================================================================== */
+const HOTEL_AMENITIES = ["Wi-Fi", "Heating", "Hot-stone bath", "Restaurant", "Bar", "Spa", "Garden", "Parking", "Airport transfer", "Laundry", "Vegetarian menu", "Wheelchair access", "Generator back-up", "Mountain view", "Dzong view", "River view"];
+const STAY_KINDS = { luxury: "Luxury", boutique: "Boutique", heritage: "Heritage", resort: "Resort", city: "City hotel", farmstay: "Farmstay / homestay", lodge: "Lodge" };
+const BED_LABEL = { single: "Single", twin: "Twin", double: "Double", triple: "Triple", family: "Family", suite: "Suite" };
+const MEAL_LABEL = { room_only: "Room only", breakfast: "Breakfast", half_board: "Half board", full_board: "Full board" };
+const BK_STATUS = {
+  requested: { label: "Awaiting hotel", bg: C.goldSoft, fg: C.goldText, dot: C.gold },
+  confirmed: { label: "Confirmed", bg: C.pineSoft, fg: C.pine, dot: "#2E7D4F" },
+  declined:  { label: "Declined", bg: C.maroonSoft, fg: C.maroon, dot: C.maroon },
+  cancelled: { label: "Cancelled", bg: C.bg, fg: C.muted, dot: "#C7CEC7" },
+};
+const addDays = (iso, n) => { const d = new Date(iso + "T00:00"); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); };
+const nightsBetween = (a, b) => Math.max(0, Math.round((new Date(b + "T00:00") - new Date(a + "T00:00")) / 86400e3));
+const fmtNights = (a, b) => { const n = nightsBetween(a, b); return `${fmtDate(a)} – ${fmtDate(b)} · ${n} ${n === 1 ? "night" : "nights"}`; };
+const hotelTownName = (key) => (DK_TOWNS[key] ? DK_TOWNS[key].n : (key || ""));
+const hotelTownKey = (text) => {
+  const t = String(text || "").toLowerCase();
+  const hit = Object.entries(DK_TOWNS).find(([k, v]) => t.includes(v.n.toLowerCase()) || t.includes(k));
+  return hit ? hit[0] : null;
+};
+const fmtNu = (n) => (n === null || n === undefined || n === "" ? "" : `Nu. ${Number(n).toLocaleString("en-IN")}`);
+const BK_WINDOW_DAYS = 400;
+
+/** Read the itinerary written by Drukpah ("… · Night in Paro (3-star)") and
+ *  group consecutive nights in one town into stays. Falls back to one stay
+ *  for the whole trip when the plan has no night information. */
+function tripStays(trip) {
+  const days = (trip.itinerary || []).slice().sort((a, b) => a.day - b.day);
+  const nights = [];
+  days.forEach((d) => {
+    const m = /Night in ([^(·]+?)\s*\(([^)]*)\)/.exec(d.title || "");
+    if (!m) return;
+    const townKey = hotelTownKey(m[1]);
+    const tierKey = Object.entries(DK_HOTEL).find(([k, v]) => v.toLowerCase() === m[2].trim().toLowerCase());
+    nights.push({ date: addDays(trip.start, d.day - 1), townKey, townName: m[1].trim(), tier: tierKey ? tierKey[0] : null, day: d.day });
+  });
+  if (!nights.length) {
+    const n = nightsBetween(trip.start, trip.end);
+    return n > 0 ? [{ from: trip.start, to: trip.end, nights: n, townKey: null, townName: "", tier: null, days: [] }] : [];
+  }
+  const stays = [];
+  nights.forEach((n) => {
+    const last = stays[stays.length - 1];
+    if (last && last.townName === n.townName && addDays(last.to, 0) === n.date) { last.to = addDays(n.date, 1); last.nights += 1; last.days.push(n.day); }
+    else stays.push({ from: n.date, to: addDays(n.date, 1), nights: 1, townKey: n.townKey, townName: n.townName, tier: n.tier, days: [n.day] });
+  });
+  return stays;
+}
+
+const bookingFromRow = (b) => ({
+  id: b.id, hotelId: b.hotel_id, roomId: b.room_id, operatorId: b.operator_id, tripId: b.trip_id || null,
+  checkIn: b.check_in, checkOut: b.check_out, rooms: b.rooms, guests: b.guests, mealPlan: b.meal_plan || "breakfast",
+  guestName: b.guest_name || "", notes: b.notes || "", hotelNote: b.hotel_note || "", status: b.status,
+  respondedAt: b.responded_at ? new Date(b.responded_at).getTime() : null, createdAt: new Date(b.created_at).getTime(),
+});
+const roomFromRow = (r) => ({ id: r.id, hotelId: r.hotel_id, name: r.name, beds: r.beds, capacity: r.capacity, count: r.count, rate: r.rate_nu, notes: r.notes || "", active: r.active !== false });
+
+/** Everything a hotel (or an operator) needs: room types, closures, bookings. Live. */
+function useHotelData(user) {
+  const isHotel = user?.kind === "hotel";
+  const isOperator = user?.kind === "operator";
+  const [rooms, setRooms] = useState([]);
+  const [closures, setClosures] = useState([]);
+  const [bookings, setBookings] = useState([]);
+  const [loaded, setLoaded] = useState(false);
+  const me = user?.talentId || user?.id;
+  const reload = async () => {
+    if (!CLOUD || !me || (!isHotel && !isOperator)) { setLoaded(true); return; }
+    const q = [supabase.from("room_bookings").select("*").order("check_in", { ascending: true })];
+    if (isHotel) q.push(supabase.from("hotel_rooms").select("*").eq("hotel_id", me).order("created_at", { ascending: true }),
+                        supabase.from("room_closures").select("*").eq("hotel_id", me).order("from_date", { ascending: true }));
+    const [B, R, X] = await Promise.all(q);
+    if (B.error) console.error("room_bookings load failed:", B.error.message);
+    setBookings((B.data || []).map(bookingFromRow));
+    if (R) setRooms((R.data || []).map(roomFromRow));
+    if (X) setClosures((X.data || []).map((c) => ({ id: c.id, roomId: c.room_id, from: c.from_date, to: c.to_date, rooms: c.rooms, reason: c.reason || "" })));
+    setLoaded(true);
+  };
+  useEffect(() => { reload(); }, [me, isHotel, isOperator]);
+  useEffect(() => {
+    if (!CLOUD || (!isHotel && !isOperator)) return;
+    const ch = supabase.channel("hotel-data-" + me)
+      .on("postgres_changes", { event: "*", schema: "public", table: "room_bookings" }, reload)
+      .on("postgres_changes", { event: "*", schema: "public", table: "hotel_rooms" }, reload)
+      .subscribe();
+    return () => { supabase.removeChannel(ch); };
+  }, [me, isHotel, isOperator]);
+  return { rooms, closures, bookings, loaded, reload };
+}
+
+/** Rooms in use (confirmed + closed) for one room type on one night. */
+function roomsUsedOn(roomId, date, bookings, closures) {
+  const b = bookings.filter((x) => x.roomId === roomId && x.status === "confirmed" && x.checkIn <= date && x.checkOut > date).reduce((s, x) => s + x.rooms, 0);
+  const c = closures.filter((x) => x.roomId === roomId && x.from <= date && x.to > date).reduce((s, x) => s + x.rooms, 0);
+  return b + c;
+}
+function occupancyOn(date, rooms, bookings, closures) {
+  const total = rooms.filter((r) => r.active).reduce((s, r) => s + r.count, 0);
+  const used = rooms.filter((r) => r.active).reduce((s, r) => s + Math.min(r.count, roomsUsedOn(r.id, date, bookings, closures)), 0);
+  const pending = bookings.filter((x) => x.status === "requested" && x.checkIn <= date && x.checkOut > date).reduce((s, x) => s + x.rooms, 0);
+  return { total, used, pending, free: Math.max(0, total - used) };
+}
+
+function BkBadge({ status }) {
+  const m = BK_STATUS[status] || BK_STATUS.requested;
+  return <span className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[12px] font-semibold" style={{ background: m.bg, color: m.fg }}><span className="w-1.5 h-1.5 rounded-full" style={{ background: m.dot }} />{m.label}</span>;
+}
+
+function HotelTile({ label, value, sub, tone, onClick }) {
+  const bg = tone === "gold" ? C.goldSoft : tone === "pine" ? C.pineSoft : C.card;
+  const fg = tone === "gold" ? C.goldText : tone === "pine" ? C.pine : C.ink;
+  const Tag = onClick ? "button" : "div";
+  return (
+    <Tag onClick={onClick} className={`${onClick ? "tap text-left " : ""}rounded-xl px-3 py-2.5 w-full`} style={{ background: bg, border: `1px solid ${tone ? "transparent" : C.line}` }}>
+      <div className="text-[11px] font-semibold tracking-[.06em] uppercase" style={{ color: tone ? fg : C.goldText }}>{label}</div>
+      <div className="text-[20px] font-semibold mt-0.5 leading-tight" style={{ color: fg }}>{value}</div>
+      {sub && <div className="text-[11px] mt-0.5" style={{ color: tone ? fg : C.muted, opacity: tone ? .85 : 1 }}>{sub}</div>}
+    </Tag>
+  );
+}
+
+/* ----------------------------- Hotel · Today ------------------------------ */
+function HotelHome({ user, data, setTab }) {
+  const { rooms, closures, bookings, loaded } = data;
+  const today = isoDay(0);
+  const first = (user.name || "").split(" ")[0];
+  const me = talentById(user.talentId) || {};
+  const tonight = occupancyOn(today, rooms, bookings, closures);
+  const arrivals = bookings.filter((b) => b.status === "confirmed" && b.checkIn === today);
+  const departures = bookings.filter((b) => b.status === "confirmed" && b.checkOut === today);
+  const pending = bookings.filter((b) => b.status === "requested" && b.checkOut >= today).sort((a, b) => a.createdAt - b.createdAt);
+  const inHouse = bookings.filter((b) => b.status === "confirmed" && b.checkIn <= today && b.checkOut > today);
+  const next14 = Array.from({ length: 14 }, (_, i) => { const d = addDays(today, i); return { d, ...occupancyOn(d, rooms, bookings, closures) }; });
+  const upcoming = bookings.filter((b) => b.status === "confirmed" && b.checkIn > today && b.checkIn <= addDays(today, 7)).sort((a, b) => a.checkIn.localeCompare(b.checkIn));
+
+  // Suggestions — rule-based, honest, never nagging twice for the same thing
+  const tips = [];
+  if (!rooms.length) tips.push({ level: "do", title: "Add your room types", body: "Operators can only request rooms you've listed. Two minutes: name, beds, how many.", tab: "rooms" });
+  if (me.licenseStatus === "none") tips.push({ level: "do", title: "Upload your DoT hotel certificate", body: "Verified hotels show a tick in the operator's hotel picker and tend to be chosen first.", tab: "hotel_profile" });
+  if (!me.hotelTown) tips.push({ level: "do", title: "Set your town", body: "Operators look for hotels by the town each night is spent in. Without a town you won't appear.", tab: "hotel_profile" });
+  const stale = pending.filter((b) => Date.now() - b.createdAt > 24 * 3600e3).length;
+  if (stale) tips.push({ level: "warn", title: `${stale} ${stale === 1 ? "request has" : "requests have"} waited over a day`, body: "Operators usually hold a second option. A quick answer, even a decline, keeps them coming back.", tab: "bookings" });
+  const fullNights = next14.filter((n) => n.total && n.free === 0).length;
+  if (fullNights) tips.push({ level: "info", title: `Full on ${fullNights} of the next 14 nights`, body: "The app already stops any confirmation that would overbook. Consider a waiting-list note in your profile policy." });
+  const openNights = next14.filter((n) => n.total && n.used === 0 && n.d >= addDays(today, 3)).length;
+  if (rooms.length && openNights >= 10 && !pending.length) tips.push({ level: "info", title: "Quiet fortnight ahead", body: "Operators plan 2–6 weeks out. A short note on rates or a seasonal offer in your profile helps them choose you.", tab: "hotel_profile" });
+  if (rooms.length && rooms.every((r) => r.rate === null || r.rate === undefined)) tips.push({ level: "info", title: "Add indicative rates", body: "Rates are optional, but operators compare faster when they see Nu. per night. You confirm every booking either way.", tab: "rooms" });
+
+  return (
+    <div className="px-5 py-4">
+      <div className="flex items-end justify-between mb-4">
+        <div>
+          <div className="text-[12px] font-semibold tracking-[.14em] uppercase" style={{ color: C.goldText }}>{new Date().toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" })}</div>
+          <h2 className="text-[24px] font-semibold tracking-[-0.02em] leading-tight" style={{ color: C.ink }}>Kuzuzangpo{first ? `, ${first}` : ""}</h2>
+          <div className="text-[13px]" style={{ color: C.muted }}>{me.company || me.name}{me.hotelTown ? ` · ${hotelTownName(me.hotelTown)}` : ""}</div>
+        </div>
+        {me.verified && <span className="inline-flex items-center gap-1 text-[12px] font-semibold rounded-full px-2.5 py-1" style={{ background: C.pineSoft, color: C.pine }}><BadgeCheck size={13} /> DoT verified</span>}
+      </div>
+
+      <div className="grid grid-cols-2 gap-2 mb-4">
+        <HotelTile label="Tonight" value={tonight.total ? `${tonight.used}/${tonight.total}` : "—"} sub={tonight.total ? `${Math.round((tonight.used / tonight.total) * 100)}% of rooms in use` : "Add room types first"} />
+        <HotelTile label="Requests" value={pending.length} sub={pending.length ? "waiting for your answer" : "nothing waiting"} tone={pending.length ? "gold" : undefined} onClick={() => setTab("bookings")} />
+        <HotelTile label="Arriving today" value={arrivals.length} sub={arrivals.length ? `${arrivals.reduce((s, b) => s + b.guests, 0)} guests` : "no arrivals"} />
+        <HotelTile label="Departing today" value={departures.length} sub={departures.length ? `${departures.reduce((s, b) => s + b.rooms, 0)} rooms to turn around` : "no departures"} />
+      </div>
+
+      {!!rooms.length && (
+        <div className="rounded-2xl p-4 mb-4" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+          <div className="flex items-center justify-between mb-2">
+            <div className="text-[11px] font-semibold tracking-[.14em] uppercase" style={{ color: C.goldText }}>Next 14 nights</div>
+            <div className="text-[12px]" style={{ color: C.muted }}>confirmed · <span style={{ color: C.goldText }}>requested</span></div>
+          </div>
+          <div className="flex items-end gap-1" style={{ height: 64 }}>
+            {next14.map((n) => {
+              const h = n.total ? Math.round((n.used / n.total) * 56) : 0;
+              const p = n.total ? Math.min(56 - h, Math.round((n.pending / n.total) * 56)) : 0;
+              return (
+                <div key={n.d} className="flex-1 flex flex-col justify-end items-stretch" title={`${fmtDate(n.d)}: ${n.used}/${n.total} in use${n.pending ? `, ${n.pending} requested` : ""}`}>
+                  <div style={{ height: p, background: C.goldSoft, borderRadius: "3px 3px 0 0" }} />
+                  <div style={{ height: Math.max(h, 2), background: n.free === 0 && n.total ? C.maroon : C.pine, borderRadius: p ? 0 : "3px 3px 0 0" }} />
+                </div>
+              );
+            })}
+          </div>
+          <div className="flex justify-between text-[10px] mt-1" style={{ color: C.muted }}>
+            <span>{fmtDate(next14[0].d)}</span><span>{fmtDate(next14[6].d)}</span><span>{fmtDate(next14[13].d)}</span>
+          </div>
+        </div>
+      )}
+
+      {pending.length > 0 && (
+        <>
+          <SectionLabel trailing={`${pending.length} waiting`}>Answer these</SectionLabel>
+          {pending.slice(0, 3).map((b) => <HotelBookingCard key={b.id} b={b} data={data} user={user} />)}
+          {pending.length > 3 && <button onClick={() => setTab("bookings")} className="tap w-full h-10 rounded-xl text-[13px] font-semibold mb-4" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.pine }}>See all {pending.length} requests</button>}
+        </>
+      )}
+
+      {(inHouse.length > 0 || upcoming.length > 0) && (
+        <>
+          <SectionLabel>{inHouse.length ? "In house tonight" : "Arriving this week"}</SectionLabel>
+          <div className="rounded-2xl divide-y mb-4" style={{ background: C.card, border: `1px solid ${C.line}`, borderColor: C.line }}>
+            {(inHouse.length ? inHouse : upcoming).slice(0, 6).map((b) => {
+              const op = talentById(b.operatorId); const room = rooms.find((r) => r.id === b.roomId);
+              return (
+                <div key={b.id} className="px-4 py-3 flex items-center gap-3">
+                  <div className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0" style={{ background: C.pineSoft }}><BedDouble size={16} color={C.pine} /></div>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-[14px] font-semibold truncate" style={{ color: C.ink }}>{b.guestName || op?.company || op?.name || "Group"}</div>
+                    <div className="text-[12px] truncate" style={{ color: C.muted }}>{b.rooms} × {room?.name || "room"} · {b.guests} guests · {inHouse.length ? `leaves ${fmtDate(b.checkOut)}` : `arrives ${fmtDate(b.checkIn)}`}</div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </>
+      )}
+
+      {tips.length > 0 && (
+        <>
+          <SectionLabel>Suggestions</SectionLabel>
+          {tips.slice(0, 3).map((t) => {
+            const bg = t.level === "warn" ? C.maroonSoft : t.level === "do" ? C.goldSoft : C.pineSoft;
+            const fg = t.level === "warn" ? C.maroon : t.level === "do" ? C.goldText : C.pine;
+            const Tag = t.tab ? "button" : "div";
+            return (
+              <Tag key={t.title} onClick={t.tab ? () => setTab(t.tab) : undefined} className={`${t.tab ? "tap text-left " : ""}w-full rounded-xl p-3.5 mb-2`} style={{ background: bg }}>
+                <div className="text-[14px] font-semibold" style={{ color: fg }}>{t.title}</div>
+                <div className="text-[13px] leading-snug mt-0.5" style={{ color: fg, opacity: .9 }}>{t.body}</div>
+              </Tag>
+            );
+          })}
+        </>
+      )}
+
+      {loaded && !rooms.length && !tips.length && <Empty Icon={Building2} title="All set" body="Requests from operators will appear here." />}
+    </div>
+  );
+}
+
+/* --------------------------- Hotel · booking card -------------------------- */
+function HotelBookingCard({ b, data, user, compact }) {
+  const { rooms, closures, bookings, reload } = data;
+  const room = rooms.find((r) => r.id === b.roomId);
+  const op = talentById(b.operatorId);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const [declining, setDeclining] = useState(false);
+  const [note, setNote] = useState("");
+  const [open, setOpen] = useState(false);
+  // what the hotel would have left if it says yes — the database re-checks this at confirm time
+  const tight = room ? Math.min(...Array.from({ length: nightsBetween(b.checkIn, b.checkOut) }, (_, i) => room.count - roomsUsedOn(room.id, addDays(b.checkIn, i), bookings, closures))) : 0;
+  const fits = room ? tight >= b.rooms : false;
+  const past = b.checkOut < isoDay(0);
+
+  const respond = async (status) => {
+    setBusy(true); setErr(null);
+    const patch = { status };
+    if (note.trim()) patch.hotel_note = note.trim();
+    const { error } = await supabase.from("room_bookings").update(patch).eq("id", b.id);
+    setBusy(false);
+    if (error) { setErr(error.message.replace(/^.*?:\s*/, "")); return; }
+    setDeclining(false); setNote("");
+    reload && reload();
+  };
+
+  return (
+    <div className="rounded-2xl p-4 mb-3" style={{ background: C.card, border: `1px solid ${b.status === "requested" ? C.gold + "66" : C.line}` }}>
+      <div className="flex items-start gap-3">
+        <Avatar initials={op?.initials || "?"} size={38} />
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center justify-between gap-2">
+            <div className="text-[15px] font-semibold truncate" style={{ color: C.ink }}>{op?.company || op?.name || "Tour operator"}</div>
+            <BkBadge status={b.status} />
+          </div>
+          <div className="text-[13px] mt-0.5" style={{ color: C.muted }}>{fmtNights(b.checkIn, b.checkOut)}</div>
+          <div className="text-[14px] mt-1.5" style={{ color: C.ink }}>
+            <b>{b.rooms} × {room?.name || "room"}</b> · {b.guests} {b.guests === 1 ? "guest" : "guests"} · {MEAL_LABEL[b.mealPlan]}
+          </div>
+          {b.guestName && <div className="text-[13px] mt-0.5" style={{ color: C.muted }}>Lead guest: {b.guestName}</div>}
+          {b.notes && <div className="text-[13px] mt-1.5 rounded-lg px-2.5 py-2" style={{ background: C.bg, color: C.ink }}>“{b.notes}”</div>}
+          {b.hotelNote && <div className="text-[13px] mt-1.5" style={{ color: C.muted }}>Your note: {b.hotelNote}</div>}
+          {op?.verified && <div className="inline-flex items-center gap-1 text-[12px] mt-1.5" style={{ color: C.pine }}><BadgeCheck size={12} /> Verified operator</div>}
+        </div>
+      </div>
+
+      {b.status === "requested" && !past && (
+        <div className="mt-3">
+          <div className="text-[12px] mb-2" style={{ color: fits ? C.pine : C.maroon }}>
+            {room ? (fits ? `You have ${tight} ${room.name} free on the tightest night — this fits.` : `Only ${Math.max(0, tight)} ${room.name} free on the tightest night — confirming would overbook, so the app won't allow it.`) : "This room type no longer exists."}
+          </div>
+          {!declining ? (
+            <div className="flex gap-2">
+              <button disabled={busy || !fits} onClick={() => respond("confirmed")} className="tap flex-1 h-11 rounded-xl text-[14px] font-semibold inline-flex items-center justify-center gap-1.5"
+                style={{ background: fits ? C.pine : "#C7CEC7", color: "#fff" }}>{busy ? <Loader2 size={16} className="animate-spin" /> : <><Check size={16} strokeWidth={2.6} /> Confirm</>}</button>
+              <button disabled={busy} onClick={() => setDeclining(true)} className="tap h-11 px-4 rounded-xl text-[14px] font-semibold" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.maroon }}>Decline</button>
+              {op?.phone && <button onClick={() => openWhatsApp(op.phone, `Hello ${op.name}, about your room request at ${user.name} for ${fmtDate(b.checkIn)}–${fmtDate(b.checkOut)}:`)} className="tap h-11 w-11 rounded-xl inline-flex items-center justify-center" style={{ background: C.card, border: `1px solid ${C.line}` }} aria-label="WhatsApp the operator"><MessageCircle size={17} color={C.pine} /></button>}
+            </div>
+          ) : (
+            <div>
+              <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={2} maxLength={240} placeholder="Optional: why, or what you can offer instead (other dates, another room type)…"
+                className="w-full px-3 py-2.5 rounded-xl text-[14px] resize-none mb-2" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
+              <div className="flex gap-2">
+                <button disabled={busy} onClick={() => respond("declined")} className="tap flex-1 h-11 rounded-xl text-[14px] font-semibold" style={{ background: C.maroon, color: "#fff" }}>{busy ? "…" : "Send decline"}</button>
+                <button disabled={busy} onClick={() => { setDeclining(false); setNote(""); }} className="tap h-11 px-4 rounded-xl text-[14px] font-semibold" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }}>Back</button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {b.status === "confirmed" && !past && !compact && (
+        <div className="mt-3 flex items-center justify-between">
+          {op?.phone ? <button onClick={() => openWhatsApp(op.phone, `Hello ${op.name}, about the confirmed booking at ${user.name} for ${fmtDate(b.checkIn)}–${fmtDate(b.checkOut)}:`)} className="tap inline-flex items-center gap-1.5 text-[13px] font-semibold" style={{ color: C.pine }}><MessageCircle size={14} /> WhatsApp operator</button> : <span />}
+          {!open ? <button onClick={() => setOpen(true)} className="tap text-[13px] font-semibold" style={{ color: C.muted }}>Cancel booking…</button>
+            : <div className="flex items-center gap-2"><span className="text-[12px]" style={{ color: C.maroon }}>Frees the rooms. Tell the operator first.</span>
+                <button disabled={busy} onClick={() => respond("cancelled")} className="tap h-8 px-3 rounded-lg text-[12px] font-semibold" style={{ background: C.maroon, color: "#fff" }}>Cancel</button>
+                <button onClick={() => setOpen(false)} className="tap h-8 px-3 rounded-lg text-[12px] font-semibold" style={{ background: C.bg, color: C.ink }}>Keep</button></div>}
+        </div>
+      )}
+      {err && <div className="text-[13px] mt-2 rounded-lg px-3 py-2" style={{ background: C.maroonSoft, color: C.maroon }}>{err}</div>}
+    </div>
+  );
+}
+
+/* ---------------------------- Hotel · Bookings ---------------------------- */
+function HotelBookings({ user, data }) {
+  const [view, setView] = useState("requests");
+  const today = isoDay(0);
+  const { bookings, loaded } = data;
+  const requests = bookings.filter((b) => b.status === "requested" && b.checkOut >= today).sort((a, b) => a.createdAt - b.createdAt);
+  const upcoming = bookings.filter((b) => b.status === "confirmed" && b.checkOut >= today).sort((a, b) => a.checkIn.localeCompare(b.checkIn));
+  const past = bookings.filter((b) => b.checkOut < today || b.status === "declined" || b.status === "cancelled").sort((a, b) => b.checkIn.localeCompare(a.checkIn));
+  const list = view === "requests" ? requests : view === "upcoming" ? upcoming : past;
+  return (
+    <div className="px-5 py-4">
+      <SectionLabel trailing={`${upcoming.length} confirmed ahead`}>Bookings</SectionLabel>
+      <div className="mb-4">
+        <Segmented value={view} onChange={setView} options={[["requests", `Requests${requests.length ? ` · ${requests.length}` : ""}`], ["upcoming", "Confirmed"], ["calendar", "Calendar"], ["past", "Past & closed"]]} />
+      </div>
+      {view === "calendar" ? <HotelCalendar data={data} user={user} /> : (
+        <>
+          {!loaded && <div className="text-[13px]" style={{ color: C.muted }}>Loading…</div>}
+          {loaded && !list.length && (
+            <Empty Icon={CalendarCheck}
+              title={view === "requests" ? "No requests waiting" : view === "upcoming" ? "Nothing confirmed yet" : "Nothing here yet"}
+              body={view === "requests" ? "When a tour operator asks for rooms, it appears here with Confirm and Decline." : view === "upcoming" ? "Confirmed bookings show here and on your calendar." : "Past stays and closed requests are kept for your records."} />
+          )}
+          {list.map((b) => <HotelBookingCard key={b.id} b={b} data={data} user={user} compact={view === "past"} />)}
+        </>
+      )}
+    </div>
+  );
+}
+
+/* ----------------------------- Hotel · Calendar ---------------------------- */
+function HotelCalendar({ data, user }) {
+  const { rooms, bookings, closures } = data;
+  const today = isoDay(0);
+  const [month, setMonth] = useState(today.slice(0, 7));
+  const [picked, setPicked] = useState(null);
+  const first = new Date(month + "-01T00:00");
+  const daysIn = new Date(first.getFullYear(), first.getMonth() + 1, 0).getDate();
+  const lead = (first.getDay() + 6) % 7;   // Monday first
+  const shift = (n) => { const d = new Date(first); d.setMonth(d.getMonth() + n); setMonth(d.toISOString().slice(0, 7)); setPicked(null); };
+  const cells = Array.from({ length: daysIn }, (_, i) => { const d = `${month}-${String(i + 1).padStart(2, "0")}`; return { d, n: i + 1, ...occupancyOn(d, rooms, bookings, closures) }; });
+  const dayList = picked ? bookings.filter((b) => b.status !== "declined" && b.status !== "cancelled" && b.checkIn <= picked && b.checkOut > picked) : [];
+  const dayClosures = picked ? closures.filter((c) => c.from <= picked && c.to > picked) : [];
+  if (!rooms.length) return <Empty Icon={CalendarDays} title="Add room types first" body="The calendar shows rooms in use per night once you've listed what you have." />;
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-3">
+        <button onClick={() => shift(-1)} className="tap w-9 h-9 rounded-full flex items-center justify-center" style={{ border: `1px solid ${C.line}`, background: C.card }}><ChevronLeft size={18} color={C.ink} /></button>
+        <div className="text-[15px] font-semibold" style={{ color: C.ink }}>{first.toLocaleDateString("en-GB", { month: "long", year: "numeric" })}</div>
+        <button onClick={() => shift(1)} className="tap w-9 h-9 rounded-full flex items-center justify-center" style={{ border: `1px solid ${C.line}`, background: C.card }}><ChevronLeft size={18} color={C.ink} style={{ transform: "rotate(180deg)" }} /></button>
+      </div>
+      <div className="grid grid-cols-7 gap-1 mb-1">{["M", "T", "W", "T", "F", "S", "S"].map((w, i) => <div key={i} className="text-center text-[11px] font-semibold" style={{ color: C.muted }}>{w}</div>)}</div>
+      <div className="grid grid-cols-7 gap-1 mb-3">
+        {Array.from({ length: lead }).map((_, i) => <div key={"l" + i} />)}
+        {cells.map((c) => {
+          const ratio = c.total ? c.used / c.total : 0;
+          const full = c.total && c.free === 0;
+          const bg = full ? C.maroon : ratio >= 0.6 ? C.pine : ratio > 0 ? C.pineSoft : C.card;
+          const fg = full || ratio >= 0.6 ? "#fff" : C.ink;
+          const isPast = c.d < today;
+          return (
+            <button key={c.d} onClick={() => setPicked(c.d)} className="tap rounded-lg flex flex-col items-center justify-center" style={{ height: 46, background: bg, border: `1.5px solid ${picked === c.d ? C.gold : c.d === today ? C.pine : C.line}`, opacity: isPast ? .55 : 1 }}>
+              <div className="text-[13px] font-semibold leading-none" style={{ color: fg }}>{c.n}</div>
+              <div className="text-[10px] leading-none mt-1" style={{ color: fg, opacity: .85 }}>{c.used}/{c.total}{c.pending ? <span style={{ color: full || ratio >= 0.6 ? C.goldSoft : C.goldText }}> +{c.pending}</span> : null}</div>
+            </button>
+          );
+        })}
+      </div>
+      <div className="flex flex-wrap gap-3 text-[11px] mb-4" style={{ color: C.muted }}>
+        <span className="inline-flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm" style={{ background: C.pineSoft }} /> some rooms</span>
+        <span className="inline-flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm" style={{ background: C.pine }} /> busy</span>
+        <span className="inline-flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm" style={{ background: C.maroon }} /> full</span>
+        <span>+n = requested, not yet confirmed</span>
+      </div>
+      {picked && (
+        <div className="rounded-2xl p-4" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+          <div className="text-[11px] font-semibold tracking-[.14em] uppercase mb-2" style={{ color: C.goldText }}>Night of {fmtDate(picked)}</div>
+          {rooms.filter((r) => r.active).map((r) => {
+            const used = roomsUsedOn(r.id, picked, bookings, closures);
+            return <div key={r.id} className="flex items-center justify-between text-[13px] py-1" style={{ color: C.ink }}><span>{r.name}</span><span style={{ color: used >= r.count ? C.maroon : C.muted }}>{used}/{r.count} in use</span></div>;
+          })}
+          {(dayList.length > 0 || dayClosures.length > 0) && <div className="my-2" style={{ borderTop: `1px solid ${C.lineSoft}` }} />}
+          {dayList.map((b) => { const op = talentById(b.operatorId); const room = rooms.find((r) => r.id === b.roomId);
+            return <div key={b.id} className="flex items-center justify-between text-[13px] py-1"><span style={{ color: C.ink }}>{b.rooms} × {room?.name} · {op?.company || op?.name || "Operator"}</span><BkBadge status={b.status} /></div>; })}
+          {dayClosures.map((c) => { const room = rooms.find((r) => r.id === c.roomId);
+            return <div key={c.id} className="flex items-center justify-between text-[13px] py-1" style={{ color: C.muted }}><span>{c.rooms} × {room?.name} closed{c.reason ? ` · ${c.reason}` : ""}</span></div>; })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ------------------------------ Hotel · Rooms ------------------------------ */
+function HotelRooms({ user, data }) {
+  const { rooms, closures, bookings, reload, loaded } = data;
+  const me = user.talentId || user.id;
+  const [editing, setEditing] = useState(null);     // null | "new" | room
+  const [closing, setClosing] = useState(false);
+  const [err, setErr] = useState(null);
+  const total = rooms.filter((r) => r.active).reduce((s, r) => s + r.count, 0);
+  const field = { background: C.bg, border: `1px solid ${C.line}`, color: C.ink };
+
+  const removeRoom = async (r) => {
+    const future = bookings.some((b) => b.roomId === r.id && b.status === "confirmed" && b.checkOut >= isoDay(0));
+    if (future) { setErr("That room type has confirmed bookings ahead. Set its count to 0 instead, or cancel the bookings first."); return; }
+    const { error } = await supabase.from("hotel_rooms").update({ active: false }).eq("id", r.id);
+    if (error) setErr(error.message); else reload();
+  };
+  const removeClosure = async (id) => { const { error } = await supabase.from("room_closures").delete().eq("id", id); if (error) setErr(error.message); else reload(); };
+
+  return (
+    <div className="px-5 py-4">
+      <SectionLabel trailing={total ? `${total} rooms in total` : ""}>Room types</SectionLabel>
+      {loaded && !rooms.length && (
+        <div className="rounded-2xl p-4 mb-3" style={{ background: C.goldSoft }}>
+          <div className="text-[14px] font-semibold" style={{ color: C.goldText }}>Start with what you sell</div>
+          <div className="text-[13px] leading-snug mt-0.5" style={{ color: C.goldText, opacity: .9 }}>“Deluxe twin · 12 rooms”, “Family suite · 2 rooms”. Operators request by type; the app keeps count per night so you can never be asked to overbook.</div>
+        </div>
+      )}
+      {rooms.filter((r) => r.active).map((r) => (
+        <div key={r.id} className="rounded-2xl p-4 mb-3" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+          <div className="flex items-start gap-3">
+            <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0" style={{ background: C.pine }}><BedDouble size={18} color={C.goldSoft} /></div>
+            <div className="flex-1 min-w-0">
+              <div className="text-[15px] font-semibold" style={{ color: C.ink }}>{r.name}</div>
+              <div className="text-[13px]" style={{ color: C.muted }}>{BED_LABEL[r.beds]} · sleeps {r.capacity} · <b style={{ color: C.ink }}>{r.count} {r.count === 1 ? "room" : "rooms"}</b>{r.rate ? ` · ${fmtNu(r.rate)}/night` : ""}</div>
+              {r.notes && <div className="text-[12px] mt-1" style={{ color: C.muted }}>{r.notes}</div>}
+            </div>
+            <button onClick={() => setEditing(r)} className="tap h-8 px-3 rounded-lg text-[12px] font-semibold" style={{ background: C.bg, color: C.ink }}>Edit</button>
+          </div>
+        </div>
+      ))}
+      <button onClick={() => setEditing("new")} className="tap w-full h-12 rounded-xl text-[14px] font-semibold inline-flex items-center justify-center gap-1.5 mb-6" style={{ background: C.pine, color: "#fff" }}><Plus size={16} /> Add a room type</button>
+
+      {rooms.length > 0 && (
+        <>
+          <SectionLabel trailing={closures.filter((c) => c.to >= isoDay(0)).length ? `${closures.filter((c) => c.to >= isoDay(0)).length} active` : ""}>Rooms taken out of sale</SectionLabel>
+          <p className="text-[13px] mb-3" style={{ color: C.muted }}>Maintenance, walk-ins, or bookings you took outside the hub. Closed rooms count as full, so operators see the true picture.</p>
+          {closures.filter((c) => c.to >= isoDay(0)).map((c) => { const room = rooms.find((r) => r.id === c.roomId);
+            return (
+              <div key={c.id} className="rounded-xl px-4 py-3 mb-2 flex items-center gap-3" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+                <Lock size={15} color={C.muted} />
+                <div className="flex-1 min-w-0"><div className="text-[14px] font-semibold" style={{ color: C.ink }}>{c.rooms} × {room?.name || "room"}</div>
+                  <div className="text-[12px]" style={{ color: C.muted }}>{fmtNights(c.from, c.to)}{c.reason ? ` · ${c.reason}` : ""}</div></div>
+                <button onClick={() => removeClosure(c.id)} className="tap h-8 px-3 rounded-lg text-[12px] font-semibold" style={{ background: C.bg, color: C.maroon }}>Reopen</button>
+              </div>
+            ); })}
+          <button onClick={() => setClosing(true)} className="tap w-full h-11 rounded-xl text-[14px] font-semibold inline-flex items-center justify-center gap-1.5" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }}><Lock size={15} /> Close rooms for some dates</button>
+        </>
+      )}
+      {err && <div className="text-[13px] mt-3 rounded-lg px-3 py-2" style={{ background: C.maroonSoft, color: C.maroon }}>{err}</div>}
+
+      {editing && <RoomEditor hotelId={me} room={editing === "new" ? null : editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); reload(); }} onRemove={editing !== "new" ? () => { removeRoom(editing); setEditing(null); } : null} />}
+      {closing && <ClosureEditor hotelId={me} rooms={rooms.filter((r) => r.active)} bookings={bookings} closures={closures} onClose={() => setClosing(false)} onSaved={() => { setClosing(false); reload(); }} />}
+    </div>
+  );
+}
+
+function RoomEditor({ hotelId, room, onClose, onSaved, onRemove }) {
+  const [f, setF] = useState({ name: room?.name || "", beds: room?.beds || "twin", capacity: room?.capacity || 2, count: room?.count ?? 1, rate: room?.rate ?? "", notes: room?.notes || "" });
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const set = (k, v) => setF((x) => ({ ...x, [k]: v }));
+  const field = { background: C.bg, border: `1px solid ${C.line}`, color: C.ink };
+  const save = async () => {
+    if (f.name.trim().length < 2) { setErr("Give the room type a name operators will recognise."); return; }
+    setBusy(true); setErr(null);
+    const row = { hotel_id: hotelId, name: f.name.trim(), beds: f.beds, capacity: Number(f.capacity) || 2, count: Math.max(0, Number(f.count) || 0), rate_nu: f.rate === "" ? null : Number(f.rate), notes: f.notes.trim() || null, active: true };
+    const q = room ? supabase.from("hotel_rooms").update(row).eq("id", room.id) : supabase.from("hotel_rooms").insert(row);
+    const { error } = await q;
+    setBusy(false);
+    if (error) { setErr(error.message); return; }
+    onSaved();
+  };
+  return (
+    <Sheet onClose={onClose}>
+      <div className="text-[18px] font-semibold mb-3" style={{ color: C.ink }}>{room ? "Edit room type" : "New room type"}</div>
+      <Label>Name</Label>
+      <input value={f.name} onChange={(e) => set("name", e.target.value)} placeholder="Deluxe twin" maxLength={60} className="w-full h-11 px-3.5 rounded-xl text-[15px] mb-3" style={field} />
+      <Label>Beds</Label>
+      <div className="flex flex-wrap gap-2 mb-3">{Object.entries(BED_LABEL).map(([k, l]) => <Chip key={k} on={f.beds === k} onClick={() => set("beds", k)}>{l}</Chip>)}</div>
+      <div className="grid grid-cols-2 gap-3 mb-3">
+        <div><Label>Sleeps</Label><input type="number" min={1} max={12} value={f.capacity} onChange={(e) => set("capacity", e.target.value)} className="w-full h-11 px-3.5 rounded-xl text-[15px]" style={field} /></div>
+        <div><Label>How many rooms</Label><input type="number" min={0} max={500} value={f.count} onChange={(e) => set("count", e.target.value)} className="w-full h-11 px-3.5 rounded-xl text-[15px]" style={field} /></div>
+      </div>
+      <Label>Rate per night in Nu. (optional, shown to operators as a guide)</Label>
+      <input type="number" min={0} value={f.rate} onChange={(e) => set("rate", e.target.value)} placeholder="e.g. 4500" className="w-full h-11 px-3.5 rounded-xl text-[15px] mb-3" style={field} />
+      <Label>Notes (optional)</Label>
+      <input value={f.notes} onChange={(e) => set("notes", e.target.value)} placeholder="Valley view, extra bed possible, ground floor…" maxLength={140} className="w-full h-11 px-3.5 rounded-xl text-[15px] mb-4" style={field} />
+      {err && <div className="text-[13px] mb-3 rounded-lg px-3 py-2" style={{ background: C.maroonSoft, color: C.maroon }}>{err}</div>}
+      <OCta busy={busy} onClick={save}>{room ? "Save changes" : "Add room type"}</OCta>
+      {onRemove && <button onClick={onRemove} className="tap w-full h-10 mt-2 text-[13px] font-semibold" style={{ color: C.maroon }}>Remove this room type</button>}
+    </Sheet>
+  );
+}
+
+function ClosureEditor({ hotelId, rooms, bookings, closures, onClose, onSaved }) {
+  const [f, setF] = useState({ roomId: rooms[0]?.id || "", from: isoDay(0), to: isoDay(1), rooms: 1, reason: "" });
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const set = (k, v) => setF((x) => ({ ...x, [k]: v }));
+  const field = { background: C.bg, border: `1px solid ${C.line}`, color: C.ink };
+  const room = rooms.find((r) => r.id === f.roomId);
+  const free = room && f.to > f.from ? Math.min(...Array.from({ length: nightsBetween(f.from, f.to) }, (_, i) => room.count - roomsUsedOn(room.id, addDays(f.from, i), bookings, closures))) : 0;
+  const save = async () => {
+    if (!room) { setErr("Pick a room type."); return; }
+    if (f.to <= f.from) { setErr("The reopening date must be after the first closed night."); return; }
+    if (Number(f.rooms) > free) { setErr(`Only ${Math.max(0, free)} of those rooms are free across these dates. Cancel the confirmed bookings first if they really aren't available.`); return; }
+    setBusy(true); setErr(null);
+    const { error } = await supabase.from("room_closures").insert({ hotel_id: hotelId, room_id: f.roomId, from_date: f.from, to_date: f.to, rooms: Number(f.rooms) || 1, reason: f.reason.trim() || null });
+    setBusy(false);
+    if (error) { setErr(error.message); return; }
+    onSaved();
+  };
+  return (
+    <Sheet onClose={onClose}>
+      <div className="text-[18px] font-semibold mb-1" style={{ color: C.ink }}>Close rooms for some dates</div>
+      <p className="text-[13px] mb-3" style={{ color: C.muted }}>Operators will see these rooms as taken. Nothing is cancelled.</p>
+      <Label>Room type</Label>
+      <div className="flex flex-wrap gap-2 mb-3">{rooms.map((r) => <Chip key={r.id} on={f.roomId === r.id} onClick={() => set("roomId", r.id)}>{r.name}</Chip>)}</div>
+      <div className="grid grid-cols-2 gap-3 mb-3">
+        <div><Label>First night closed</Label><input type="date" value={f.from} onChange={(e) => set("from", e.target.value)} className="w-full h-11 px-3 rounded-xl text-[14px]" style={field} /></div>
+        <div><Label>Back on sale from</Label><input type="date" value={f.to} onChange={(e) => set("to", e.target.value)} className="w-full h-11 px-3 rounded-xl text-[14px]" style={field} /></div>
+      </div>
+      <Label>How many rooms{room ? ` (${Math.max(0, free)} free on the tightest night)` : ""}</Label>
+      <input type="number" min={1} max={room?.count || 500} value={f.rooms} onChange={(e) => set("rooms", e.target.value)} className="w-full h-11 px-3.5 rounded-xl text-[15px] mb-3" style={field} />
+      <Label>Reason (optional, only you see it)</Label>
+      <input value={f.reason} onChange={(e) => set("reason", e.target.value)} placeholder="Repainting · walk-in group · direct booking" maxLength={80} className="w-full h-11 px-3.5 rounded-xl text-[15px] mb-4" style={field} />
+      {err && <div className="text-[13px] mb-3 rounded-lg px-3 py-2" style={{ background: C.maroonSoft, color: C.maroon }}>{err}</div>}
+      <OCta busy={busy} onClick={save}>Close these rooms</OCta>
+    </Sheet>
+  );
+}
+
+/* ----------------------------- Hotel · Profile ----------------------------- */
+function HotelProfile({ user, onSaved }) {
+  const me = user.talentId || user.id;
+  const [p, setP] = useState(null);
+  const [f, setF] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState(null);
+  const [err, setErr] = useState(null);
+  const [certPreview, setCertPreview] = useState(null);
+  const certRef = useRef();
+  const field = { background: C.bg, border: `1px solid ${C.line}`, color: C.ink };
+  const stayTowns = Object.entries(DK_TOWNS).filter(([, v]) => v.stay).sort((a, b) => a[1].n.localeCompare(b[1].n));
+
+  const load = async () => {
+    const { data } = await supabase.from("profiles").select("*").eq("id", me).maybeSingle();
+    if (!data) return;
+    setP(data);
+    setF({ company: data.company_name || "", name: data.full_name || "", phone: (data.phone || "").replace(/^\+?975/, ""), email: data.email || "",
+           town: data.hotel_town || hotelTownKey(data.base) || "", tier: data.hotel_tier || "3", stars: data.star_rating || "", kind: data.stay_kind || "",
+           amenities: Array.isArray(data.hotel_amenities) ? data.hotel_amenities : [], checkin: data.hotel_checkin || "14:00", checkout: data.hotel_checkout || "11:00",
+           policy: data.hotel_policy || "", pitch: data.pitch || "", licNo: data.license_number || "" });
+  };
+  useEffect(() => { load(); }, [me]);
+  const set = (k, v) => setF((x) => ({ ...x, [k]: v }));
+  const flash = (m) => { setNote(m); setTimeout(() => setNote(null), 2600); };
+
+  const save = async () => {
+    if (!f.company.trim()) { setErr("Add the property name."); return; }
+    if (!f.town) { setErr("Pick the town your hotel is in — operators search by town."); return; }
+    setBusy(true); setErr(null);
+    const { error } = await supabase.from("profiles").update({
+      company_name: f.company.trim(), full_name: f.name.trim() || f.company.trim(), phone: f.phone.trim() || null, email: f.email.trim() || null,
+      base: hotelTownName(f.town), hotel_town: f.town, hotel_tier: f.tier, star_rating: f.stars ? Number(f.stars) : null, stay_kind: f.kind || null,
+      hotel_amenities: f.amenities, hotel_checkin: f.checkin || null, hotel_checkout: f.checkout || null, hotel_policy: f.policy.trim() || null,
+      pitch: f.pitch.trim() || null, license_number: f.licNo.trim() || null,
+    }).eq("id", me);
+    setBusy(false);
+    if (error) { setErr(error.message); return; }
+    flash("Saved."); onSaved && onSaved(); load();
+  };
+  const pickCert = (e) => {
+    const file = e.target.files?.[0]; e.target.value = "";
+    if (!file || !file.type.startsWith("image/")) { setErr("Choose a photo or screenshot of the certificate."); return; }
+    const r = new FileReader(); r.onload = () => setCertPreview(r.result); r.readAsDataURL(file);
+  };
+  const uploadCert = async () => {
+    setBusy(true); setErr(null);
+    try {
+      const small = await shrinkImage(certPreview, 1600, 0.85);
+      const blob = await (await fetch(small)).blob();
+      const path = `${me}/license.jpg`;
+      const up = await supabase.storage.from("licenses").upload(path, blob, { contentType: "image/jpeg", upsert: true });
+      if (up.error) throw up.error;
+      const { error } = await supabase.from("profiles").update({ license_path: path, license_status: "submitted", license_number: f.licNo.trim() || null }).eq("id", me);
+      if (error) throw error;
+      setCertPreview(null); flash("Certificate sent for verification."); onSaved && onSaved(); load();
+    } catch (e) { setErr(e.message || "Upload failed"); }
+    setBusy(false);
+  };
+
+  if (!f) return <div className="px-5 py-6 text-[13px]" style={{ color: C.muted }}>Loading…</div>;
+  const st = p?.license_status || "none";
+  return (
+    <div className="px-5 py-4">
+      <SectionLabel>Your property</SectionLabel>
+      <div className="rounded-2xl p-4 mb-4" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+        <Label>Property name</Label>
+        <input value={f.company} onChange={(e) => set("company", e.target.value)} placeholder="Zhiwa Boutique Stay" maxLength={80} className="w-full h-11 px-3.5 rounded-xl text-[15px] mb-3" style={field} />
+        <Label>Town</Label>
+        <div className="flex flex-wrap gap-2 mb-3">{stayTowns.map(([k, v]) => <Chip key={k} on={f.town === k} onClick={() => set("town", k)}>{v.n}</Chip>)}</div>
+        <Label>Where you fit in an itinerary</Label>
+        <div className="flex flex-wrap gap-2 mb-1">{DK_TIERS.map((k) => <Chip key={k} on={f.tier === k} onClick={() => set("tier", k)}>{DK_HOTEL[k]}</Chip>)}</div>
+        <p className="text-[12px] mb-3" style={{ color: C.muted }}>Drukpah plans each night with one of these. Operators see your property under the matching nights.</p>
+        <div className="grid grid-cols-2 gap-3 mb-3">
+          <div><Label>DoT star rating</Label>
+            <div className="flex gap-1.5">{[1, 2, 3, 4, 5].map((n) => <button key={n} onClick={() => set("stars", f.stars === n ? "" : n)} className="tap w-9 h-9 rounded-lg inline-flex items-center justify-center" style={{ background: f.stars >= n ? C.gold : C.bg, border: `1px solid ${C.line}` }}><Star size={15} color={f.stars >= n ? "#fff" : C.muted} fill={f.stars >= n ? "#fff" : "none"} /></button>)}</div></div>
+          <div><Label>Type</Label>
+            <select value={f.kind} onChange={(e) => set("kind", e.target.value)} className="w-full h-11 px-3 rounded-xl text-[14px]" style={field}><option value="">Choose…</option>{Object.entries(STAY_KINDS).map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select></div>
+        </div>
+        <Label>Amenities</Label>
+        <div className="flex flex-wrap gap-2 mb-3">{HOTEL_AMENITIES.map((a) => <Chip key={a} on={f.amenities.includes(a)} onClick={() => set("amenities", f.amenities.includes(a) ? f.amenities.filter((x) => x !== a) : [...f.amenities, a])}>{a}</Chip>)}</div>
+        <div className="grid grid-cols-2 gap-3 mb-3">
+          <div><Label>Check-in from</Label><input type="time" value={f.checkin} onChange={(e) => set("checkin", e.target.value)} className="w-full h-11 px-3 rounded-xl text-[14px]" style={field} /></div>
+          <div><Label>Check-out by</Label><input type="time" value={f.checkout} onChange={(e) => set("checkout", e.target.value)} className="w-full h-11 px-3 rounded-xl text-[14px]" style={field} /></div>
+        </div>
+        <Label>A line for operators</Label>
+        <textarea value={f.pitch} onChange={(e) => set("pitch", e.target.value)} rows={2} maxLength={220} placeholder="Family-run, 10 minutes from Paro Dzong. Bhutanese and continental menu, hot-stone bath on request." className="w-full px-3.5 py-3 rounded-xl text-[14px] resize-none mb-3" style={field} />
+        <Label>Booking policy</Label>
+        <textarea value={f.policy} onChange={(e) => set("policy", e.target.value)} rows={2} maxLength={300} placeholder="Free cancellation up to 7 days before arrival. Group rates for 6+ rooms. Payment on departure or by operator invoice." className="w-full px-3.5 py-3 rounded-xl text-[14px] resize-none mb-3" style={field} />
+        <div className="grid grid-cols-2 gap-3 mb-4">
+          <div><Label>Contact person</Label><input value={f.name} onChange={(e) => set("name", e.target.value)} className="w-full h-11 px-3.5 rounded-xl text-[14px]" style={field} /></div>
+          <div><Label>Phone (+975)</Label><input value={f.phone} onChange={(e) => set("phone", e.target.value.replace(/[^\d]/g, "").slice(0, 8))} inputMode="tel" placeholder="17 12 34 56" className="w-full h-11 px-3.5 rounded-xl text-[14px]" style={field} /></div>
+        </div>
+        {err && <div className="text-[13px] mb-3 rounded-lg px-3 py-2" style={{ background: C.maroonSoft, color: C.maroon }}>{err}</div>}
+        {note && <div className="text-[13px] mb-3 rounded-lg px-3 py-2" style={{ background: C.pineSoft, color: C.pine }}>{note}</div>}
+        <OCta busy={busy} onClick={save}>Save property</OCta>
+      </div>
+
+      <SectionLabel>Department of Tourism certificate</SectionLabel>
+      <div className="rounded-2xl p-4 mb-4" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+        <div className="flex items-center gap-2 mb-2">
+          <ShieldCheck size={16} color={st === "verified" ? C.pine : C.goldText} />
+          <div className="text-[14px] font-semibold" style={{ color: C.ink }}>{st === "verified" ? "Verified by the hub" : st === "submitted" ? "Sent — being checked" : st === "rejected" ? "Not accepted — upload a clearer copy" : "Not uploaded yet"}</div>
+        </div>
+        <p className="text-[13px] mb-3" style={{ color: C.muted }}>Your DoT hotel certification (or licence). Verified hotels carry a tick wherever operators see you.</p>
+        <Label>Certificate / licence number</Label>
+        <input value={f.licNo} onChange={(e) => set("licNo", e.target.value)} placeholder="As printed on the certificate" className="w-full h-11 px-3.5 rounded-xl text-[14px] mb-3" style={field} />
+        <input ref={certRef} type="file" accept="image/*" onChange={pickCert} className="hidden" />
+        {certPreview ? (
+          <>
+            <img src={certPreview} alt="Certificate preview" className="w-full rounded-xl mb-3" style={{ maxHeight: 220, objectFit: "cover" }} />
+            <div className="flex gap-2"><OCta busy={busy} onClick={uploadCert}>Send for verification</OCta><button onClick={() => setCertPreview(null)} className="tap h-[52px] px-4 rounded-xl text-[14px] font-semibold" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }}>Cancel</button></div>
+          </>
+        ) : (
+          <button onClick={() => certRef.current?.click()} className="tap w-full h-12 rounded-xl text-[14px] font-semibold inline-flex items-center justify-center gap-2" style={{ background: st === "verified" ? C.card : C.goldSoft, border: st === "verified" ? `1px solid ${C.line}` : "none", color: st === "verified" ? C.ink : C.goldText }}><Upload size={16} /> {st === "none" ? "Upload certificate photo" : "Replace the photo"}</button>
+        )}
+      </div>
+      <PrivacyPanel talent={talentById(me) || { id: me }} />
+    </div>
+  );
+}
+
+/* ================================ OPERATOR ================================= */
+/* Hotels per stay inside a trip. Nights come from the Drukpah plan; each stay
+   can hold one or more room requests. hotels_status on the trip follows along. */
+function TripHotels({ trip, user, actions }) {
+  const [bookings, setBookings] = useState(null);
+  const [finding, setFinding] = useState(null);   // stay
+  const [err, setErr] = useState(null);
+  const stays = useMemo(() => tripStays(trip), [trip.itinerary, trip.start, trip.end]);
+  const load = async () => {
+    if (!CLOUD) { setBookings([]); return; }
+    const { data, error } = await supabase.from("room_bookings").select("*").eq("trip_id", trip.id).order("check_in", { ascending: true });
+    if (error) { console.error("trip bookings failed:", error.message); setBookings([]); return; }
+    setBookings((data || []).map(bookingFromRow));
+  };
+  useEffect(() => { load(); }, [trip.id]);
+  useEffect(() => {
+    if (!CLOUD) return;
+    const ch = supabase.channel("trip-hotels-" + trip.id).on("postgres_changes", { event: "*", schema: "public", table: "room_bookings", filter: `trip_id=eq.${trip.id}` }, load).subscribe();
+    return () => { supabase.removeChannel(ch); };
+  }, [trip.id]);
+
+  // keep the Trip essentials checklist honest
+  useEffect(() => {
+    if (!bookings || !stays.length) return;
+    const covered = stays.filter((s) => bookings.some((b) => b.status === "confirmed" && b.checkIn <= s.from && b.checkOut >= s.to)).length;
+    const any = bookings.some((b) => b.status === "confirmed" || b.status === "requested");
+    const next = covered === stays.length ? "done" : any ? "in_progress" : trip.hotelsStatus === "not_needed" ? "not_needed" : "not_started";
+    if (next !== trip.hotelsStatus && !(next === "not_started" && trip.hotelsStatus === "done" && !bookings.length)) {
+      supabase.from("trips").update({ hotels_status: next }).eq("id", trip.id).then(({ error }) => { if (!error && actions.reloadTrips) actions.reloadTrips(); });
+    }
+  }, [bookings, stays.length]);
+
+  const cancel = async (b) => {
+    const { error } = await supabase.from("room_bookings").update({ status: "cancelled" }).eq("id", b.id);
+    if (error) setErr(error.message); else load();
+  };
+  const live = (bookings || []).filter((b) => b.status !== "cancelled");
+  const confirmedNights = stays.filter((s) => live.some((b) => b.status === "confirmed" && b.checkIn <= s.from && b.checkOut >= s.to)).reduce((n, s) => n + s.nights, 0);
+  const totalNights = stays.reduce((n, s) => n + s.nights, 0);
+
+  return (
+    <div className="rounded-2xl p-4 mb-4" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+      <div className="flex items-start justify-between gap-3 mb-3">
+        <div>
+          <div className="text-[11px] font-semibold tracking-[.14em] uppercase" style={{ color: C.goldText }}>Hotels</div>
+          <div className="text-[13px] mt-0.5" style={{ color: C.muted }}>
+            {!stays.length ? "Set the trip dates or apply an itinerary to see the nights." : totalNights ? `${confirmedNights} of ${totalNights} nights confirmed` : ""}
+          </div>
+        </div>
+        {bookings === null && <Loader2 size={16} className="animate-spin" color={C.muted} />}
+      </div>
+
+      {stays.map((s, i) => {
+        const mine = live.filter((b) => b.checkIn < s.to && b.checkOut > s.from);
+        const confirmed = mine.some((b) => b.status === "confirmed" && b.checkIn <= s.from && b.checkOut >= s.to);
+        const requested = !confirmed && mine.some((b) => b.status === "requested");
+        return (
+          <div key={i} className="rounded-xl p-3 mb-2" style={{ background: C.bg, border: `1px solid ${C.lineSoft}` }}>
+            <div className="flex items-center gap-3">
+              <div className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0" style={{ background: confirmed ? C.pine : requested ? C.gold : C.card, border: confirmed || requested ? "none" : `1px solid ${C.line}` }}>
+                <BedDouble size={16} color={confirmed || requested ? "#fff" : C.muted} />
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="text-[14px] font-semibold truncate" style={{ color: C.ink }}>{s.townName || "Whole trip"}{s.tier ? <span className="font-normal" style={{ color: C.muted }}> · {DK_HOTEL[s.tier]}</span> : null}</div>
+                <div className="text-[12px]" style={{ color: C.muted }}>{fmtNights(s.from, s.to)}{s.days.length ? ` · day${s.days.length > 1 ? "s" : ""} ${s.days[0]}${s.days.length > 1 ? `–${s.days[s.days.length - 1]}` : ""}` : ""}</div>
+              </div>
+              {!confirmed && (
+                <button onClick={() => setFinding(s)} className="tap h-9 px-3 rounded-lg text-[13px] font-semibold shrink-0" style={{ background: requested ? C.card : C.pine, color: requested ? C.pine : "#fff", border: requested ? `1px solid ${C.pine}` : "none" }}>
+                  {requested ? "Add another" : mine.length ? "Try another" : "Find a hotel"}
+                </button>
+              )}
+            </div>
+            {mine.map((b) => {
+              const h = talentById(b.hotelId);
+              return (
+                <div key={b.id} className="mt-2 ml-12 rounded-lg px-3 py-2.5" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="text-[13px] font-semibold truncate inline-flex items-center gap-1" style={{ color: C.ink }}>{h?.company || h?.name || "Hotel"}{h?.verified && <BadgeCheck size={12} color={C.pine} />}</div>
+                      <div className="text-[12px]" style={{ color: C.muted }}>{b.rooms} {b.rooms === 1 ? "room" : "rooms"} · {b.guests} guests · {MEAL_LABEL[b.mealPlan]}{b.checkIn !== s.from || b.checkOut !== s.to ? ` · ${fmtDate(b.checkIn)}–${fmtDate(b.checkOut)}` : ""}</div>
+                    </div>
+                    <BkBadge status={b.status} />
+                  </div>
+                  {b.hotelNote && <div className="text-[12px] mt-1.5 rounded px-2 py-1.5" style={{ background: b.status === "declined" ? C.maroonSoft : C.pineSoft, color: b.status === "declined" ? C.maroon : C.pine }}>Hotel: {b.hotelNote}</div>}
+                  <div className="flex items-center gap-3 mt-1.5">
+                    {h?.phone && <button onClick={() => openWhatsApp(h.phone, `Hello, ${user.name} here from the Bhutan Tourism Hub about our room request for ${fmtDate(b.checkIn)}–${fmtDate(b.checkOut)}:`)} className="tap text-[12px] font-semibold inline-flex items-center gap-1" style={{ color: C.pine }}><MessageCircle size={12} /> WhatsApp</button>}
+                    {(b.status === "requested" || b.status === "confirmed") && <button onClick={() => cancel(b)} className="tap text-[12px] font-semibold" style={{ color: C.muted }}>{b.status === "confirmed" ? "Cancel booking" : "Withdraw"}</button>}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        );
+      })}
+      {err && <div className="text-[13px] mt-2 rounded-lg px-3 py-2" style={{ background: C.maroonSoft, color: C.maroon }}>{err}</div>}
+      {finding && <FindHotelSheet trip={trip} stay={finding} user={user} onClose={() => setFinding(null)} onSent={() => { setFinding(null); load(); }} />}
+    </div>
+  );
+}
+
+function FindHotelSheet({ trip, stay, user, onClose, onSent }) {
+  const [from, setFrom] = useState(stay.from);
+  const [to, setTo] = useState(stay.to);
+  const [summary, setSummary] = useState(null);   // hotel_id → {total, free}
+  const [town, setTown] = useState(stay.townKey || "all");
+  const [hotel, setHotel] = useState(null);
+  const [rooms, setRooms] = useState(null);
+  const [f, setF] = useState({ roomId: null, rooms: 1, guests: Math.max(1, trip.guestCount || (trip.guests || []).length || 2), meal: "breakfast", notes: "", guestName: (trip.guests || [])[0]?.name || "" });
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const set = (k, v) => setF((x) => ({ ...x, [k]: v }));
+  const field = { background: C.bg, border: `1px solid ${C.line}`, color: C.ink };
+  const nights = nightsBetween(from, to);
+
+  const hotels = useMemo(() => Object.values(PROFILE_DIR).filter((p) => p.role === "hotel"), [summary]);
+  const towns = useMemo(() => { const s = new Set(hotels.map((h) => h.hotelTown).filter(Boolean)); return [...s].sort((a, b) => hotelTownName(a).localeCompare(hotelTownName(b))); }, [hotels]);
+  useEffect(() => {
+    if (!CLOUD || nights <= 0) return;
+    let on = true;
+    supabase.rpc("hotels_free_summary", { p_from: from, p_to: to }).then(({ data, error }) => {
+      if (!on) return;
+      if (error) { console.error("hotels_free_summary:", error.message); setSummary({}); return; }
+      const m = {}; (data || []).forEach((r) => { m[r.hotel_id] = { total: r.total_rooms, free: r.free_rooms }; }); setSummary(m);
+    });
+    return () => { on = false; };
+  }, [from, to]);
+  useEffect(() => {
+    if (!hotel || nights <= 0) { setRooms(null); return; }
+    let on = true;
+    supabase.rpc("hotel_free_rooms", { p_hotel: hotel.id, p_from: from, p_to: to }).then(({ data, error }) => {
+      if (!on) return;
+      if (error) { setErr(error.message); setRooms([]); return; }
+      setRooms(data || []);
+      const firstFree = (data || []).find((r) => r.free > 0);
+      setF((x) => ({ ...x, roomId: firstFree ? firstFree.room_id : null }));
+    });
+    return () => { on = false; };
+  }, [hotel?.id, from, to]);
+
+  const list = hotels
+    .filter((h) => town === "all" || h.hotelTown === town)
+    .map((h) => ({ ...h, avail: summary ? summary[h.id] : null }))
+    .sort((a, b) => {
+      const tierA = a.hotelTier === stay.tier ? 0 : 1, tierB = b.hotelTier === stay.tier ? 0 : 1;
+      if (tierA !== tierB) return tierA - tierB;
+      if ((b.verified ? 1 : 0) !== (a.verified ? 1 : 0)) return (b.verified ? 1 : 0) - (a.verified ? 1 : 0);
+      return ((b.avail?.free || 0) - (a.avail?.free || 0));
+    });
+
+  const room = (rooms || []).find((r) => r.room_id === f.roomId);
+  const send = async () => {
+    if (!room) { setErr("Pick a room type with rooms free."); return; }
+    if (Number(f.rooms) > room.free) { setErr(`Only ${room.free} ${room.name} free for these dates.`); return; }
+    setBusy(true); setErr(null);
+    const { error } = await supabase.from("room_bookings").insert({
+      hotel_id: hotel.id, room_id: room.room_id, operator_id: user.talentId || user.id, trip_id: trip.id,
+      check_in: from, check_out: to, rooms: Number(f.rooms) || 1, guests: Number(f.guests) || 1, meal_plan: f.meal,
+      guest_name: f.guestName.trim() || null, notes: f.notes.trim() || null,
+    });
+    setBusy(false);
+    if (error) { setErr(error.message); return; }
+    onSent();
+  };
+
+  return (
+    <Sheet onClose={onClose}>
+      {!hotel ? (
+        <>
+          <div className="text-[18px] font-semibold mb-1" style={{ color: C.ink }}>Find a hotel{stay.townName ? ` in ${stay.townName}` : ""}</div>
+          <p className="text-[13px] mb-3" style={{ color: C.muted }}>{stay.tier ? `Drukpah planned ${DK_HOTEL[stay.tier].toLowerCase()} for these nights. ` : ""}Rooms shown free are free on every night you asked for.</p>
+          <div className="grid grid-cols-2 gap-3 mb-3">
+            <div><Label>Check in</Label><input type="date" value={from} onChange={(e) => setFrom(e.target.value)} className="w-full h-11 px-3 rounded-xl text-[14px]" style={field} /></div>
+            <div><Label>Check out</Label><input type="date" value={to} onChange={(e) => setTo(e.target.value)} className="w-full h-11 px-3 rounded-xl text-[14px]" style={field} /></div>
+          </div>
+          {towns.length > 1 && <div className="flex flex-wrap gap-2 mb-3"><Chip on={town === "all"} onClick={() => setTown("all")}>All towns</Chip>{towns.map((t) => <Chip key={t} on={town === t} onClick={() => setTown(t)}>{hotelTownName(t)}</Chip>)}</div>}
+          {!hotels.length && <Empty Icon={Building2} title="No hotels on the hub yet" body="Hotels are joining now. Until then, keep booking as you do today and mark Hotels booked in Trip essentials." />}
+          {hotels.length > 0 && !list.length && <div className="text-[13px] mb-3" style={{ color: C.muted }}>No hub hotels in {hotelTownName(town)} yet — try “All towns”.</div>}
+          {list.map((h) => (
+            <button key={h.id} onClick={() => { setErr(null); setHotel(h); }} className="tap w-full text-left rounded-2xl p-3.5 mb-2" style={{ background: C.card, border: `1px solid ${h.hotelTier === stay.tier && stay.tier ? C.pine + "66" : C.line}` }}>
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0" style={{ background: C.pine }}><Building2 size={18} color={C.goldSoft} /></div>
+                <div className="flex-1 min-w-0">
+                  <div className="text-[15px] font-semibold truncate inline-flex items-center gap-1.5" style={{ color: C.ink }}>{h.company || h.name}{h.verified && <BadgeCheck size={14} color={C.pine} />}</div>
+                  <div className="text-[12px] truncate" style={{ color: C.muted }}>
+                    {[hotelTownName(h.hotelTown), h.starRating ? `${h.starRating}★` : null, h.stayKind ? STAY_KINDS[h.stayKind] : null, h.hotelTier ? DK_HOTEL[h.hotelTier] : null].filter(Boolean).join(" · ")}
+                  </div>
+                </div>
+                <div className="text-right shrink-0">
+                  {h.avail ? (h.avail.total ? <><div className="text-[15px] font-semibold" style={{ color: h.avail.free ? C.pine : C.maroon }}>{h.avail.free}</div><div className="text-[10px]" style={{ color: C.muted }}>rooms free</div></> : <div className="text-[11px]" style={{ color: C.muted }}>no rooms listed</div>) : <Loader2 size={14} className="animate-spin" color={C.muted} />}
+                </div>
+              </div>
+              {h.pitch && <div className="text-[12px] mt-2 leading-snug" style={{ color: C.muted }}>{h.pitch}</div>}
+            </button>
+          ))}
+        </>
+      ) : (
+        <>
+          <button onClick={() => setHotel(null)} className="tap inline-flex items-center gap-1 text-[13px] font-semibold mb-2" style={{ color: C.muted }}><ChevronLeft size={15} /> All hotels</button>
+          <div className="text-[18px] font-semibold inline-flex items-center gap-1.5" style={{ color: C.ink }}>{hotel.company || hotel.name}{hotel.verified && <BadgeCheck size={16} color={C.pine} />}</div>
+          <div className="text-[13px] mb-3" style={{ color: C.muted }}>{fmtNights(from, to)}{hotel.hotelCheckin ? ` · check-in from ${hotel.hotelCheckin}` : ""}</div>
+          {hotel.hotelPolicy && <div className="text-[12px] rounded-lg px-3 py-2 mb-3" style={{ background: C.bg, color: C.ink }}>{hotel.hotelPolicy}</div>}
+          <Label>Room type</Label>
+          {rooms === null && <div className="text-[13px] mb-3" style={{ color: C.muted }}>Checking what's free…</div>}
+          {rooms && !rooms.length && <div className="text-[13px] mb-3" style={{ color: C.muted }}>This hotel hasn't listed room types yet. WhatsApp them from the trip page.</div>}
+          {(rooms || []).map((r) => (
+            <button key={r.room_id} disabled={!r.free} onClick={() => set("roomId", r.room_id)} className="tap w-full text-left rounded-xl px-3.5 py-3 mb-2 flex items-center gap-3"
+              style={{ background: f.roomId === r.room_id ? C.pineSoft : C.card, border: `1.5px solid ${f.roomId === r.room_id ? C.pine : C.line}`, opacity: r.free ? 1 : .5 }}>
+              <div className="flex-1 min-w-0">
+                <div className="text-[14px] font-semibold" style={{ color: C.ink }}>{r.name}</div>
+                <div className="text-[12px]" style={{ color: C.muted }}>{BED_LABEL[r.beds]} · sleeps {r.capacity}{r.rate_nu ? ` · ${fmtNu(r.rate_nu)}/night` : ""}{r.notes ? ` · ${r.notes}` : ""}</div>
+              </div>
+              <div className="text-right"><div className="text-[14px] font-semibold" style={{ color: r.free ? C.pine : C.maroon }}>{r.free}</div><div className="text-[10px]" style={{ color: C.muted }}>free</div></div>
+            </button>
+          ))}
+          {room && (
+            <>
+              <div className="grid grid-cols-2 gap-3 mb-3 mt-1">
+                <div><Label>Rooms (max {room.free})</Label><input type="number" min={1} max={room.free} value={f.rooms} onChange={(e) => set("rooms", e.target.value)} className="w-full h-11 px-3.5 rounded-xl text-[15px]" style={field} /></div>
+                <div><Label>Guests</Label><input type="number" min={1} value={f.guests} onChange={(e) => set("guests", e.target.value)} className="w-full h-11 px-3.5 rounded-xl text-[15px]" style={field} /></div>
+              </div>
+              {Number(f.guests) > Number(f.rooms) * room.capacity && <div className="text-[12px] mb-3" style={{ color: C.goldText }}>{f.rooms} × {room.name} sleeps {Number(f.rooms) * room.capacity}. You may need more rooms.</div>}
+              <Label>Meals</Label>
+              <div className="flex flex-wrap gap-2 mb-3">{Object.entries(MEAL_LABEL).map(([k, l]) => <Chip key={k} on={f.meal === k} onClick={() => set("meal", k)}>{l}</Chip>)}</div>
+              <Label>Lead guest or group name</Label>
+              <input value={f.guestName} onChange={(e) => set("guestName", e.target.value)} maxLength={80} className="w-full h-11 px-3.5 rounded-xl text-[14px] mb-3" style={field} />
+              <Label>Note to the hotel (optional)</Label>
+              <textarea value={f.notes} onChange={(e) => set("notes", e.target.value)} rows={2} maxLength={240} placeholder="Late arrival from Paro, one vegetarian, interconnecting rooms if possible…" className="w-full px-3.5 py-3 rounded-xl text-[14px] resize-none mb-3" style={field} />
+              {room.rate_nu && <div className="text-[13px] mb-3" style={{ color: C.muted }}>Guide price: {fmtNu(room.rate_nu * Number(f.rooms || 1) * nights)} for {f.rooms} × {nights} {nights === 1 ? "night" : "nights"}. The hotel confirms the final rate.</div>}
+              {err && <div className="text-[13px] mb-3 rounded-lg px-3 py-2" style={{ background: C.maroonSoft, color: C.maroon }}>{err}</div>}
+              <OCta busy={busy} onClick={send}>Send request</OCta>
+              <p className="text-[12px] text-center mt-2" style={{ color: C.muted }}>The hotel answers in the app. Nothing is booked until they confirm.</p>
+            </>
+          )}
+        </>
+      )}
+    </Sheet>
+  );
+}
+
+/* Guides and drivers see where the group sleeps, once it's confirmed. */
+function CrewHotelsBrief({ trip }) {
+  const [list, setList] = useState([]);
+  useEffect(() => {
+    if (!CLOUD) return;
+    supabase.from("room_bookings").select("*").eq("trip_id", trip.id).eq("status", "confirmed").order("check_in", { ascending: true })
+      .then(({ data }) => setList((data || []).map(bookingFromRow)));
+  }, [trip.id]);
+  if (!list.length) return null;
+  return (
+    <div className="rounded-2xl p-4 mb-3" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+      <div className="text-[12px] font-semibold tracking-[.12em] uppercase mb-2" style={{ color: C.goldText }}>Where the group sleeps</div>
+      {list.map((b) => { const h = talentById(b.hotelId);
+        return (
+          <div key={b.id} className="flex items-start gap-3 py-2" style={{ borderTop: `1px solid ${C.lineSoft}` }}>
+            <BedDouble size={16} color={C.pine} className="shrink-0 mt-0.5" />
+            <div className="flex-1 min-w-0">
+              <div className="text-[14px] font-semibold" style={{ color: C.ink }}>{h?.company || h?.name || "Hotel"}{h?.hotelTown ? <span className="font-normal" style={{ color: C.muted }}> · {hotelTownName(h.hotelTown)}</span> : null}</div>
+              <div className="text-[12px]" style={{ color: C.muted }}>{fmtNights(b.checkIn, b.checkOut)} · {b.rooms} {b.rooms === 1 ? "room" : "rooms"}{h?.hotelCheckin ? ` · check-in from ${h.hotelCheckin}` : ""}</div>
+            </div>
+            {h?.phone && <a href={`tel:${dialNumber(h.phone)}`} className="tap w-8 h-8 rounded-lg inline-flex items-center justify-center shrink-0" style={{ background: C.pineSoft }} aria-label="Call hotel"><Phone size={14} color={C.pine} /></a>}
+          </div>
+        ); })}
+    </div>
   );
 }
