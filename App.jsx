@@ -14,9 +14,10 @@ import { supabase } from "./supabase.js";
 
 /* Bhutan Tourism Hub design system — paper, pine forest, temple gold, kemar red. */
 const C = {
-  bg: "#F4F5F1", card: "#FFFFFF", ink: "#1A241E", muted: "#5E6963",
-  line: "#E4E7E0", lineSoft: "#EEF0EB", pine: "#21402F", pineDeep: "#16281E",
-  gold: "#C0872B", goldSoft: "#F3E8CF", maroon: "#7A2E2E", maroonSoft: "#F7E9E7", pineSoft: "#E4EFE7",
+  bg: "#FFFFFF", card: "#FFFFFF", ink: "#1D1D1F", muted: "#626269",
+  line: "#E2E2E7", lineSoft: "#EEEEF2", pine: "#0066CC", pineDeep: "#0A4FA3",
+  brand: "#21402F", brandDeep: "#16281E", success: "#1F8A4C", successSoft: "#E8F5EC", grey: "#F5F5F7",
+  gold: "#C0872B", goldSoft: "#F3E8CF", maroon: "#7A2E2E", maroonSoft: "#F7E9E7", pineSoft: "#EAF2FD",
   // gold is for icons and accents; goldText is gold you READ — deep enough to pass WCAG AA
   goldText: "#8A5F1C",
 };
@@ -50,8 +51,19 @@ const sysMsg = (text) => ({ id: uid(), senderId: null, kind: "system", body: tex
 
 /* ── Cloud (Supabase) ── posts are global when configured; everything falls back to local demo mode when not. */
 const CLOUD = Boolean(supabase);
+/* Apple devices draw San Francisco through -apple-system. Everything else gets Inter, the closest open typeface. */
+(function loadInter() {
+  try {
+    if (typeof document === "undefined" || document.getElementById("bth-inter")) return;
+    const isApple = /Mac|iPhone|iPad|iPod/.test(navigator.platform || "") || /Mac OS X|iPhone|iPad/.test(navigator.userAgent || "");
+    if (isApple) return;
+    const pre = document.createElement("link"); pre.rel = "preconnect"; pre.href = "https://fonts.gstatic.com"; pre.crossOrigin = "anonymous"; document.head.appendChild(pre);
+    const l = document.createElement("link"); l.id = "bth-inter"; l.rel = "stylesheet";
+    l.href = "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap"; document.head.appendChild(l);
+  } catch (e) {}
+})();
 const DEMO_MODE = false;   // set true only for local demos without a database
-const BUILD = "BUILD 32 — 7 Oct";   // bump every deploy; shown at the top of the welcome screen
+const BUILD = "BUILD 35 — 7 Oct";   // bump every deploy; shown at the top of the welcome screen
 // which device someone is on — shown beside the build so a screenshot tells us both
 const DEVICE = (() => {
   try {
@@ -1036,9 +1048,9 @@ export default function App() {
 
   return (
     <ErrorBoundary>
-      <div className="min-h-screen w-full flex justify-center" style={{ background: C.bg }}>
+      <div className="app-root min-h-screen w-full flex justify-center" style={{ background: C.bg }}>
       <style>{`
-        *{ font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Helvetica Neue", ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+        *{ font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Inter", "Helvetica Neue", ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif; font-feature-settings: "cv11", "ss01", "ss03"; -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
         html, body { overscroll-behavior-y: none; }
         :root { --sa-top: env(safe-area-inset-top, 0px); --sa-bottom: env(safe-area-inset-bottom, 0px); }
         .safe-bottom { padding-bottom: env(safe-area-inset-bottom, 0px); }
@@ -1053,7 +1065,7 @@ export default function App() {
         .hidescroll::-webkit-scrollbar{ display:none; }
         @media (prefers-reduced-motion: no-preference){ .fade{ animation: fade .28s ease both; } }
         @keyframes fade{ from{ opacity:0; transform: translateY(4px);} }
-        .fade{ animation-duration:.2s; }
+        .fade{ animation-duration:.2s; animation-fill-mode: backwards !important; }
         textarea:focus, input:focus{ outline:none; border-color:${C.pine}!important; box-shadow:0 0 0 3px ${C.pine}1f; }
         textarea::placeholder, input::placeholder{ color:${C.muted}; opacity:.7; }
 
@@ -1099,6 +1111,56 @@ export default function App() {
         }
         @media (min-width: 1440px){
           .signed-in .content-pad{ max-width: 840px; }
+        }
+
+        /* ── Apple layer: white, hairlines, one blue, restrained motion ───────── */
+        /* Type scale and rhythm: one large title per screen, grouped headers below with air above them */
+        .section-head{ margin-top: 28px; }
+        .section-head:first-child{ margin-top: 0; }
+        .section-head:first-child .section-head-text{ font-size: 28px; line-height: 1.15; font-weight: 700; letter-spacing: -.022em; text-transform: none; color: #1D1D1F !important; }
+        .section-head:first-child{ margin-bottom: 14px; }
+        @media (min-width: 900px){ .section-head:first-child .section-head-text{ font-size: 32px; } }
+        .content-pad p, .content-pad li{ line-height: 1.45; }
+        .app-root{ background: #FFFFFF !important; }
+        h1, h2, h3{ letter-spacing: -.022em; }
+        .main-col{ position: relative; }
+        .topbar{ position: absolute; top: 0; left: 0; right: 0; z-index: 230;
+          background: rgba(255,255,255,.94) !important; border-bottom: 1px solid rgba(0,0,0,.08) !important;
+          -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); }
+        .bottom-bar{ position: absolute !important; left: 0; right: 0; bottom: 0; z-index: 240;
+          background: rgba(255,255,255,.94) !important; border-top: 1px solid rgba(0,0,0,.08) !important;
+          -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); }
+        .bottom-bar .absolute.pointer-events-none{ display: none; }
+        .scroll-area{ padding-top: calc(56px + var(--sa-top)); padding-bottom: calc(60px + var(--sa-bottom)); }
+        .signed-in .side-rail{ background: #FFFFFF !important; border-right: 1px solid rgba(0,0,0,.08) !important; }
+        /* cards: hairline only; the brief asks for restraint */
+        div[style*="background:#FFFFFF"][class*="rounded-2xl"],
+        div[style*="background:#FFFFFF"][class*="rounded-xl"]{ box-shadow: none; }
+        /* primary action: Apple blue, flat, rounded */
+        button[style*="background:#0066CC"]{ box-shadow: none; }
+        button[style*="background:#0066CC"]:hover{ filter: brightness(1.06); }
+        button[style*="background:#0066CC"]:active{ filter: brightness(.92); }
+        button[style*="background:#7A2E2E"]:active{ filter: brightness(.92); }
+        /* secondary: iOS tinted grey, no border */
+        button[style*="background:#FFFFFF"][style*="border:1px solid #E2E2E7"]{ background: #F5F5F7 !important; border-color: transparent !important; }
+        button[style*="background:#FFFFFF"][style*="border:1px solid #E2E2E7"]:hover{ background: #ECECF1 !important; }
+        button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible, a:focus-visible{ outline: none; box-shadow: 0 0 0 3px rgba(0,102,204,.35) !important; }
+        input, textarea, select{ font-size: max(16px, 1em); }
+        .tap{ transition: transform .16s cubic-bezier(.2,.7,.2,1), background .18s ease, color .18s ease, filter .18s ease, box-shadow .18s ease, border-color .18s ease; }
+        .tap:active{ transform: scale(.97); }
+        .seg-ind{ transition: transform .22s cubic-bezier(.2,.8,.2,1), width .22s cubic-bezier(.2,.8,.2,1), opacity .15s ease; }
+        @keyframes sheetUp{ from{ transform: translateY(24px); opacity: .6; } to{ transform: none; opacity: 1; } }
+        @keyframes dimIn{ from{ opacity: 0; } to{ opacity: 1; } }
+        .sheet-dim{ animation: dimIn .2s ease both; }
+        .sheet-panel{ animation: sheetUp .26s cubic-bezier(.2,.8,.2,1) both; }
+        @media (prefers-reduced-motion: reduce){
+          *, *::before, *::after{ animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; scroll-behavior: auto !important; }
+        }
+        @media (min-width: 900px){
+          .scroll-area{ padding-bottom: 0; }
+          .topbar{ background: #FFFFFF !important; }
+          .sheet-dim{ align-items: center; justify-content: center; }
+          .sheet-panel{ max-width: 560px; border-radius: 20px !important; }
         }
       `}</style>
 
@@ -1480,7 +1542,7 @@ function Shell({ user, posts, jobs, trips, listings, enquiries, actions, engagem
       <TopBar user={user} onLogout={onLogout} alerts={alertItems.length} onOpenAlerts={() => setAlertsOpen(true)}
         onSearch={(term) => { setOverlay(null); setTab(user.kind === "operator" ? "discover" : user.kind === "hotel" ? "bookings" : "post"); setSearchTerm(term); }} />
 
-      <div className="flex-1 min-h-0 overflow-y-auto hidescroll" style={{ scrollbarWidth: "none" }}>
+      <div className="scroll-area flex-1 min-h-0 overflow-y-auto hidescroll" style={{ scrollbarWidth: "none" }}>
         <div className="content-pad">
         <VerifyBanner user={user} />
         {overlay ? (
@@ -1645,8 +1707,8 @@ function BottomNav({ nav, tab, setTab, badges }) {
 /* ============================== Shared bits =============================== */
 function Avatar({ initials, size = 40 }) {
   return (
-    <div className="rounded-xl flex items-center justify-center shrink-0" style={{ width: size, height: size, background: C.pine }}>
-      <span className="font-semibold" style={{ color: C.goldSoft, fontSize: size * 0.38 }}>{initials}</span>
+    <div className="rounded-full flex items-center justify-center shrink-0" style={{ width: size, height: size, background: `linear-gradient(180deg, #2C4F3B, ${C.brandDeep})`, boxShadow: "inset 0 .5px 0 rgba(255,255,255,.18), 0 1px 2px rgba(0,0,0,.14)" }}>
+      <span className="font-semibold" style={{ color: C.goldSoft, fontSize: size * 0.38, letterSpacing: "-.01em" }}>{initials}</span>
     </div>
   );
 }
@@ -1671,9 +1733,9 @@ function Stars({ score, light }) {
 }
 function SectionLabel({ children, trailing }) {
   return (
-    <div className="flex items-center justify-between mb-3">
-      <div className="text-[12px] font-semibold tracking-[.14em] uppercase" style={{ color: C.goldText }}>{children}</div>
-      {trailing && <div className="text-[13px]" style={{ color: C.muted }}>{trailing}</div>}
+    <div className="section-head flex items-end justify-between gap-3 mb-3">
+      <div className="section-head-text min-w-0 text-[13px] font-semibold tracking-[.04em] uppercase" style={{ color: C.muted }}>{children}</div>
+      {trailing && <div className="text-[13px] shrink-0 pb-[2px]" style={{ color: C.muted }}>{trailing}</div>}
     </div>
   );
 }
@@ -2102,7 +2164,8 @@ function Discover({ onOpen, initialQuery, dirTick }) {
   );
 }
 function Chip({ on, onClick, children }) {
-  return <button onClick={onClick} className="tap shrink-0 rounded-full px-3 py-1.5 text-[13px] font-medium" style={{ background: on ? C.pine : C.card, border: `1px solid ${on ? C.pine : C.line}`, color: on ? "#fff" : C.ink }}>{children}</button>;
+  return <button onClick={onClick} className="tap shrink-0 rounded-full px-3 py-1.5 text-[13px] font-medium"
+    style={{ background: on ? C.pine : C.grey, border: `1px solid ${on ? C.pine : "transparent"}`, color: on ? "#fff" : C.ink }}>{children}</button>;
 }
 
 function TalentCard({ t, onOpen }) {
@@ -2896,13 +2959,25 @@ function Chat({ user, meId, trip, state, actions }) {
 
 /* ============================== Jobs board =============================== */
 function Segmented({ options, value, onChange, small }) {
+  // iOS segmented control: one grey track, a white indicator that glides to the chosen segment
+  const wrap = useRef(null);
+  const [ind, setInd] = useState({ x: 0, w: 0, ready: false });
+  const measure = () => {
+    const el = wrap.current?.querySelector(`[data-seg="${CSS && CSS.escape ? CSS.escape(String(value)) : value}"]`);
+    if (!el) return;
+    setInd({ x: el.offsetLeft, w: el.offsetWidth, ready: true });
+  };
+  useEffect(() => { measure(); }, [value, options.length]);
+  useEffect(() => { const r = () => measure(); window.addEventListener("resize", r); return () => window.removeEventListener("resize", r); }, []);
   return (
-    <div className="flex gap-2 flex-wrap">
+    <div ref={wrap} className="seg relative inline-flex max-w-full overflow-x-auto hidescroll rounded-[10px] p-[2px]" style={{ background: C.grey, scrollbarWidth: "none" }}>
+      <div aria-hidden="true" className="seg-ind absolute top-[2px] bottom-[2px] rounded-[8px]"
+        style={{ left: 0, width: ind.w, transform: `translateX(${ind.x}px)`, opacity: ind.ready ? 1 : 0, background: C.card, boxShadow: "0 1px 3px rgba(0,0,0,.12), 0 0 0 .5px rgba(0,0,0,.04)" }} />
       {options.map(([k, l]) => {
         const on = value === k;
         return (
-          <button key={k} onClick={() => onChange(k)} className="tap rounded-full font-semibold"
-            style={{ padding: small ? "6px 12px" : "8px 14px", fontSize: small ? 12 : 13, background: on ? C.pine : C.card, border: `1px solid ${on ? C.pine : C.line}`, color: on ? "#fff" : C.ink }}>{l}</button>
+          <button key={k} data-seg={k} onClick={() => onChange(k)} className="tap relative rounded-[8px] font-semibold whitespace-nowrap shrink-0"
+            style={{ padding: small ? "5px 11px" : "7px 13px", fontSize: small ? 12 : 13, color: on ? C.ink : C.muted, background: "transparent", zIndex: 1 }}>{l}</button>
         );
       })}
     </div>
@@ -4643,8 +4718,8 @@ function ChatsTab({ user, me, dm, trips, actions, posts, dirTick, onOpenPost, op
   return (
     <div className="px-5 py-4">
       {/* DIRECT MESSAGES — trip talk lives inside each trip */}
-      <div className="flex items-center justify-between mb-2.5">
-        <div className="text-[12px] font-semibold tracking-[.14em] uppercase" style={{ color: C.goldText }}>Direct messages</div>
+      <div className="section-head flex items-end justify-between mb-2.5">
+        <div className="section-head-text text-[12px] font-semibold tracking-[.14em] uppercase" style={{ color: C.goldText }}>Messages</div>
         <button onClick={() => setFind(true)} className="tap inline-flex items-center gap-1.5 text-[13px] font-semibold" style={{ color: C.pine }}>
           <UserPlus size={14} /> New
         </button>
@@ -7574,8 +7649,8 @@ function BookingsTab({ user, enquiries, trips, actions, onOpenProfile }) {
   return (
     <div className="px-5 py-4">
       {/* the pipeline, always visible — you can see where everything stands */}
-      <div className="flex items-center justify-between mb-3">
-        <div className="text-[12px] font-semibold tracking-[.14em] uppercase" style={{ color: C.goldText }}>Bookings</div>
+      <div className="section-head flex items-end justify-between mb-3">
+        <div className="section-head-text text-[12px] font-semibold tracking-[.14em] uppercase" style={{ color: C.goldText }}>Bookings</div>
         {dueNow.length > 0 && (
           <button onClick={() => setStage(followUp.some((e) => dueNow.includes(e)) && !live.some((e) => dueNow.includes(e)) ? "followup" : "enquiries")}
             className="tap inline-flex items-center gap-1.5 text-[12px] font-semibold rounded-full px-2.5 py-1"
@@ -11112,10 +11187,10 @@ function InsightsTab({ user, trips, enquiries }) {
 /* the same sheet every other sheet draws, as one wrapper */
 function Sheet({ onClose, children }) {
   return (
-    <div className="fixed inset-0 flex items-end" style={{ background: "rgba(8,10,8,.55)", zIndex: 260 }} onClick={onClose}>
-      <div className="w-full rounded-t-3xl flex flex-col safe-bottom" style={{ background: C.card, maxHeight: "90dvh" }} onClick={(e) => e.stopPropagation()}>
+    <div className="fixed inset-0 flex items-end sheet-dim" style={{ background: "rgba(0,0,0,.4)", zIndex: 260 }} onClick={onClose}>
+      <div className="sheet-panel w-full rounded-t-[20px] flex flex-col safe-bottom" style={{ background: C.card, maxHeight: "92dvh" }} onClick={(e) => e.stopPropagation()}>
         <div className="p-5 overflow-y-auto">
-          <div className="w-10 h-1 rounded-full mx-auto mb-4" style={{ background: C.line }} />
+          <div className="w-9 h-[5px] rounded-full mx-auto mb-4" style={{ background: "#C7C7CC" }} />
           {children}
         </div>
       </div>
@@ -11362,7 +11437,7 @@ const BED_LABEL = { single: "Single", twin: "Twin", double: "Double", triple: "T
 const MEAL_LABEL = { room_only: "Room only", breakfast: "Breakfast", half_board: "Half board", full_board: "Full board" };
 const BK_STATUS = {
   requested: { label: "Awaiting hotel", bg: C.goldSoft, fg: C.goldText, dot: C.gold },
-  confirmed: { label: "Confirmed", bg: C.pineSoft, fg: C.pine, dot: "#2E7D4F" },
+  confirmed: { label: "Confirmed", bg: C.successSoft, fg: C.success, dot: C.success },
   declined:  { label: "Declined", bg: C.maroonSoft, fg: C.maroon, dot: C.maroon },
   cancelled: { label: "Cancelled", bg: C.bg, fg: C.muted, dot: "#C7CEC7" },
 };
@@ -11469,7 +11544,7 @@ function HotelTile({ label, value, sub, tone, onClick }) {
   const Tag = onClick ? "button" : "div";
   return (
     <Tag onClick={onClick} className={`${onClick ? "tap text-left " : ""}rounded-xl px-3 py-2.5 w-full`} style={{ background: bg, border: `1px solid ${tone ? "transparent" : C.line}` }}>
-      <div className="text-[11px] font-semibold tracking-[.06em] uppercase" style={{ color: tone ? fg : C.goldText }}>{label}</div>
+      <div className="text-[11px] font-semibold tracking-[.06em] uppercase" style={{ color: tone ? fg : C.muted }}>{label}</div>
       <div className="text-[20px] font-semibold mt-0.5 leading-tight" style={{ color: fg }}>{value}</div>
       {sub && <div className="text-[11px] mt-0.5" style={{ color: tone ? fg : C.muted, opacity: tone ? .85 : 1 }}>{sub}</div>}
     </Tag>
@@ -11505,13 +11580,13 @@ function HotelHome({ user, data, setTab }) {
 
   return (
     <div className="px-5 py-4">
-      <div className="flex items-end justify-between mb-4">
-        <div>
+      <div className="flex items-end justify-between gap-3 mb-4">
+        <div className="min-w-0 flex-1">
           <div className="text-[12px] font-semibold tracking-[.14em] uppercase" style={{ color: C.goldText }}>{new Date().toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" })}</div>
           <h2 className="text-[24px] font-semibold tracking-[-0.02em] leading-tight" style={{ color: C.ink }}>Kuzuzangpo{first ? `, ${first}` : ""}</h2>
           <div className="text-[13px]" style={{ color: C.muted }}>{me.company || me.name}{me.hotelTown ? ` · ${hotelTownName(me.hotelTown)}` : ""}</div>
         </div>
-        {me.verified && <span className="inline-flex items-center gap-1 text-[12px] font-semibold rounded-full px-2.5 py-1" style={{ background: C.pineSoft, color: C.pine }}><BadgeCheck size={13} /> DoT verified</span>}
+        {me.verified && <span className="inline-flex items-center gap-1 text-[12px] font-semibold rounded-full px-2.5 py-1 whitespace-nowrap shrink-0" style={{ background: C.pineSoft, color: C.pine }}><BadgeCheck size={13} /> Verified</span>}
       </div>
 
       <div className="grid grid-cols-2 gap-2 mb-4">
