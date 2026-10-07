@@ -63,7 +63,7 @@ const CLOUD = Boolean(supabase);
   } catch (e) {}
 })();
 const DEMO_MODE = false;   // set true only for local demos without a database
-const BUILD = "BUILD 35 — 7 Oct";   // bump every deploy; shown at the top of the welcome screen
+const BUILD = "BUILD 37 — 8 Oct";   // bump every deploy; shown at the top of the welcome screen
 // which device someone is on — shown beside the build so a screenshot tells us both
 const DEVICE = (() => {
   try {
@@ -1029,8 +1029,13 @@ export default function App() {
   };
   const hireApplicant = async (listing, applicant) => {
     await setApplicant(listing.id, applicant.talentId, "hired");
-    setListings((L) => L.map((l) => (l.id === listing.id ? { ...l, status: "filled" } : l)));
-    if (CLOUD) { const { error: jfErr } = await supabase.from("job_listings").update({ status: "filled" }).eq("id", listing.id); if (jfErr) console.error("job_listings.filled failed:", jfErr.message); fetchJobs(); }
+    const hiredRoles = new Set((listing.applicants || []).filter((a) => a.status === "hired" || a.talentId === applicant.talentId).map((a) => talentById(a.talentId)?.role).filter(Boolean));
+    const filled = listing.role === "both" ? (hiredRoles.has("guide") && hiredRoles.has("driver")) : true;
+    if (filled) {
+      setListings((L) => L.map((l) => (l.id === listing.id ? { ...l, status: "filled" } : l)));
+      if (CLOUD) { const { error: jfErr } = await supabase.from("job_listings").update({ status: "filled" }).eq("id", listing.id); if (jfErr) console.error("job_listings.filled failed:", jfErr.message); }
+    }
+    if (CLOUD) fetchJobs();
     createTripFromJob({ id: `${listing.id}_${applicant.talentId}`, toTalentId: applicant.talentId, operator: listing.operator, title: listing.title, start: listing.start, end: listing.end });
   };
 
@@ -1117,9 +1122,9 @@ export default function App() {
         /* Type scale and rhythm: one large title per screen, grouped headers below with air above them */
         .section-head{ margin-top: 28px; }
         .section-head:first-child{ margin-top: 0; }
-        .section-head:first-child .section-head-text{ font-size: 28px; line-height: 1.15; font-weight: 700; letter-spacing: -.022em; text-transform: none; color: #1D1D1F !important; }
-        .section-head:first-child{ margin-bottom: 14px; }
-        @media (min-width: 900px){ .section-head:first-child .section-head-text{ font-size: 32px; } }
+        .fade > div > .section-head:first-child .section-head-text{ font-size: 28px; line-height: 1.15; font-weight: 700; letter-spacing: -.022em; text-transform: none; color: #1D1D1F !important; }
+        .fade > div > .section-head:first-child{ margin-bottom: 14px; }
+        @media (min-width: 900px){ .fade > div > .section-head:first-child .section-head-text{ font-size: 32px; } }
         .content-pad p, .content-pad li{ line-height: 1.45; }
         .app-root{ background: #FFFFFF !important; }
         h1, h2, h3{ letter-spacing: -.022em; }
@@ -1298,7 +1303,7 @@ const NAV = {
   driver: [{ id: "post", label: "Feed", Icon: Newspaper }, { id: "jobs", label: "Jobs", Icon: Briefcase }, { id: "trips", label: "Trips", Icon: MapIcon }, { id: "chats", label: "Messages", Icon: MessageSquare }, { id: "profile", label: "Profile", Icon: User }],
   operator: [{ id: "bookings", label: "Bookings", Icon: CalendarCheck }, { id: "insights", label: "Insights", Icon: TrendingUp }, { id: "itinerary", label: "Itinerary", Icon: CalendarDays }, { id: "discover", label: "Crew", Icon: Search }, { id: "requests", label: "Jobs", Icon: Briefcase }, { id: "chats", label: "Messages", Icon: MessageSquare }, { id: "feed", label: "Feed", Icon: Newspaper }],
   admin: [{ id: "review", label: "Review", Icon: ShieldCheck }, { id: "users", label: "Users", Icon: Users }, { id: "insights", label: "Insights", Icon: TrendingUp }, { id: "feed", label: "Feed", Icon: Newspaper }, { id: "discover", label: "Discover", Icon: Search }, { id: "chats", label: "Messages", Icon: MessageSquare }],
-  hotel: [{ id: "hotel_home", label: "Today", Icon: Building2 }, { id: "bookings", label: "Bookings", Icon: CalendarCheck }, { id: "rooms", label: "Rooms", Icon: BedDouble }, { id: "chats", label: "Messages", Icon: MessageSquare }, { id: "hotel_profile", label: "Property", Icon: User }],
+  hotel: [{ id: "hotel_home", label: "Today", Icon: Building2 }, { id: "bookings", label: "Bookings", Icon: CalendarCheck }, { id: "rooms", label: "Rooms", Icon: BedDouble }, { id: "post", label: "Feed", Icon: Newspaper }, { id: "chats", label: "Messages", Icon: MessageSquare }, { id: "hotel_profile", label: "Property", Icon: User }],
 };
 /* Accounts whose role has no app yet (e.g. "business"/hotel) get a calm holding
    screen instead of crashing on NAV[role].length. */
@@ -1388,7 +1393,7 @@ function Shell({ user, posts, jobs, trips, listings, enquiries, actions, engagem
 
     // open listings matching my role (guides see guide jobs, drivers see driver jobs)
     if (user.kind === "guide" || user.kind === "driver") {
-      (listings || []).filter((l) => l && !l.deletedAt && l.status === "open" && l.role === user.kind &&
+      (listings || []).filter((l) => l && !l.deletedAt && l.status === "open" && listingFits(l, user.kind) &&
         !(l.applicants || []).some((a) => a && a.talentId === actorId)).forEach((l) =>
         add({ id: `lst-${l.id}`, kind: "listing", who: l.operatorId, text: l.title, ts: l.createdAt, urgent: l.urgent }));
     }
@@ -1521,7 +1526,7 @@ function Shell({ user, posts, jobs, trips, listings, enquiries, actions, engagem
   const pendingModCount = posts.filter((p) => p.status === "pending").length;
   const myTalent = user.talentId ? talentById(user.talentId) : null;
   const myJobsPending = myTalent ? jobs.filter((j) => !j.deletedAt && j.toTalentId === myTalent.id && j.status === "pending").length : 0;
-  const availableListings = myTalent ? listings.filter((l) => !l.deletedAt && l.status === "open" && l.role === user.kind && !(l.applicants || []).some((a) => a.talentId === myTalent.id)).length : 0;
+  const availableListings = myTalent ? listings.filter((l) => !l.deletedAt && l.status === "open" && listingFits(l, user.kind) && !(l.applicants || []).some((a) => a.talentId === myTalent.id)).length : 0;
   const jobsBadge = myJobsPending + availableListings;
   const todayStr = new Date().toISOString().slice(0, 10);
   const enquiryBadge = (enquiries || []).filter((e) =>
@@ -1566,7 +1571,7 @@ function Shell({ user, posts, jobs, trips, listings, enquiries, actions, engagem
             {tab === "chats" && <ChatsTab user={user} me={actorId} dm={dm} trips={trips} actions={actions} posts={posts} dirTick={dirTick} onOpenPost={setSharedPost} openWith={dmWith} onOpened={() => setDmWith(null)} onOpenProfile={openProfile} />}
             {tab === "profile" && <TalentProfile talent={talentById(user.talentId)} posts={posts} eng={eng} self onSetAvailability={actions.setAvailability} onProfileSaved={actions.reloadDirectory} onOpenProfile={openProfile} onBack={null} />}
             {tab === "bookings" && user.kind !== "hotel" && <BookingsTab user={user} enquiries={enquiries} trips={trips} actions={actions} onOpenProfile={openProfile} />}
-            {tab === "hotel_home" && <HotelHome user={user} data={hotelData} setTab={setTab} />}
+            {tab === "hotel_home" && <HotelHome user={user} data={hotelData} setTab={setTab} posts={posts} />}
             {tab === "bookings" && user.kind === "hotel" && <HotelBookings user={user} data={hotelData} />}
             {tab === "rooms" && <HotelRooms user={user} data={hotelData} />}
             {tab === "hotel_profile" && <HotelProfile user={user} onSaved={actions.reloadDirectory} />}
@@ -1788,7 +1793,9 @@ function prettyNumber(raw) {
   return d;
 }
 
-const roleLabel = (r) => (r === "guide" ? "Guide" : r === "operator" ? "Tour Operator" : r === "hotel" ? "Hotel" : r === "admin" ? "Admin" : "Driver");
+const displayName = (t) => (t?.role === "hotel" && t.company ? t.company : t?.name);
+const roleLabel = (r) => (r === "guide" ? "Guide" : r === "operator" ? "Tour Operator" : r === "hotel" ? "Hotel" : r === "admin" ? "Admin" : r === "both" ? "Guide + Driver" : "Driver");
+const listingFits = (l, kind) => l.role === kind || (l.role === "both" && (kind === "guide" || kind === "driver"));
 
 /* ======================== Feed tab (guides & drivers) ===================== */
 function PostTab({ user, posts, onAdd, eng, onOpenProfile }) {
@@ -1800,7 +1807,7 @@ function PostTab({ user, posts, onAdd, eng, onOpenProfile }) {
       <Composer talent={t} onAdd={onAdd} />
       <div className="mt-7"><SectionLabel trailing={`${visible.length}`}>Feed</SectionLabel></div>
       {visible.length === 0 ? (
-        <Empty Icon={Inbox} title="Nothing here yet" body="Approved highlights from every guide and driver appear here — share the first one." />
+        <Empty Icon={Inbox} title="Nothing here yet" body={user.kind === "hotel" ? "Posts from hotels, guides and drivers appear here once approved. Share your first one — operators are looking." : "Approved highlights from every guide and driver appear here — share the first one."} />
       ) : (
         <div className="space-y-3.5">
           {visible.map((p) => {
@@ -1813,7 +1820,7 @@ function PostTab({ user, posts, onAdd, eng, onOpenProfile }) {
                   <Avatar initials={author?.initials || "?"} size={40} />
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-1.5">
-                      <span className="text-[15px] font-semibold" style={{ color: C.ink }}>{mine ? "You" : (author?.name || "Member")}</span>
+                      <span className="text-[15px] font-semibold" style={{ color: C.ink }}>{mine ? "You" : (displayName(author) || "Member")}</span>
                       {author?.verified && <BadgeCheck size={15} color={C.pine} />}
                     </div>
                     <div className="flex items-center gap-1 text-[12px]" style={{ color: C.muted }}>
@@ -1915,11 +1922,11 @@ function Composer({ talent, onAdd }) {
     <div className="rounded-2xl p-4" style={{ background: C.card, border: `1px solid ${C.line}` }}>
       <div className="flex items-center gap-3 mb-3">
         <Avatar initials={talent.initials} size={36} />
-        <div><div className="text-[14px] font-semibold" style={{ color: C.ink }}>{talent.name}</div>
-          <div className="text-[12px]" style={{ color: C.muted }}>Share a trip highlight</div></div>
+        <div><div className="text-[14px] font-semibold" style={{ color: C.ink }}>{displayName(talent) || talent.name}</div>
+          <div className="text-[12px]" style={{ color: C.muted }}>{talent.role === "hotel" ? "Show operators what's on" : "Share a trip highlight"}</div></div>
       </div>
 
-      <textarea value={text} onChange={(e) => setText(e.target.value)} rows={4} maxLength={300} placeholder="Write a caption — what made this trip special?"
+      <textarea value={text} onChange={(e) => setText(e.target.value)} rows={4} maxLength={300} placeholder={talent?.role === "hotel" ? "Show operators what you offer — a room, the view, a seasonal rate, a new menu…" : "Write a caption — what made this trip special?"}
         className="w-full px-3.5 py-3 rounded-xl text-[15px] leading-relaxed resize-none" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink, minHeight: 92 }} />
       <div className="flex justify-end mt-1">
         <span className="text-[11px]" style={{ color: text.length > 270 ? C.maroon : C.muted }}>{text.length}/300</span>
@@ -2265,7 +2272,7 @@ function Feed({ posts, eng, admin, onDelete, onOpenProfile, following }) {
                   <button onClick={() => onOpenProfile(p.talentId)} className="tap flex items-center gap-3 flex-1 min-w-0 text-left">
                   <Avatar initials={t?.initials || "?"} size={40} />
                   <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-1.5"><span className="text-[15px] font-semibold" style={{ color: C.ink }}>{t?.name || "Member"}</span>{t?.verified && <BadgeCheck size={15} color={C.pine} />}</div>
+                    <div className="flex items-center gap-1.5"><span className="text-[15px] font-semibold" style={{ color: C.ink }}>{displayName(t) || "Member"}</span>{t?.verified && <BadgeCheck size={15} color={C.pine} />}</div>
                     <div className="flex items-center gap-1 text-[12px]" style={{ color: C.muted }}><MapPin size={11} /> {t?.base || ""} · {relTime(p.createdAt)}</div>
                   </div>
                   </button>
@@ -3002,7 +3009,7 @@ function AppStatusBadge({ status }) {
 function JobsHub({ user, jobs, listings, actions }) {
   const [sub, setSub] = useState("board");
   const t = talentById(user.talentId);
-  const open = listings.filter((l) => !l.deletedAt && l.status === "open" && l.role === user.kind);
+  const open = listings.filter((l) => !l.deletedAt && l.status === "open" && listingFits(l, user.kind));
   const notApplied = open.filter((l) => !(l.applicants || []).some((a) => a.talentId === t.id));
   const applied = listings.filter((l) => !l.deletedAt && (l.applicants || []).some((a) => a.talentId === t.id));
   const invitesPending = jobs.filter((j) => !j.deletedAt && j.toTalentId === t.id && j.status === "pending").length;
@@ -3165,6 +3172,15 @@ function ManageApplicants({ listing, actions, onViewProfile, onBack }) {
       </div>
 
       <div className="px-5 py-4">
+        {listing.role === "both" && listing.status === "open" && (() => {
+          const hired = new Set((listing.applicants || []).filter((a) => a.status === "hired").map((a) => talentById(a.talentId)?.role));
+          const need = ["guide", "driver"].filter((r) => !hired.has(r));
+          return (
+            <div className="rounded-xl px-3.5 py-2.5 mb-3 text-[13px]" style={{ background: C.pineSoft, color: C.pine }}>
+              <b>Guide + Driver job.</b> {need.length === 2 ? "Hire one guide and one driver; the job closes once both are in." : `${roleLabel(need[0])} still needed — hire one to close the job.`}
+            </div>
+          );
+        })()}
         {listing.applicants.length === 0 ? (
           <Empty Icon={Briefcase} title="No applicants yet" body="Guides and drivers who match will see this job and can apply." />
         ) : (
@@ -3242,7 +3258,8 @@ function ListingForm({ operator, onBack, onPost }) {
         <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="e.g. Guide for 5-day cultural tour" className="w-full h-12 px-4 rounded-xl text-[15px] mb-4" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }} />
 
         <Label>Who do you need?</Label>
-        <div className="mb-4"><Segmented value={role} onChange={setRole} options={[["guide", "Guide"], ["driver", "Driver"]]} /></div>
+        <div className="mb-1"><Segmented value={role} onChange={setRole} options={[["guide", "Guide"], ["driver", "Driver"], ["both", "Guide + Driver"]]} /></div>
+        <p className="text-[12px] mb-4" style={{ color: C.muted }}>{role === "both" ? "Both guides and drivers will see this job. It stays open until you've hired one of each." : role === "guide" ? "Only guides will see this job." : "Only drivers will see this job."}</p>
 
         <div className="grid grid-cols-2 gap-3 mb-4">
           <div><Label>Start</Label><input type="date" value={start} onChange={(e) => setStart(e.target.value)} className="w-full h-12 px-3.5 rounded-xl text-[14px]" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }} /></div>
@@ -3832,7 +3849,7 @@ function PostDetail({ items, index, author, eng, onShareStory, onClose }) {
           </button>
           <div className="flex-1">
             <div className="text-[15px] font-semibold" style={{ color: C.ink }}>Posts</div>
-            <div className="text-[12px]" style={{ color: C.muted }}>{author?.name || "Member"} · {items.length}</div>
+            <div className="text-[12px]" style={{ color: C.muted }}>{displayName(author) || "Member"} · {items.length}</div>
           </div>
         </div>
         {items.map((p) => (
@@ -3855,7 +3872,7 @@ function WallPost({ post: p, author, eng, onShareStory, onClose }) {
         <Avatar initials={author?.initials || "?"} size={36} />
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-1.5">
-            <span className="text-[14px] font-semibold" style={{ color: C.ink }}>{author?.name || "Member"}</span>
+            <span className="text-[14px] font-semibold" style={{ color: C.ink }}>{displayName(author) || "Member"}</span>
             {author?.verified && <BadgeCheck size={14} color={C.pine} />}
           </div>
           <div className="text-[12px]" style={{ color: C.muted }}>{relTime(p.createdAt)}</div>
@@ -5424,7 +5441,7 @@ function StoryViewer({ stories, author, canDelete, onDelete, onClose }) {
         <div className="px-4 py-3 flex items-center gap-2.5">
           <Avatar initials={author?.initials || "?"} size={32} />
           <div className="flex-1 min-w-0">
-            <div className="text-[14px] font-semibold text-white">{author?.name || "Member"}</div>
+            <div className="text-[14px] font-semibold text-white">{displayName(author) || "Member"}</div>
             <div className="text-[11px]" style={{ color: "rgba(255,255,255,.6)" }}>{relTime(st.ts)} · {hoursLeft}h left</div>
           </div>
           {canDelete && (
@@ -5808,6 +5825,7 @@ function Tutorial({ user, nav, setTab, onDone }) {
     { kind: "tab", tab: "hotel_home", title: "Today", body: "Tonight's rooms in use, who arrives and leaves today, requests waiting for you, and a 14-night view ahead." },
     { kind: "tab", tab: "bookings", title: "Bookings", body: "Requests to answer, confirmed stays, a calendar of every night, and the record of past stays. The hub never lets a confirmation overbook you." },
     { kind: "tab", tab: "rooms", title: "Rooms", body: "List your room types once — name, beds, how many. Close rooms for dates when they're not for sale." },
+    { kind: "tab", tab: "post", title: "Feed", body: "Your shop window. Post a room, a view, a seasonal rate or a new menu. Every tour operator on the hub sees it in their Highlights feed, after a quick check by the admin." },
     { kind: "tab", tab: "chats", title: "Messages", body: "Direct messages with operators. Every booking card also has a WhatsApp shortcut." },
     { kind: "tab", tab: "hotel_profile", title: "Property", body: "Town, star rating, amenities, policy, and your DoT certificate. Verified hotels carry a tick wherever operators see you." },
     { kind: "outro", title: "Two things to do now", body: "Add your room types, then upload your DoT certificate. With both done you appear in every operator's hotel picker for your town." },
@@ -11552,7 +11570,7 @@ function HotelTile({ label, value, sub, tone, onClick }) {
 }
 
 /* ----------------------------- Hotel · Today ------------------------------ */
-function HotelHome({ user, data, setTab }) {
+function HotelHome({ user, data, setTab, posts = [] }) {
   const { rooms, closures, bookings, loaded } = data;
   const today = isoDay(0);
   const first = (user.name || "").split(" ")[0];
@@ -11576,6 +11594,7 @@ function HotelHome({ user, data, setTab }) {
   if (fullNights) tips.push({ level: "info", title: `Full on ${fullNights} of the next 14 nights`, body: "The app already stops any confirmation that would overbook. Consider a waiting-list note in your profile policy." });
   const openNights = next14.filter((n) => n.total && n.used === 0 && n.d >= addDays(today, 3)).length;
   if (rooms.length && openNights >= 10 && !pending.length) tips.push({ level: "info", title: "Quiet fortnight ahead", body: "Operators plan 2–6 weeks out. A short note on rates or a seasonal offer in your profile helps them choose you.", tab: "hotel_profile" });
+  if (rooms.length && me.hotelTown && !posts.some((p) => p.talentId === (user.talentId || user.id))) tips.push({ level: "info", title: "Post to the feed", body: "A photo of your best room or the view from breakfast reaches every operator on the hub. Hotels that post get asked first.", tab: "post" });
   if (rooms.length && rooms.every((r) => r.rate === null || r.rate === undefined)) tips.push({ level: "info", title: "Add indicative rates", body: "Rates are optional, but operators compare faster when they see Nu. per night. You confirm every booking either way.", tab: "rooms" });
 
   return (
