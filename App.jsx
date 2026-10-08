@@ -63,7 +63,7 @@ const CLOUD = Boolean(supabase);
   } catch (e) {}
 })();
 const DEMO_MODE = false;   // set true only for local demos without a database
-const BUILD = "BUILD 37 — 8 Oct";   // bump every deploy; shown at the top of the welcome screen
+const BUILD = "BUILD 42 — 8 Oct";   // bump every deploy; shown at the top of the welcome screen
 // which device someone is on — shown beside the build so a screenshot tells us both
 const DEVICE = (() => {
   try {
@@ -1126,6 +1126,15 @@ export default function App() {
         .fade > div > .section-head:first-child{ margin-bottom: 14px; }
         @media (min-width: 900px){ .fade > div > .section-head:first-child .section-head-text{ font-size: 32px; } }
         .content-pad p, .content-pad li{ line-height: 1.45; }
+        .dk-map-sticky{ position: sticky; top: 8px; z-index: 20; background: #FFFFFF; padding-bottom: 6px; }
+        .dk-note{ animation: noteIn .32s cubic-bezier(.2,.8,.2,1) both; }
+        .dk-note-under{ animation: fade .25s ease both; }
+        @keyframes segIn{ from{ opacity: 0; } to{ opacity: 1; } }
+        .dk-seg{ animation: segIn .5s ease both; }
+        .dk-gm-label{ text-shadow: 0 0 3px rgba(0,0,0,.95), 0 0 1px rgba(0,0,0,.95); white-space: nowrap; }
+        .dk-libre .maplibregl-ctrl-attrib{ font-size: 9px; opacity: .85; }
+        .dk-libre .maplibregl-ctrl-group{ border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,.25); }
+        @keyframes noteIn{ from{ opacity: 0; transform: translateY(-50%) scale(.96); } to{ opacity: 1; transform: translateY(-50%) scale(1); } }
         .app-root{ background: #FFFFFF !important; }
         h1, h2, h3{ letter-spacing: -.022em; }
         .main-col{ position: relative; }
@@ -8613,6 +8622,11 @@ const DK_TOWNS = {
   phuentsholing: { n: "Phuentsholing", lat: 26.86, lng: 89.39, alt: 300, stay: true,  hotels: ["3", "4"] },
 };
 
+/* The high peaks that frame the relief — shown on the map with their heights. */
+const DK_PEAKS = [
+  { n: "Jomolhari", alt: 7326, lat: 27.82, lng: 89.27 },
+  { n: "Gangkhar Puensum", alt: 7570, lat: 28.03, lng: 90.46 },
+];
 const DK_PASSES = {
   chele:     { n: "Chele La",      alt: 3988, lat: 27.37, lng: 89.35 },
   dochula:   { n: "Dochula",       alt: 3100, lat: 27.49, lng: 89.75 },
@@ -9015,7 +9029,381 @@ function DkStepper({ label, sub, value, min = 0, max = 20, onChange }) {
   );
 }
 
-function DkRouteMap({ plan }) {
+/* The route map, alive: tap a day (or a numbered stop) and the map glides in on it,
+   with Drukpah's notes for that place beside the pin. Sticky, so it stays in view
+   while the day-by-day list scrolls underneath. */
+function dkDayFocus(d) {
+  const pts = (d.pts && d.pts.length ? d.pts : [DK_TOWNS[d.night || d.to || d.from]]).filter(Boolean).map((p) => ({ x: btPctX(p.lng), y: btPctY(p.lat) }));
+  const anchorT = DK_TOWNS[d.night || d.to || d.from] || DK_TOWNS[d.from];
+  const anchor = { x: btPctX(anchorT.lng), y: btPctY(anchorT.lat) };
+  const xs = pts.map((p) => p.x), ys = pts.map((p) => p.y);
+  const minX = Math.min(...xs, anchor.x), maxX = Math.max(...xs, anchor.x), minY = Math.min(...ys, anchor.y), maxY = Math.max(...ys, anchor.y);
+  const w = maxX - minX, h = maxY - minY;
+  const pad = 22;                                     // breathing room in map-percent
+  const k = Math.max(1.35, Math.min(3.0, Math.min(100 / (w + pad), 100 / (h + pad))));
+  const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
+  return { k, cx, cy, anchor, anchorT };
+}
+/* ── Google Maps: the itinerary over real satellite imagery or terrain ─────────── */
+let _gmapsPromise = null;
+function loadGoogleMaps(key) {
+  if (typeof window === "undefined" || !key) return Promise.reject(new Error("no key"));
+  if (window.google && window.google.maps && window.google.maps.Map) return Promise.resolve(window.google.maps);
+  if (_gmapsPromise) return _gmapsPromise;
+  _gmapsPromise = new Promise((resolve, reject) => {
+    const cb = "__bthGmapsReady";
+    window[cb] = () => { delete window[cb]; resolve(window.google.maps); };
+    const sc = document.createElement("script");
+    sc.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(key)}&v=weekly&loading=async&callback=${cb}`;
+    sc.async = true; sc.onerror = () => { _gmapsPromise = null; reject(new Error("Google Maps failed to load")); };
+    document.head.appendChild(sc);
+  });
+  return _gmapsPromise;
+}
+let _mapSettingsPromise = null;
+function useMapSettings() {
+  const [st, setSt] = useState(null);
+  useEffect(() => {
+    let on = true;
+    if (!_mapSettingsPromise) _mapSettingsPromise = dkLoadSettings().then((x) => ({ gmaps: x.gmaps || "", provider: x.mapProvider || "esri" })).catch(() => ({ gmaps: "", provider: "esri" }));
+    _mapSettingsPromise.then((x) => { if (on) setSt(x); });
+    return () => { on = false; };
+  }, []);
+  return st;   // null while loading
+}
+/* ── MapLibre: free satellite (Esri World Imagery) and contours (OpenTopoMap) ── */
+let _libreP = null;
+function loadMapLibre() {
+  if (typeof window === "undefined") return Promise.reject(new Error("no window"));
+  if (window.maplibregl) return Promise.resolve(window.maplibregl);
+  if (_libreP) return _libreP;
+  _libreP = new Promise((resolve, reject) => {
+    const css = document.createElement("link"); css.rel = "stylesheet"; css.href = "https://cdnjs.cloudflare.com/ajax/libs/maplibre-gl/4.7.1/maplibre-gl.min.css"; document.head.appendChild(css);
+    const sc = document.createElement("script"); sc.src = "https://cdnjs.cloudflare.com/ajax/libs/maplibre-gl/4.7.1/maplibre-gl.min.js"; sc.async = true;
+    sc.onload = () => resolve(window.maplibregl); sc.onerror = () => { _libreP = null; reject(new Error("MapLibre failed to load")); };
+    document.head.appendChild(sc);
+  });
+  return _libreP;
+}
+const LIBRE_STYLES = {
+  satellite: { version: 8, sources: { esri: { type: "raster", tiles: ["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"], tileSize: 256, maxzoom: 18, attribution: "Imagery © Esri, Maxar, Earthstar Geographics" } }, layers: [{ id: "esri", type: "raster", source: "esri" }] },
+  topo: { version: 8, sources: { otm: { type: "raster", tiles: ["https://a.tile.opentopomap.org/{z}/{x}/{y}.png", "https://b.tile.opentopomap.org/{z}/{x}/{y}.png", "https://c.tile.opentopomap.org/{z}/{x}/{y}.png"], tileSize: 256, maxzoom: 17, attribution: "© OpenStreetMap contributors, SRTM · © OpenTopoMap (CC-BY-SA)" } }, layers: [{ id: "otm", type: "raster", source: "otm" }] },
+};
+function dkMarkerEl(html, cls) { const el = document.createElement("div"); el.className = cls || ""; el.innerHTML = html; el.style.cursor = "pointer"; return el; }
+function DkLibreMap({ plan, selected, onSelect }) {
+  const boxRef = useRef(null);
+  const mapRef = useRef(null);
+  const markersRef = useRef([]);
+  const [ready, setReady] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const [kind, setKind] = useState("satellite");
+  const [wide, setWide] = useState(false);
+  const day = selected ? plan.days.find((d) => d.day === selected) : null;
+  const onSelectRef = useRef(onSelect); onSelectRef.current = onSelect;
+
+  useEffect(() => {
+    const el = boxRef.current; if (!el) return;
+    const check = () => setWide(el.getBoundingClientRect().width >= 560);
+    check(); if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(check); ro.observe(el); return () => ro.disconnect();
+  }, []);
+  const stops = useMemo(() => { const out = []; const seen = new Set(); for (const d of plan.days) if (d.night && !seen.has(d.night)) { seen.add(d.night); out.push({ key: d.night, n: out.length + 1, day: d.day }); } return out; }, [plan]);
+  const routePts = useMemo(() => { const pts = []; for (const d of plan.days) for (const p of d.pts || []) { const last = pts[pts.length - 1]; if (!last || last.lat !== p.lat || last.lng !== p.lng) pts.push(p); } return pts; }, [plan]);
+  const passesOnRoute = useMemo(() => { const set = new Set(); for (const d of plan.days) for (const pk of d.passes || []) set.add(pk); return [...set]; }, [plan]);
+
+  // boot
+  useEffect(() => {
+    let on = true;
+    loadMapLibre().then((ml) => {
+      if (!on || !boxRef.current) return;
+      const map = new ml.Map({ container: boxRef.current, style: LIBRE_STYLES.satellite, center: [90.4, 27.5], zoom: 6.3, attributionControl: { compact: true }, cooperativeGestures: true, pitchWithRotate: false, dragRotate: false, touchPitch: false });
+      map.addControl(new ml.NavigationControl({ showCompass: false }), "bottom-right");
+      map.on("click", () => onSelectRef.current && onSelectRef.current(null));
+      map.on("load", () => { if (on) { mapRef.current = map; setReady(true); } });
+      map.on("error", (e) => { if (e && e.error && /style|load/i.test(String(e.error.message || "")) && !mapRef.current) { setFailed(true); } });
+    }).catch(() => { if (on) setFailed(true); });
+    return () => { on = false; if (mapRef.current) { mapRef.current.remove(); mapRef.current = null; } };
+  }, []);
+
+  // style switch keeps the route: re-add layers after the new style loads
+  const drawRoute = () => {
+    const map = mapRef.current; if (!map) return;
+    const coords = routePts.map((p) => [p.lng, p.lat]);
+    const seg = day && day.moving && day.pts && day.pts.length > 1 ? day.pts.map((p) => [p.lng, p.lat]) : null;
+    const fc = { type: "FeatureCollection", features: [{ type: "Feature", geometry: { type: "LineString", coordinates: coords }, properties: {} }] };
+    const sfc = { type: "FeatureCollection", features: seg ? [{ type: "Feature", geometry: { type: "LineString", coordinates: seg }, properties: {} }] : [] };
+    if (map.getSource("route")) { map.getSource("route").setData(fc); map.getSource("seg").setData(sfc); map.setPaintProperty("route-line", "line-opacity", seg ? 0.45 : 1); return; }
+    map.addSource("route", { type: "geojson", data: fc }); map.addSource("seg", { type: "geojson", data: sfc });
+    map.addLayer({ id: "route-casing", type: "line", source: "route", layout: { "line-join": "round", "line-cap": "round" }, paint: { "line-color": "#FFFFFF", "line-width": 6, "line-opacity": 0.9 } });
+    map.addLayer({ id: "route-line", type: "line", source: "route", layout: { "line-join": "round", "line-cap": "round" }, paint: { "line-color": "#7A2E2E", "line-width": 3, "line-opacity": seg ? 0.45 : 1, "line-opacity-transition": { duration: 400 } } });
+    map.addLayer({ id: "seg-line", type: "line", source: "seg", layout: { "line-join": "round", "line-cap": "round" }, paint: { "line-color": "#7A2E2E", "line-width": 5 } });
+  };
+  useEffect(() => { if (ready) drawRoute(); }, [ready, routePts, selected]);
+  useEffect(() => {
+    const map = mapRef.current; if (!ready || !map) return;
+    map.setStyle(LIBRE_STYLES[kind]); map.once("style.load", drawRoute);
+  }, [kind]);
+
+  // markers (DOM, so they never scale with the map)
+  useEffect(() => {
+    const map = mapRef.current; if (!ready || !map) return;
+    const ml = window.maplibregl;
+    markersRef.current.forEach((m) => m.remove()); const ms = [];
+    const lab = (t) => `<span class="dk-gm-label" style="color:#fff;font-size:11px;font-weight:600">${t}</span>`;
+    for (const pk of DK_PEAKS) ms.push(new ml.Marker({ element: dkMarkerEl(`<div style="display:flex;flex-direction:column;align-items:center;pointer-events:none">${lab(`${pk.n} · ${pk.alt.toLocaleString()} m`)}<svg width="14" height="12" viewBox="0 0 14 12"><path d="M7 1 L13 11 L1 11 Z" fill="#fff" stroke="rgba(0,0,0,.6)"/></svg></div>`), anchor: "bottom" }).setLngLat([pk.lng, pk.lat]).addTo(map));
+    const todays = new Set(day ? (day.passes || []) : []);
+    for (const pk of passesOnRoute) { const ps = DK_PASSES[pk]; if (!ps) continue; const hot = todays.has(pk);
+      ms.push(new ml.Marker({ element: dkMarkerEl(`<div style="display:flex;flex-direction:column;align-items:center;pointer-events:none;opacity:${day && !hot ? .6 : 1}">${(hot || !day) ? lab(`${ps.n} · ${ps.alt.toLocaleString()} m`) : ""}<svg width="16" height="9" viewBox="0 0 16 9"><path d="M1 8 Q4.5 0 8 5 Q11.5 0 15 8 Z" fill="${hot ? "#7A2E2E" : "#fff"}" stroke="${hot ? "#fff" : "rgba(0,0,0,.6)"}"/></svg></div>`), anchor: "bottom" }).setLngLat([ps.lng, ps.lat]).addTo(map)); }
+    for (const st of stops) { const t = DK_TOWNS[st.key]; const on = day && (day.night === st.key || day.to === st.key);
+      const el = dkMarkerEl(`<img src="${dkPinSvg(st.n, on)}" width="${on ? 30 : 24}" height="${on ? 30 : 24}" alt="Stop ${st.n}: ${t.n}" draggable="false" style="display:block">`);
+      el.setAttribute("role", "button"); el.setAttribute("aria-label", `Stop ${st.n}: ${t.n}`);
+      el.addEventListener("click", (e) => { e.stopPropagation(); onSelectRef.current && onSelectRef.current(st.day); });
+      ms.push(new ml.Marker({ element: el, anchor: "center" }).setLngLat([t.lng, t.lat]).addTo(map)); }
+    markersRef.current = ms;
+  }, [ready, plan, selected, stops, passesOnRoute]);
+
+  // camera
+  useEffect(() => {
+    const map = mapRef.current; if (!ready || !map) return;
+    const ml = window.maplibregl;
+    const b = new ml.LngLatBounds();
+    if (day) { (day.pts && day.pts.length ? day.pts : [DK_TOWNS[day.night || day.to || day.from]]).forEach((p) => p && b.extend([p.lng, p.lat])); if (!day.moving) { const t = DK_TOWNS[day.night || day.to || day.from]; b.extend([t.lng + 0.16, t.lat + 0.12]); b.extend([t.lng - 0.16, t.lat - 0.12]); } }
+    else routePts.forEach((p) => b.extend([p.lng, p.lat]));
+    const reduce = typeof matchMedia !== "undefined" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+    map.fitBounds(b, { padding: day ? { top: wide ? 40 : 36, bottom: 36, left: 36, right: wide && day ? 290 : 36 } : 30, maxZoom: 13, duration: reduce ? 0 : 800, essential: true, easing: easeInOut });
+  }, [ready, selected, plan]);
+
+  let note = null;
+  if (day) {
+    const townKey = day.night || day.to || day.from; const town = DK_TOWNS[townKey];
+    const planned = (day.acts || []).map((a) => String(a).toLowerCase());
+    const ideas = (DK_SEE[townKey] || []).filter((x) => !planned.some((a) => a.includes(x.t.toLowerCase().split(",")[0]))).slice(0, 2);
+    note = { town, ideas, passes: [], planned: (day.acts || []).length, profile: [] };
+  }
+  if (failed) return <DkRouteMap plan={plan} selected={selected} onSelect={onSelect} />;
+  return (
+    <div className="dk-map-sticky">
+      <div className="relative rounded-2xl overflow-hidden" style={{ border: `1px solid ${C.line}`, background: "#0b1a12", aspectRatio: wide ? "2 / 1" : "4 / 3" }}>
+        <div ref={boxRef} className="absolute inset-0 dk-libre" />
+        {!ready && <div className="absolute inset-0 flex items-center justify-center text-[12px]" style={{ color: "#fff", opacity: .8 }}><Loader2 size={16} className="animate-spin mr-2" /> Loading satellite map…</div>}
+        {ready && (
+          <div className="absolute left-2 top-2 inline-flex rounded-lg overflow-hidden" style={{ background: "rgba(255,255,255,.92)", boxShadow: "0 1px 3px rgba(0,0,0,.25)", zIndex: 5 }} onClick={(e) => e.stopPropagation()}>
+            {[["satellite", "Satellite"], ["topo", "Contours"]].map(([k, l]) => (
+              <button key={k} type="button" onClick={() => setKind(k)} className="tap px-2.5 h-7 text-[11px] font-semibold" style={{ background: kind === k ? C.pine : "transparent", color: kind === k ? "#fff" : C.ink }}>{l}</button>
+            ))}
+          </div>
+        )}
+        {ready && note && wide && (
+          <div className="absolute right-2 top-2 dk-note" style={{ width: 250, maxHeight: "calc(100% - 16px)", overflowY: "auto", zIndex: 5 }} onClick={(e) => e.stopPropagation()}>
+            <DkNoteBody note={note} day={day} onClose={() => onSelect && onSelect(null)} />
+          </div>
+        )}
+        {ready && !selected && <div className="absolute left-2 bottom-2 text-[10.5px] rounded-md px-2 py-1 pointer-events-none" style={{ background: "rgba(255,255,255,.9)", color: C.muted, zIndex: 5 }}>Tap a day or a stop to fly in</div>}
+      </div>
+      {ready && note && !wide && (
+        <div className="dk-note-under mt-2"><DkNoteBody note={note} day={day} onClose={() => onSelect && onSelect(null)} /></div>
+      )}
+      <div className="flex flex-wrap gap-1.5 mt-2">
+        {stops.map((st) => { const on = day && (day.night === st.key || day.to === st.key);
+          return (
+            <button key={st.key} type="button" onClick={() => onSelect && onSelect(on ? null : st.day)} className="tap inline-flex items-center gap-1.5 rounded-full pl-1 pr-2.5 py-0.5 text-[12px]"
+              style={{ background: on ? C.pineSoft : C.card, border: `1px solid ${on ? C.pine : C.line}`, color: on ? C.pine : C.muted }}>
+              <span className="w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold" style={{ background: on ? C.pine : C.grey, color: on ? "#fff" : C.ink }}>{st.n}</span>{DK_TOWNS[st.key].n}
+            </button>
+          ); })}
+      </div>
+    </div>
+  );
+}
+const easeInOut = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
+function dkPinSvg(n, on) {
+  const bg = on ? "#7A2E2E" : "#0066CC"; const sz = on ? 30 : 24;
+  return "data:image/svg+xml;charset=UTF-8," + encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="${sz}" height="${sz}" viewBox="0 0 ${sz} ${sz}">${on ? `<circle cx="${sz / 2}" cy="${sz / 2}" r="${sz / 2 - 1}" fill="rgba(122,46,46,.25)"/>` : ""}<circle cx="${sz / 2}" cy="${sz / 2}" r="${sz / 2 - (on ? 5 : 3)}" fill="${bg}" stroke="#fff" stroke-width="2"/><text x="${sz / 2}" y="${sz / 2 + 4}" font-family="-apple-system,Inter,Arial" font-size="11" font-weight="700" fill="#fff" text-anchor="middle">${n}</text></svg>`);
+}
+const dkPeakSvg = "data:image/svg+xml;charset=UTF-8," + encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="14" height="12" viewBox="0 0 14 12"><path d="M7 1 L13 11 L1 11 Z" fill="#fff" stroke="rgba(0,0,0,.6)" stroke-width="1"/></svg>`);
+const dkPassSvg = (hot) => "data:image/svg+xml;charset=UTF-8," + encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="16" height="9" viewBox="0 0 16 9"><path d="M1 8 Q4.5 0 8 5 Q11.5 0 15 8 Z" fill="${hot ? "#7A2E2E" : "#fff"}" stroke="${hot ? "#fff" : "rgba(0,0,0,.6)"}" stroke-width="1"/></svg>`);
+
+function DkGoogleMap({ plan, selected, onSelect, apiKey }) {
+  const boxRef = useRef(null);
+  const mapRef = useRef(null);
+  const layerRef = useRef({ markers: [], lines: [] });
+  const animRef = useRef(null);
+  const [ready, setReady] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const [kind, setKind] = useState("hybrid");   // hybrid = satellite with place names · terrain = shaded relief with contours
+  const [wide, setWide] = useState(false);
+  const day = selected ? plan.days.find((d) => d.day === selected) : null;
+
+  useEffect(() => {
+    const el = boxRef.current; if (!el) return;
+    const check = () => setWide(el.getBoundingClientRect().width >= 560);
+    check();
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(check); ro.observe(el); return () => ro.disconnect();
+  }, []);
+
+  // boot
+  useEffect(() => {
+    let on = true;
+    loadGoogleMaps(apiKey).then((gm) => {
+      if (!on || !boxRef.current) return;
+      const map = new gm.Map(boxRef.current, {
+        center: { lat: 27.5, lng: 90.4 }, zoom: 7, mapTypeId: kind, tilt: 0,
+        disableDefaultUI: true, zoomControl: true, zoomControlOptions: { position: gm.ControlPosition.RIGHT_BOTTOM },
+        gestureHandling: "cooperative", clickableIcons: false, keyboardShortcuts: false,
+        backgroundColor: "#0b1a12",
+      });
+      map.addListener("click", () => onSelect && onSelect(null));
+      mapRef.current = map; setReady(true);
+    }).catch(() => { if (on) setFailed(true); });
+    return () => { on = false; };
+  }, [apiKey]);
+
+  useEffect(() => { if (mapRef.current) mapRef.current.setMapTypeId(kind); }, [kind]);
+
+  // route + markers
+  const stops = useMemo(() => { const out = []; const seen = new Set(); for (const d of plan.days) if (d.night && !seen.has(d.night)) { seen.add(d.night); out.push({ key: d.night, n: out.length + 1, day: d.day }); } return out; }, [plan]);
+  const routePts = useMemo(() => { const pts = []; for (const d of plan.days) for (const p of d.pts || []) { const last = pts[pts.length - 1]; if (!last || last.lat !== p.lat || last.lng !== p.lng) pts.push(p); } return pts; }, [plan]);
+  const passesOnRoute = useMemo(() => { const set = new Set(); for (const d of plan.days) for (const pk of d.passes || []) set.add(pk); return [...set]; }, [plan]);
+
+  useEffect(() => {
+    const map = mapRef.current; if (!ready || !map) return;
+    const gm = window.google.maps;
+    layerRef.current.markers.forEach((m) => m.setMap(null)); layerRef.current.lines.forEach((l) => l.setMap(null));
+    const markers = [], lines = [];
+    const path = routePts.map((p) => ({ lat: p.lat, lng: p.lng }));
+    const segPath = day && day.moving && day.pts && day.pts.length > 1 ? day.pts.map((p) => ({ lat: p.lat, lng: p.lng })) : null;
+    lines.push(new gm.Polyline({ map, path, strokeColor: "#FFFFFF", strokeOpacity: 0.9, strokeWeight: 6, zIndex: 1 }));
+    lines.push(new gm.Polyline({ map, path, strokeColor: "#7A2E2E", strokeOpacity: segPath ? 0.45 : 1, strokeWeight: 3, zIndex: 2 }));
+    if (segPath) lines.push(new gm.Polyline({ map, path: segPath, strokeColor: "#7A2E2E", strokeOpacity: 1, strokeWeight: 5, zIndex: 3 }));
+    const label = (text) => ({ text, color: "#FFFFFF", fontSize: "11px", fontWeight: "600", className: "dk-gm-label" });
+    for (const pk of DK_PEAKS) markers.push(new gm.Marker({ map, position: { lat: pk.lat, lng: pk.lng }, icon: { url: dkPeakSvg, scaledSize: new gm.Size(14, 12), anchor: new gm.Point(7, 12), labelOrigin: new gm.Point(7, -8) }, label: label(`${pk.n} · ${pk.alt.toLocaleString()} m`), clickable: false, zIndex: 1 }));
+    const todays = new Set(day ? (day.passes || []) : []);
+    for (const pk of passesOnRoute) { const ps = DK_PASSES[pk]; if (!ps) continue; const hot = todays.has(pk);
+      markers.push(new gm.Marker({ map, position: { lat: ps.lat, lng: ps.lng }, icon: { url: dkPassSvg(hot), scaledSize: new gm.Size(16, 9), anchor: new gm.Point(8, 5), labelOrigin: new gm.Point(8, -8) },
+        label: (hot || !day) ? label(`${ps.n} · ${ps.alt.toLocaleString()} m`) : null, opacity: day && !hot ? 0.6 : 1, clickable: false, zIndex: hot ? 5 : 2 })); }
+    for (const st of stops) { const t = DK_TOWNS[st.key]; const on = day && (day.night === st.key || day.to === st.key);
+      const m = new gm.Marker({ map, position: { lat: t.lat, lng: t.lng }, icon: { url: dkPinSvg(st.n, on), scaledSize: new gm.Size(on ? 30 : 24, on ? 30 : 24), anchor: new gm.Point(on ? 15 : 12, on ? 15 : 12) }, title: `Stop ${st.n}: ${t.n}`, zIndex: on ? 10 : 6 });
+      m.addListener("click", () => onSelect && onSelect(st.day)); markers.push(m); }
+    layerRef.current = { markers, lines };
+  }, [ready, plan, selected, stops, routePts, passesOnRoute]);
+
+  // camera: a 750 ms eased flight (fractional zoom via moveCamera)
+  useEffect(() => {
+    const map = mapRef.current; if (!ready || !map) return;
+    const gm = window.google.maps;
+    const target = (() => {
+      const b = new gm.LatLngBounds();
+      if (day) { (day.pts && day.pts.length ? day.pts : [DK_TOWNS[day.night || day.to || day.from]]).forEach((p) => p && b.extend({ lat: p.lat, lng: p.lng })); if (!day.moving) { const t = DK_TOWNS[day.night || day.to || day.from]; b.extend({ lat: t.lat + 0.12, lng: t.lng + 0.16 }); b.extend({ lat: t.lat - 0.12, lng: t.lng - 0.16 }); } }
+      else routePts.forEach((p) => b.extend({ lat: p.lat, lng: p.lng }));
+      return b;
+    })();
+    // compute the zoom that fits the bounds in this box
+    const el = boxRef.current; const W = el.clientWidth, H = el.clientHeight; if (!W || !H) return;
+    const ne = target.getNorthEast(), sw = target.getSouthWest();
+    const latRad = (lat) => Math.log(Math.tan(Math.PI / 4 + (lat * Math.PI) / 360));
+    const pad = day ? 0.72 : 0.84;
+    const zx = Math.log2((W * pad) / 256 / ((ne.lng() - sw.lng()) / 360 || 1e-6));
+    const zy = Math.log2((H * pad) / 256 / ((latRad(ne.lat()) - latRad(sw.lat())) / Math.PI || 1e-6));
+    const zoom = Math.max(6.5, Math.min(13, Math.min(zx, zy)));
+    const center = target.getCenter();
+    const from = { lat: map.getCenter().lat(), lng: map.getCenter().lng(), zoom: map.getZoom() };
+    const to = { lat: center.lat(), lng: center.lng(), zoom };
+    if (animRef.current) cancelAnimationFrame(animRef.current);
+    const reduce = typeof matchMedia !== "undefined" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (reduce) { map.moveCamera({ center: { lat: to.lat, lng: to.lng }, zoom: to.zoom }); return; }
+    const t0 = performance.now(), dur = 750;
+    const step = (now) => {
+      const u = easeInOut(Math.min(1, (now - t0) / dur));
+      map.moveCamera({ center: { lat: from.lat + (to.lat - from.lat) * u, lng: from.lng + (to.lng - from.lng) * u }, zoom: from.zoom + (to.zoom - from.zoom) * u });
+      if (u < 1) animRef.current = requestAnimationFrame(step);
+    };
+    animRef.current = requestAnimationFrame(step);
+    return () => { if (animRef.current) cancelAnimationFrame(animRef.current); };
+  }, [ready, selected, plan]);
+
+  let note = null;
+  if (day) {
+    const townKey = day.night || day.to || day.from; const town = DK_TOWNS[townKey];
+    const planned = (day.acts || []).map((a) => String(a).toLowerCase());
+    const ideas = (DK_SEE[townKey] || []).filter((x) => !planned.some((a) => a.includes(x.t.toLowerCase().split(",")[0]))).slice(0, 2);
+    note = { town, ideas, passes: [], planned: (day.acts || []).length, profile: [] };
+  }
+  if (failed) return <DkRouteMap plan={plan} selected={selected} onSelect={onSelect} />;
+  return (
+    <div className="dk-map-sticky">
+      <div className="relative rounded-2xl overflow-hidden" style={{ border: `1px solid ${C.line}`, background: "#0b1a12", aspectRatio: wide ? "2 / 1" : "4 / 3" }}>
+        <div ref={boxRef} className="absolute inset-0" />
+        {!ready && <div className="absolute inset-0 flex items-center justify-center text-[12px]" style={{ color: "#fff", opacity: .8 }}><Loader2 size={16} className="animate-spin mr-2" /> Loading satellite map…</div>}
+        {ready && (
+          <div className="absolute left-2 top-2 inline-flex rounded-lg overflow-hidden" style={{ background: "rgba(255,255,255,.92)", boxShadow: "0 1px 3px rgba(0,0,0,.25)", zIndex: 5 }} onClick={(e) => e.stopPropagation()}>
+            {[["hybrid", "Satellite"], ["terrain", "Terrain"]].map(([k, l]) => (
+              <button key={k} type="button" onClick={() => setKind(k)} className="tap px-2.5 h-7 text-[11px] font-semibold" style={{ background: kind === k ? C.pine : "transparent", color: kind === k ? "#fff" : C.ink }}>{l}</button>
+            ))}
+          </div>
+        )}
+        {ready && note && wide && (
+          <div className="absolute right-2 top-2 dk-note" style={{ width: 250, maxHeight: "calc(100% - 16px)", overflowY: "auto", zIndex: 5 }} onClick={(e) => e.stopPropagation()}>
+            <DkNoteBody note={note} day={day} onClose={() => onSelect && onSelect(null)} />
+          </div>
+        )}
+        {ready && !selected && <div className="absolute left-2 bottom-2 text-[10.5px] rounded-md px-2 py-1 pointer-events-none" style={{ background: "rgba(255,255,255,.9)", color: C.muted, zIndex: 5 }}>Tap a day or a stop to fly in</div>}
+      </div>
+      {ready && note && !wide && (
+        <div className="dk-note-under mt-2"><DkNoteBody note={note} day={day} onClose={() => onSelect && onSelect(null)} /></div>
+      )}
+      <div className="flex flex-wrap gap-1.5 mt-2">
+        {stops.map((st) => { const on = day && (day.night === st.key || day.to === st.key);
+          return (
+            <button key={st.key} type="button" onClick={() => onSelect && onSelect(on ? null : st.day)} className="tap inline-flex items-center gap-1.5 rounded-full pl-1 pr-2.5 py-0.5 text-[12px]"
+              style={{ background: on ? C.pineSoft : C.card, border: `1px solid ${on ? C.pine : C.line}`, color: on ? C.pine : C.muted }}>
+              <span className="w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold" style={{ background: on ? C.pine : C.grey, color: on ? "#fff" : C.ink }}>{st.n}</span>{DK_TOWNS[st.key].n}
+            </button>
+          ); })}
+      </div>
+    </div>
+  );
+}
+/* Picks the map the admin chose: free satellite (default), Google with a key, or the painted relief. */
+function DkPlanMap({ plan, selected, onSelect }) {
+  const st = useMapSettings();
+  if (st === null) return <div className="rounded-2xl" style={{ aspectRatio: BT_MAP_AR, background: C.grey }} />;
+  if (st.provider === "google" && st.gmaps) return <DkGoogleMap plan={plan} selected={selected} onSelect={onSelect} apiKey={st.gmaps} />;
+  if (st.provider === "relief") return <DkRouteMap plan={plan} selected={selected} onSelect={onSelect} />;
+  return <DkLibreMap plan={plan} selected={selected} onSelect={onSelect} />;
+}
+
+function DkNoteBody({ note, day, onClose }) {
+  return (
+    <div className="rounded-xl p-3" style={{ background: "rgba(255,255,255,.97)", border: `1px solid ${C.line}`, boxShadow: "0 6px 20px -10px rgba(0,0,0,.25)" }}>
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <div className="text-[14px] font-semibold leading-tight" style={{ color: C.ink }}>Day {day.day} · {note.town.n}</div>
+          <div className="text-[11.5px] mt-0.5" style={{ color: C.muted }}>{note.town.alt.toLocaleString()} m{day.moving && day.h > 0 ? ` · ${dkFmtHours(day.h)} · ${day.km} km` : ""}{day.night ? ` · ${DK_HOTEL[day.hotel]}` : " · departure"}</div>
+        </div>
+        <button type="button" onClick={onClose} aria-label="Close" className="tap shrink-0 w-6 h-6 rounded-full flex items-center justify-center" style={{ background: C.grey }}><X size={12} color={C.ink} /></button>
+      </div>
+      {note.ideas.length > 0 ? (
+        <div className="mt-2">
+          <div className="text-[10.5px] font-semibold tracking-[.06em] uppercase" style={{ color: C.goldText }}>Also worth it here</div>
+          <ul className="mt-1 space-y-0.5">
+            {note.ideas.map((x) => <li key={x.t} className="text-[12.5px] leading-snug flex gap-1.5" style={{ color: C.ink }}><span className="mt-[7px] w-1 h-1 rounded-full shrink-0" style={{ background: C.gold }} /><span>{x.t}{x.e === "moderate" ? <span style={{ color: C.muted }}> · moderate walk</span> : null}</span></li>)}
+          </ul>
+        </div>
+      ) : note.planned > 0 ? <div className="text-[12px] mt-1.5" style={{ color: C.muted }}>All of Drukpah's picks here are already in this day.</div> : null}
+    </div>
+  );
+}
+function DkRouteMap({ plan, selected, onSelect }) {
+  const boxRef = useRef(null);
+  const [wide, setWide] = useState(false);
+  useEffect(() => {
+    const el = boxRef.current; if (!el) return;
+    const check = () => setWide(el.getBoundingClientRect().width >= 560);
+    check();
+    if (typeof ResizeObserver === "undefined") { window.addEventListener("resize", check); return () => window.removeEventListener("resize", check); }
+    const ro = new ResizeObserver(check); ro.observe(el); return () => ro.disconnect();
+  }, []);
   const pts = [];
   for (const d of plan.days) for (const p of d.pts || []) {
     const last = pts[pts.length - 1];
@@ -9024,33 +9412,115 @@ function DkRouteMap({ plan }) {
   const stops = [];
   const seen = new Set();
   for (const d of plan.days) {
-    if (d.night && !seen.has(d.night)) { seen.add(d.night); stops.push({ key: d.night, n: stops.length + 1 }); }
+    if (d.night && !seen.has(d.night)) { seen.add(d.night); stops.push({ key: d.night, n: stops.length + 1, day: d.day }); }
   }
   const line = pts.map((p) => `${btPctX(p.lng).toFixed(2)},${btPctY(p.lat).toFixed(2)}`).join(" ");
+  const day = selected ? plan.days.find((d) => d.day === selected) : null;
+  const seg = day && day.moving && day.pts && day.pts.length > 1 ? day.pts.map((p) => `${btPctX(p.lng).toFixed(2)},${btPctY(p.lat).toFixed(2)}`).join(" ") : null;
+  const focus = day ? dkDayFocus(day) : null;
+  // layer transform: scale about the top-left, then shift so the focus centre sits mid-map
+  const k = focus ? focus.k : 1;
+  const tx = focus ? 50 - focus.cx * k : 0, ty = focus ? 50 - focus.cy * k : 0;
+  const ax = focus ? focus.anchor.x * k + tx : 50, ay = focus ? focus.anchor.y * k + ty : 50;   // anchor pin, in map percent
+  // Where to put the note on wide maps: beside the pin, on whichever side covers no other stop.
+  const boxW = boxRef.current ? boxRef.current.getBoundingClientRect().width : 800;
+  const cardWpct = Math.min(40, (240 / boxW) * 100), cardHpct = 46;
+  const pinsPct = stops.map((st) => { const t = DK_TOWNS[st.key]; return { key: st.key, x: btPctX(t.lng) * k + tx, y: btPctY(t.lat) * k + ty }; });
+  const anchorKey = day ? (day.night || day.to || day.from) : null;
+  const cy = Math.min(80, Math.max(20, ay));
+  const candidates = [
+    { side: "right", x1: ax + 3, x2: ax + 3 + cardWpct, y1: cy - cardHpct / 2, y2: cy + cardHpct / 2 },
+    { side: "left", x1: ax - 3 - cardWpct, x2: ax - 3, y1: cy - cardHpct / 2, y2: cy + cardHpct / 2 },
+  ];
+  const score = (c) => (c.x1 < 0 || c.x2 > 100 ? 100 : 0) + pinsPct.filter((p) => p.key !== anchorKey && p.x > c.x1 - 2 && p.x < c.x2 + 2 && p.y > c.y1 - 4 && p.y < c.y2 + 4).length;
+  const best = candidates.slice().sort((a, b) => score(a) - score(b))[0];
+  const cardRight = best.side === "right";
+
+  // Drukpah's notes for the selected day
+  let note = null;
+  if (day) {
+    const townKey = day.night || day.to || day.from;
+    const town = DK_TOWNS[townKey];
+    const planned = (day.acts || []).map((a) => String(a).toLowerCase());
+    const ideas = (DK_SEE[townKey] || []).filter((x) => !planned.some((a) => a.includes(x.t.toLowerCase().split(",")[0]))).slice(0, 2);
+    const passes = (day.passes || []).map((pk) => DK_PASSES[pk]).filter(Boolean);
+    const profile = day.moving && day.pts && day.pts.length > 1 ? day.pts.filter((p) => p && typeof p.alt === "number").map((p) => ({ n: p.n, alt: p.alt })) : [];
+    note = { town, ideas, passes, planned: (day.acts || []).length, profile };
+  }
+
+  const Pin = ({ st }) => {
+    const t = DK_TOWNS[st.key];
+    const on = day && (day.night === st.key || day.to === st.key);
+    return (
+      <button type="button" onClick={(e) => { e.stopPropagation(); onSelect && onSelect(st.day); }} aria-label={`Stop ${st.n}: ${t.n}`}
+        className="tap absolute" style={{ left: `${btPctX(t.lng)}%`, top: `${btPctY(t.lat)}%`, transform: `translate(-50%, -50%) scale(${1 / k})`, transformOrigin: "center", transition: "transform .75s cubic-bezier(.22,.61,.36,1)", zIndex: on ? 3 : 2, padding: 8, margin: -8 }}>
+        <div className="rounded-full flex items-center justify-center text-[10px] font-bold" style={{ width: on ? 26 : 20, height: on ? 26 : 20, background: on ? C.maroon : C.pine, color: "#FFFFFF", border: "2px solid #FFFFFF", boxShadow: on ? "0 0 0 4px rgba(122,46,46,.22), 0 2px 6px rgba(0,0,0,.3)" : "0 1px 3px rgba(0,0,0,.25)", transition: "all .3s ease" }}>{st.n}</div>
+      </button>
+    );
+  };
+
   return (
-    <div>
-      <div className="relative rounded-2xl overflow-hidden" style={{ border: `1px solid ${C.line}`, background: C.card }}>
-        <img src={mapImg} alt="Map of Bhutan with the planned route drawn on it" className="w-full block" draggable="false" />
-        <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="absolute inset-0 w-full h-full" aria-hidden="true">
-          <polyline points={line} fill="none" stroke="#FFFFFF" strokeWidth="5" strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" opacity="0.85" />
-          <polyline points={line} fill="none" stroke={C.maroon} strokeWidth="2.5" strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
-        </svg>
-        {stops.map((s) => {
-          const t = DK_TOWNS[s.key];
-          return (
-            <div key={s.key} className="absolute" style={{ left: `${btPctX(t.lng)}%`, top: `${btPctY(t.lat)}%`, transform: "translate(-50%, -50%)" }}>
-              <div className="w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold"
-                style={{ background: C.pine, color: "#FFFFFF", border: "2px solid #FFFFFF", boxShadow: "0 1px 3px rgba(0,0,0,.25)" }}>{s.n}</div>
+    <div className="dk-map-sticky">
+      <div ref={boxRef} className="relative rounded-2xl overflow-hidden" style={{ border: `1px solid ${C.line}`, background: "#eef1ee", aspectRatio: BT_MAP_AR }} onClick={() => onSelect && onSelect(null)}>
+        <div className="absolute inset-0" style={{ transform: `translate(${tx}%, ${ty}%) scale(${k})`, transformOrigin: "0 0", transition: "transform .75s cubic-bezier(.22,.61,.36,1)", willChange: "transform", backfaceVisibility: "hidden" }}>
+          <img src={mapImg} alt="Relief map of Bhutan with the planned route drawn on it" className="absolute inset-0 w-full h-full" style={{ objectFit: "cover", imageRendering: "auto" }} draggable="false" />
+          <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="absolute inset-0 w-full h-full" aria-hidden="true">
+            <polyline points={line} fill="none" stroke="#FFFFFF" strokeWidth="5" strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" opacity="0.85" />
+            <polyline points={line} fill="none" stroke={C.maroon} strokeWidth="2.5" strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" opacity={seg ? 0.4 : 1} style={{ transition: "opacity .5s ease" }} />
+            {seg && <polyline points={seg} fill="none" stroke="#FFFFFF" strokeWidth="7" strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" opacity="0.9" className="dk-seg" />}
+            {seg && <polyline points={seg} fill="none" stroke={C.maroon} strokeWidth="4" strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" className="dk-seg" />}
+          </svg>
+          {/* peaks: height labels on the relief, counter-scaled so they never balloon; text only when there is room */}
+          {DK_PEAKS.map((pk) => (
+            <div key={pk.n} className="absolute pointer-events-none" style={{ left: `${btPctX(pk.lng)}%`, top: `${btPctY(pk.lat)}%`, transform: `translate(-50%, -100%) scale(${1 / k})`, transformOrigin: "50% 100%", transition: "transform .75s cubic-bezier(.22,.61,.36,1)", zIndex: 1 }}>
+              <div className="flex flex-col items-center">
+                {(wide || k > 1.5) && <span className="whitespace-nowrap text-[9px] font-semibold leading-none" style={{ color: "#fff", textShadow: "0 0 3px rgba(0,0,0,.9), 0 0 1px rgba(0,0,0,.9)" }}>{pk.n} · {pk.alt.toLocaleString()} m</span>}
+                <svg width="9" height="7" viewBox="0 0 10 8" className="mt-0.5"><path d="M5 0 L10 8 L0 8 Z" fill="#fff" opacity=".95" /></svg>
+              </div>
             </div>
+          ))}
+          {/* passes on this route: a small saddle mark, with the height once you zoom in on that day */}
+          {(() => {
+            const onRoute = new Set(); for (const d of plan.days) for (const pk of d.passes || []) onRoute.add(pk);
+            const todays = new Set(day ? (day.passes || []) : []);
+            return [...onRoute].map((pk) => { const ps = DK_PASSES[pk]; if (!ps) return null; const hot = todays.has(pk);
+              return (
+                <div key={pk} className="absolute pointer-events-none" style={{ left: `${btPctX(ps.lng)}%`, top: `${btPctY(ps.lat)}%`, transform: `translate(-50%, -100%) scale(${1 / k})`, transformOrigin: "50% 100%", transition: "transform .75s cubic-bezier(.22,.61,.36,1), opacity .4s ease", opacity: day && !hot ? 0.55 : 1, zIndex: hot ? 3 : 1 }}>
+                  <div className="flex flex-col items-center">
+                    {(hot || (!day && wide)) && <span className="whitespace-nowrap text-[9px] font-semibold leading-none mb-0.5" style={{ color: "#fff", textShadow: "0 0 3px rgba(0,0,0,.9), 0 0 1px rgba(0,0,0,.9)" }}>{ps.n} · {ps.alt.toLocaleString()} m</span>}
+                    <svg width="12" height="7" viewBox="0 0 12 7"><path d="M0 7 Q3 0 6 4 Q9 0 12 7 Z" fill={hot ? C.maroon : "#fff"} stroke="#fff" strokeWidth="1" /></svg>
+                  </div>
+                </div>
+              ); });
+          })()}
+          {stops.map((st) => <Pin key={st.key} st={st} />)}
+        </div>
+
+        {/* Drukpah's note, beside the selected pin (wide maps) */}
+        {note && wide && (
+          <div className="absolute dk-note" onClick={(e) => e.stopPropagation()}
+            style={{ top: "50%", transform: "translateY(-50%)", maxHeight: "calc(100% - 16px)", overflowY: "auto", [cardRight ? "left" : "right"]: `calc(${cardRight ? ax : 100 - ax}% + 24px)`, width: 260, maxWidth: "42%", zIndex: 5 }}>
+            <DkNoteBody note={note} day={day} onClose={() => onSelect && onSelect(null)} />
+            {Math.abs(ay - 50) < 28 && <div className="absolute w-2.5 h-2.5 rotate-45" style={{ top: `calc(50% + ${(ay - 50).toFixed(1)}%)`, marginTop: -5, [cardRight ? "left" : "right"]: -5, background: "rgba(255,255,255,.97)", borderLeft: cardRight ? `1px solid ${C.line}` : "none", borderBottom: cardRight ? `1px solid ${C.line}` : "none", borderRight: cardRight ? "none" : `1px solid ${C.line}`, borderTop: cardRight ? "none" : `1px solid ${C.line}` }} />}
+          </div>
+        )}
+        {!selected && <div className="absolute left-2 bottom-2 text-[10.5px] rounded-md px-2 py-1 pointer-events-none" style={{ background: "rgba(255,255,255,.9)", color: C.muted }}>Tap a day or a stop to zoom in</div>}
+      </div>
+      {note && !wide && (
+        <div className="dk-note-under mt-2" onClick={(e) => e.stopPropagation()}>
+          <DkNoteBody note={note} day={day} onClose={() => onSelect && onSelect(null)} />
+        </div>
+      )}
+      <div className="flex flex-wrap gap-1.5 mt-2">
+        {stops.map((st) => {
+          const on = day && (day.night === st.key || day.to === st.key);
+          return (
+            <button key={st.key} type="button" onClick={() => onSelect && onSelect(on ? null : st.day)} className="tap inline-flex items-center gap-1.5 rounded-full pl-1 pr-2.5 py-0.5 text-[12px]"
+              style={{ background: on ? C.pineSoft : C.card, border: `1px solid ${on ? C.pine : C.line}`, color: on ? C.pine : C.muted }}>
+              <span className="w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold" style={{ background: on ? C.pine : C.grey, color: on ? "#fff" : C.ink }}>{st.n}</span>{DK_TOWNS[st.key].n}
+            </button>
           );
         })}
-      </div>
-      <div className="flex flex-wrap gap-x-3 gap-y-1 mt-2">
-        {stops.map((s) => (
-          <span key={s.key} className="text-[12px]" style={{ color: C.muted }}>
-            <b style={{ color: C.pine }}>{s.n}</b> {DK_TOWNS[s.key].n}
-          </span>
-        ))}
       </div>
     </div>
   );
@@ -9061,6 +9531,11 @@ function DrukpahEngine({ user, trips, actions, onApplied, presetTemplateId }) {
   const [f, setF] = useState({ nights: 7, exit: "paro", adults: 2, seniors: 0, kids: 0, under6: 0,
                                pace: "standard", culture: true, nature: true, hotel: "3", month: 0 });
   const [plan, setPlan] = useState(null);
+  const [mapSel, setMapSel] = useState(null);
+  const selectDay = (n, fromMap) => {
+    setMapSel(n);
+    if (n && fromMap) { const el = document.querySelector(`[data-dkday="${n}"]`); if (el) el.scrollIntoView({ block: "nearest", behavior: "smooth" }); }
+  };
   const [editing, setEditing] = useState(true);
   const [confirmTrip, setConfirmTrip] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -9416,7 +9891,7 @@ function DrukpahEngine({ user, trips, actions, onApplied, presetTemplateId }) {
             </div>
           )}
 
-          <DkRouteMap plan={plan} />
+          <DkPlanMap plan={plan} selected={mapSel} onSelect={(n) => selectDay(n, true)} />
 
           {plan.notes.length > 0 && (
             <div className="mt-4 space-y-2">
@@ -9436,10 +9911,11 @@ function DrukpahEngine({ user, trips, actions, onApplied, presetTemplateId }) {
           <div className="text-[11px] font-semibold tracking-[.14em] uppercase mt-6 mb-2" style={{ color: C.goldText }}>Day by day</div>
           <div className="space-y-2">
             {plan.days.map((d) => (
-              <div key={d.day} className="rounded-xl px-3.5 py-3" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+              <div key={d.day} data-dkday={d.day} role="button" tabIndex={0} onClick={() => selectDay(mapSel === d.day ? null : d.day, false)} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); selectDay(mapSel === d.day ? null : d.day, false); } }}
+                className="tap rounded-xl px-3.5 py-3 cursor-pointer" style={{ background: mapSel === d.day ? C.pineSoft : C.card, border: `1px solid ${mapSel === d.day ? C.pine : C.line}`, transition: "background .2s ease, border-color .2s ease" }}>
                 <div className="flex items-start gap-3">
-                  <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0" style={{ background: C.pine }}>
-                    <span className="text-[12px] font-bold" style={{ color: C.goldSoft }}>{d.day}</span>
+                  <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0" style={{ background: mapSel === d.day ? C.maroon : C.pine, transition: "background .2s ease" }}>
+                    <span className="text-[12px] font-bold" style={{ color: "#fff" }}>{d.day}</span>
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="text-[14px] font-semibold leading-snug" style={{ color: C.ink }}>
@@ -10451,10 +10927,12 @@ function dkReadDescription(text) {
 const DK_PACKS = [25, 50, 100];
 
 async function dkLoadSettings() {
-  const out = { note: "", account: "", free: 10, aiOn: false };
+  const out = { note: "", account: "", free: 10, aiOn: false, gmaps: "", mapProvider: "esri" };
   if (!CLOUD) return out;
   const { data } = await supabase.from("drukpah_settings").select("*");
   for (const r of data || []) {
+    if (r.key === "google_maps_key") out.gmaps = (r.value || "").trim();
+    if (r.key === "map_provider" && ["relief", "esri", "google"].includes(r.value)) out.mapProvider = r.value;
     if (r.key === "credits_payment_note") out.note = r.value || "";
     if (r.key === "credits_payment_account") out.account = r.value || "";
     if (r.key === "free_drafts_per_month") out.free = Number(r.value) || 10;
@@ -10611,7 +11089,7 @@ function AdminDraftsPanel({ adminId, onChanged }) {
   const saveSettings = async (next) => {
     setBusy("settings");
     const rows = [["credits_payment_note", next.note], ["credits_payment_account", next.account], ["free_drafts_per_month", String(next.free)],
-                  ["ai_drafts_enabled", next.aiOn ? "on" : "off"]]
+                  ["ai_drafts_enabled", next.aiOn ? "on" : "off"], ["google_maps_key", (next.gmaps || "").trim()], ["map_provider", next.mapProvider || "esri"]]
       .map(([key, value]) => ({ key, value, updated_at: new Date().toISOString() }));
     const { error } = await supabase.from("drukpah_settings").upsert(rows);
     setBusy(null);
@@ -10675,10 +11153,21 @@ function AdminDraftsPanel({ adminId, onChanged }) {
 }
 
 function AdminDraftSettings({ settings, busy, onSave }) {
-  const [s, setS] = useState({ note: settings.note, account: settings.account, free: settings.free, aiOn: !!settings.aiOn });
+  const [s, setS] = useState({ note: settings.note, account: settings.account, free: settings.free, aiOn: !!settings.aiOn, gmaps: settings.gmaps || "", mapProvider: settings.mapProvider || "esri" });
   const field = { background: C.bg, border: `1px solid ${C.line}`, color: C.ink };
   return (
     <div className="mt-3 rounded-xl p-3" style={{ background: C.bg }}>
+      <div className="mb-3">
+        <span className="block text-[12px] font-medium mb-1" style={{ color: C.ink }}>Itinerary map</span>
+        <Segmented small value={s.mapProvider} onChange={(v) => setS({ ...s, mapProvider: v })} options={[["esri", "Satellite · free"], ["google", "Google"], ["relief", "Painted relief"]]} />
+        <span className="block text-[11px] mt-1" style={{ color: C.muted }}>{s.mapProvider === "esri" ? "Esri satellite imagery and OpenTopoMap contours. No account, no card." : s.mapProvider === "google" ? "Google satellite and terrain with full place names. Needs the key below." : "The built-in hand-painted relief map."}</span>
+      </div>
+      <label className="block mb-3">
+        <span className="block text-[12px] font-medium mb-1" style={{ color: C.ink }}>Google Maps key <span style={{ color: C.muted }}>· only for the Google option</span></span>
+        <input value={s.gmaps} onChange={(e) => setS({ ...s, gmaps: e.target.value })} placeholder="AIza… (browser key, restricted to bhutantourismhub.com)" spellCheck={false}
+          className="w-full h-10 px-3 rounded-lg text-[13px]" style={{ ...field, background: C.card }} />
+        <span className="block text-[11px] mt-1" style={{ color: C.muted }}>Leave empty to keep the painted relief map.</span>
+      </label>
       <div className="flex items-center justify-between gap-3 mb-3 rounded-lg px-3 py-2.5" style={{ background: C.card, border: `1px solid ${C.line}` }}>
         <div className="min-w-0">
           <div className="text-[13px] font-semibold" style={{ color: C.ink }}>AI drafting {s.aiOn ? "on" : "off"}</div>
