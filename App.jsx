@@ -64,7 +64,7 @@ const CLOUD = Boolean(supabase);
   } catch (e) {}
 })();
 const DEMO_MODE = false;   // set true only for local demos without a database
-const BUILD = "BUILD 49 — 9 Oct";   // bump every deploy; shown at the top of the welcome screen
+const BUILD = "BUILD 50 — 9 Oct";   // bump every deploy; shown at the top of the welcome screen
 // which device someone is on — shown beside the build so a screenshot tells us both
 const DEVICE = (() => {
   try {
@@ -230,8 +230,12 @@ export default function App() {
   useAutoUpdate();
   // A guest arriving on a review link never signs in — they see only the review form.
   const reviewToken = useMemo(() => {
-    try { return new URLSearchParams(window.location.search).get("review"); }
-    catch (e) { return null; }
+    try {
+      const t = new URLSearchParams(window.location.search).get("review");
+      // BUILD 50: once read, the one-time link leaves the address bar so it is not kept in history or screenshots
+      if (t && window.history && window.history.replaceState) window.history.replaceState(null, "", window.location.pathname);
+      return t;
+    } catch (e) { return null; }
   }, []);
   const realUserRef = useRef(null);   // current signed-in id — set below, used by every action
   const [accountId, setAccountId] = useState(null);
@@ -280,7 +284,7 @@ export default function App() {
       .on("postgres_changes", { event: "*", schema: "public", table: "enquiries" }, fetchEnquiries)
       .subscribe();
     return () => { supabase.removeChannel(ch); };
-  }, []);
+  }, [dirTick]);   // BUILD 50: re-fetch after sign-in, not only at page load
 
   const saveEnquiry = async (e) => {
     const me = realUserRef.current;
@@ -361,6 +365,14 @@ export default function App() {
   };
   // Bumping profileTick re-runs the session effect below, which reloads the directory once signed in.
   const reloadMe = () => { setProfileTick((t) => t + 1); };
+  // BUILD 50: signing out also clears the in-memory directory and any stored one-time link tokens
+  const logout = async () => {
+    try { if (session) await supabase.auth.signOut(); } catch (e) {}
+    PROFILE_DIR = {};
+    try { localStorage.removeItem("bth_invite"); localStorage.removeItem("bth_attest"); } catch (e) {}
+    setAccountId(null);
+  };
+
 
   /* ---- Stories (24h, then the file itself is deleted) ---- */
   const fetchStories = async () => {
@@ -430,7 +442,7 @@ export default function App() {
       .on("postgres_changes", { event: "*", schema: "public", table: "follows" }, fetchFollows)
       .subscribe();
     return () => { supabase.removeChannel(ch); };
-  }, []);
+  }, [dirTick]);   // BUILD 50: re-fetch after sign-in, not only at page load
   const toggleFollow = async (targetId) => {
     const me = realUserRef.current;
     if (!me || me === targetId) return;
@@ -472,7 +484,7 @@ export default function App() {
       .on("postgres_changes", { event: "*", schema: "public", table: "direct_messages" }, fetchDms)
       .subscribe();
     return () => { supabase.removeChannel(ch); };
-  }, []);
+  }, [dirTick]);   // BUILD 50: re-fetch after sign-in, not only at page load
   const sendDm = async (to, body, sharedPostId = null, extra = {}) => {
     const me = realUserRef.current;
     if (!me) { console.error("sendDm: no signed-in user"); return { ok: false, reason: "not signed in" }; }
@@ -739,7 +751,7 @@ export default function App() {
       .on("postgres_changes", { event: "*", schema: "public", table: "post_comments" }, fetchEngagement)
       .subscribe();
     return () => { supabase.removeChannel(ch); };
-  }, []);
+  }, [dirTick]);   // BUILD 50: re-fetch after sign-in, not only at page load
 
   const toggleLike = async (postId, me) => {
     const mine = likes.some((l) => l.post_id === postId && l.liker_id === me);
@@ -1214,11 +1226,11 @@ export default function App() {
         {!user ? (
           <Login onPick={setAccountId} session={session} myProfile={myProfile} onAuthed={reloadMe} onBusy={setAuthBusy} invitePreview={invitePreview} attestPreview={attestPreview} />
         ) : !NAV[user.kind] ? (
-          <RoleComingSoon user={user} onLogout={() => { if (session) supabase.auth.signOut(); setAccountId(null); }} />
+          <RoleComingSoon user={user} onLogout={logout} />
         ) : (
           <InvitesCtx.Provider value={{ invites, creditRequests }}>
           <Shell key={user.id} user={user} posts={posts} jobs={jobs} trips={trips} listings={listings} enquiries={enquiries} dirTick={dirTick} attest={{ attestToken, attestPreview, forgetAttest }}
-            actions={{ addPost, approve, reject, deletePost, reloadDirectory: loadProfiles, setAvailability, toggleFollow, sendJob, setJobStatus, postChat, openChat, postListing, applyToListing, setApplicant, hireApplicant, saveEnquiry, setEnquiryStatus, convertEnquiry, reloadTrips: fetchTrips, binListing, destroyListing, binRequest, destroyRequest, saveTripDetails, createInvite, cancelInvite, respondInvite }} engagement={{ likes, comments, toggleLike, addComment, deleteComment, follows, toggleFollow, stories, addStory, deleteStory }} dm={{ dms, sendDm, markRead, sharePostTo }} onLogout={() => { if (session) supabase.auth.signOut(); setAccountId(null); }} />
+            actions={{ addPost, approve, reject, deletePost, reloadDirectory: loadProfiles, setAvailability, toggleFollow, sendJob, setJobStatus, postChat, openChat, postListing, applyToListing, setApplicant, hireApplicant, saveEnquiry, setEnquiryStatus, convertEnquiry, reloadTrips: fetchTrips, binListing, destroyListing, binRequest, destroyRequest, saveTripDetails, createInvite, cancelInvite, respondInvite }} engagement={{ likes, comments, toggleLike, addComment, deleteComment, follows, toggleFollow, stories, addStory, deleteStory }} dm={{ dms, sendDm, markRead, sharePostTo }} onLogout={logout} />
           </InvitesCtx.Provider>
         )}
       </div>
@@ -4262,7 +4274,7 @@ function AdminUsers({ onChanged, currentAdminId }) {
     if (!u.license_path) { flash("No license uploaded."); return; }
     const { data, error } = await supabase.storage.from("licenses").createSignedUrl(u.license_path, 300);
     if (error || !data) { flash("Couldn't open the document."); return; }
-    window.open(data.signedUrl, "_blank");
+    window.open(data.signedUrl, "_blank", "noopener");
   };
 
   const list = (rows || []).filter((r) => {
@@ -6556,6 +6568,66 @@ function CropEditor({ slides, initialRatio, onDone, onClose }) {
 /* ========================================================================== */
 /*  GUEST REVIEW — opened from a one-time link. No account, no sign-in.       */
 /* ========================================================================== */
+/* Pieces of the guest review page, kept at module scope on purpose: a component declared inside
+   GuestReview would be a new component on every render, unmounting the form (and closing the
+   keyboard) on every keystroke. BUILD 50. */
+const ReviewPage = ({ children }) => (
+  <div className="flex-1 overflow-y-auto hidescroll px-6 py-8" style={{ scrollbarWidth: "none" }}>
+    <div className="flex items-center gap-2.5 mb-7">
+      <BrandMark size={40} />
+      <div>
+        <div className="text-[16px] font-semibold leading-none" style={{ color: C.ink }}>Bhutan Tourism Hub</div>
+        <div className="text-[10px] font-semibold tracking-[.14em] uppercase mt-1" style={{ color: C.goldText }}>Verified guest review</div>
+      </div>
+    </div>
+    {children}
+  </div>
+);
+
+const Message = ({ Icon, title, body: b, tone }) => (
+  <ReviewPage>
+    <div className="rounded-2xl p-6 text-center" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+      <div className="w-14 h-14 rounded-2xl flex items-center justify-center mx-auto mb-3"
+        style={{ background: tone === "good" ? C.pineSoft : C.goldSoft }}>
+        <Icon size={26} color={tone === "good" ? C.pine : C.gold} />
+      </div>
+      <div className="text-[17px] font-semibold" style={{ color: C.ink }}>{title}</div>
+      <p className="text-[14px] leading-relaxed mt-2" style={{ color: C.muted }}>{b}</p>
+    </div>
+  </ReviewPage>
+);
+
+const BigStars = ({ value, onChange }) => (
+  <div className="flex justify-center gap-2">
+    {[1, 2, 3, 4, 5].map((n) => (
+      <button key={n} onClick={() => onChange(n)} className="tap" aria-label={`${n} out of 5`}>
+        <Star size={44} strokeWidth={1.4}
+          color={n <= value ? C.gold : C.line}
+          fill={n <= value ? C.gold : "transparent"}
+          style={{ transition: "transform .12s", transform: n === value ? "scale(1.08)" : "none" }} />
+      </button>
+    ))}
+  </div>
+);
+
+const SmallStars = ({ label, hint, value, onChange }) => (
+  <div className="flex items-center gap-3 py-2.5">
+    <div className="flex-1 min-w-0">
+      <div className="text-[14px] font-medium" style={{ color: C.ink }}>{label}</div>
+      <div className="text-[12px]" style={{ color: C.muted }}>{hint}</div>
+    </div>
+    <div className="flex gap-1 shrink-0">
+      {[1, 2, 3, 4, 5].map((n) => (
+        <button key={n} onClick={() => onChange(n)} className="tap" aria-label={`${label} ${n} of 5`}>
+          <Star size={20} strokeWidth={1.6}
+            color={n <= value ? C.gold : C.line} fill={n <= value ? C.gold : "transparent"} />
+        </button>
+      ))}
+    </div>
+  </div>
+);
+
+
 function GuestReview({ token }) {
   const [state, setState] = useState("loading");   // loading | form | done | invalid | used | expired
   const [info, setInfo] = useState(null);          // the token row
@@ -6611,32 +6683,6 @@ function GuestReview({ token }) {
     setState("done");
   };
 
-  const ReviewPage = ({ children }) => (
-    <div className="flex-1 overflow-y-auto hidescroll px-6 py-8" style={{ scrollbarWidth: "none" }}>
-      <div className="flex items-center gap-2.5 mb-7">
-        <BrandMark size={40} />
-        <div>
-          <div className="text-[16px] font-semibold leading-none" style={{ color: C.ink }}>Bhutan Tourism Hub</div>
-          <div className="text-[10px] font-semibold tracking-[.14em] uppercase mt-1" style={{ color: C.goldText }}>Verified guest review</div>
-        </div>
-      </div>
-      {children}
-    </div>
-  );
-
-  const Message = ({ Icon, title, body: b, tone }) => (
-    <ReviewPage>
-      <div className="rounded-2xl p-6 text-center" style={{ background: C.card, border: `1px solid ${C.line}` }}>
-        <div className="w-14 h-14 rounded-2xl flex items-center justify-center mx-auto mb-3"
-          style={{ background: tone === "good" ? C.pineSoft : C.goldSoft }}>
-          <Icon size={26} color={tone === "good" ? C.pine : C.gold} />
-        </div>
-        <div className="text-[17px] font-semibold" style={{ color: C.ink }}>{title}</div>
-        <p className="text-[14px] leading-relaxed mt-2" style={{ color: C.muted }}>{b}</p>
-      </div>
-    </ReviewPage>
-  );
-
   if (state === "loading") return (
     <ReviewPage><div className="flex items-center justify-center gap-2 py-16 text-[14px]" style={{ color: C.muted }}>
       <Loader2 size={18} className="animate-spin" /> Opening your review…
@@ -6654,36 +6700,6 @@ function GuestReview({ token }) {
 
   if (state === "done") return <Message Icon={Check} title="Thank you"
     body={`Your review of ${talent?.name || "your guide"} is published. It becomes part of their professional record and helps other travellers choose well.`} tone="good" />;
-
-  const BigStars = ({ value, onChange }) => (
-    <div className="flex justify-center gap-2">
-      {[1, 2, 3, 4, 5].map((n) => (
-        <button key={n} onClick={() => onChange(n)} className="tap" aria-label={`${n} out of 5`}>
-          <Star size={44} strokeWidth={1.4}
-            color={n <= value ? C.gold : C.line}
-            fill={n <= value ? C.gold : "transparent"}
-            style={{ transition: "transform .12s", transform: n === value ? "scale(1.08)" : "none" }} />
-        </button>
-      ))}
-    </div>
-  );
-
-  const SmallStars = ({ label, hint, value, onChange }) => (
-    <div className="flex items-center gap-3 py-2.5">
-      <div className="flex-1 min-w-0">
-        <div className="text-[14px] font-medium" style={{ color: C.ink }}>{label}</div>
-        <div className="text-[12px]" style={{ color: C.muted }}>{hint}</div>
-      </div>
-      <div className="flex gap-1 shrink-0">
-        {[1, 2, 3, 4, 5].map((n) => (
-          <button key={n} onClick={() => onChange(n)} className="tap" aria-label={`${label} ${n} of 5`}>
-            <Star size={20} strokeWidth={1.6}
-              color={n <= value ? C.gold : C.line} fill={n <= value ? C.gold : "transparent"} />
-          </button>
-        ))}
-      </div>
-    </div>
-  );
 
   const wordFor = [null, "Poor", "Fair", "Good", "Great", "Excellent"][rating] || "";
 
