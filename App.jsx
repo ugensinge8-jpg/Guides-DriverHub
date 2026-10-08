@@ -63,7 +63,7 @@ const CLOUD = Boolean(supabase);
   } catch (e) {}
 })();
 const DEMO_MODE = false;   // set true only for local demos without a database
-const BUILD = "BUILD 46 — 8 Oct";   // bump every deploy; shown at the top of the welcome screen
+const BUILD = "BUILD 47 — 8 Oct";   // bump every deploy; shown at the top of the welcome screen
 // which device someone is on — shown beside the build so a screenshot tells us both
 const DEVICE = (() => {
   try {
@@ -178,7 +178,7 @@ const LANG_OPTIONS = ["English", "Hindi", "Japanese", "Mandarin", "German", "Fre
 class ErrorBoundary extends React.Component {
   constructor(p) { super(p); this.state = { err: null, info: null }; }
   static getDerivedStateFromError(err) { return { err }; }
-  componentDidCatch(err, info) { this.setState({ info }); console.error("App crashed:", err, info); }
+  componentDidCatch(err, info) { this.setState({ info }); console.error("App crashed:", err, info); try { window.__bthSplashDone && window.__bthSplashDone(); } catch (e) {} }
   render() {
     if (!this.state.err) return this.props.children;
     const msg = String(this.state.err?.message || this.state.err);
@@ -242,6 +242,9 @@ export default function App() {
   const [comments, setComments] = useState([]);
   const [session, setSession] = useState(null);
   const [myProfile, setMyProfile] = useState(null);   // null=loading · false=none · object=exists
+  const [sessionKnown, setSessionKnown] = useState(!CLOUD);   // getSession has answered (signed in or not)
+  const [splashTimedOut, setSplashTimedOut] = useState(false);
+  useEffect(() => { const t = setTimeout(() => setSplashTimedOut(true), 12000); return () => clearTimeout(t); }, []);
   const [profileTick, setProfileTick] = useState(0);
   const [dirTick, setDirTick] = useState(0);
   const [dms, setDms] = useState([]);
@@ -518,7 +521,7 @@ export default function App() {
   useEffect(() => {
     if (!CLOUD) return;
     loadProfiles();
-    supabase.auth.getSession().then(({ data }) => setSession(data.session || null));
+    supabase.auth.getSession().then(({ data }) => { setSession(data.session || null); setSessionKnown(true); }).catch(() => setSessionKnown(true));
     const { data: sub } = supabase.auth.onAuthStateChange((_e, sn) => setSession(sn));
     return () => sub.subscription.unsubscribe();
   }, []);
@@ -1039,6 +1042,11 @@ export default function App() {
     createTripFromJob({ id: `${listing.id}_${applicant.talentId}`, toTalentId: applicant.talentId, operator: listing.operator, title: listing.title, start: listing.start, end: listing.end });
   };
 
+  // The HTML splash (index.html) stays up until the first real screen is known: the review form, the sign-in
+  // screen (no session), or the app itself (session + profile loaded). A 12 s cap makes sure it never sticks.
+  const splashReady = Boolean(reviewToken) || splashTimedOut || (sessionKnown && (!session || myProfile !== null));
+  useEffect(() => { if (splashReady && typeof window !== "undefined" && window.__bthSplashDone) window.__bthSplashDone(); }, [splashReady]);
+
   if (reviewToken) {
     return (
       <ErrorBoundary>
@@ -1296,12 +1304,32 @@ function Login({ onPick, session, myProfile, onAuthed, onBusy, invitePreview, at
 }
 
 /* The dzong mark — drawn in code, so the logo never depends on a file loading */
-function BrandMark({ size = 40, label = "", className = "" }) {
+function BrandMark({ size = 40, label = "", className = "", tile = false }) {
+  // The hub's mark: a sun disc holding two ridges. `tile` draws it on the pine squircle (OS icon style);
+  // the default is the bare disc, which sits on white the way the splash does.
+  const uid = tile ? "bthT" : "bthM";
   return (
     <svg viewBox="0 0 1024 1024" width={size} height={size} role={label ? "img" : undefined}
       aria-label={label || undefined} aria-hidden={label ? undefined : "true"}
       className={`shrink-0 select-none ${className}`} style={{ width: size, height: size, display: "block" }}>
-      <defs> <linearGradient id="bthMarkBg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="#2A4A38"/><stop offset="1" stopColor="#14241A"/></linearGradient> </defs> <rect width="1024" height="1024" rx="228" fill="url(#bthMarkBg)"/> <polygon points="255.8,821.88 768.2,821.88 734.04,504.68 289.96,504.68" fill="#F2EADB"/> <polygon points="512,821.88 768.2,821.88 734.04,504.68 512,504.68" fill="#DCD0BA"/> <polygon points="289.96,504.68 734.04,504.68 742.58,577.88 281.42,577.88" fill="#8E3B2C"/> <polygon points="233.84,504.68 790.16,504.68 695,433.92 329,433.92" fill="#D6A23E"/> <polygon points="512,504.68 790.16,504.68 695,433.92 512,433.92" fill="#B6852D"/> <rect x="399.76" y="370.48" width="224.48" height="63.44" rx="0" fill="#8E3B2C"/> <polygon points="355.84,370.48 668.16,370.48 592.52,314.36 431.48,314.36" fill="#D6A23E"/> <polygon points="512,370.48 668.16,370.48 592.52,314.36 512,314.36" fill="#B6852D"/> <rect x="485.16" y="272.88" width="53.68" height="41.48" rx="0" fill="#D6A23E"/> <polygon points="477.84,277.76 546.16,277.76 512,189.92" fill="#D6A23E"/>
+      <defs>
+        <linearGradient id={uid + "Au"} x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="#F3E8CF" /><stop offset="1" stopColor="#DDB45A" /></linearGradient>
+        {tile && <linearGradient id={uid + "Bg"} x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="#2C4F3B" /><stop offset="1" stopColor="#142619" /></linearGradient>}
+        <clipPath id={uid + "Disc"}><circle cx="512" cy="512" r={tile ? 310 : 420} /></clipPath>
+      </defs>
+      {tile && <rect width="1024" height="1024" rx="228" fill={`url(#${uid}Bg)`} />}
+      <circle cx="512" cy="512" r={tile ? 310 : 420} fill={`url(#${uid}Au)`} />
+      {tile ? (
+        <g clipPath={`url(#${uid}Disc)`}>
+          <path d="M140 840 L372 470 L470 600 L586 418 L900 840 Z" fill="#1F3A2B" />
+          <path d="M120 900 L420 660 L548 780 L690 620 L920 900 Z" fill="#0F1F16" />
+        </g>
+      ) : (
+        <g clipPath={`url(#${uid}Disc)`}>
+          <path d="M10 960 L323 458 L455 634 L612 388 L1040 960 Z" fill="#2C4F3B" />
+          <path d="M-20 1040 L387 715 L560 878 L753 661 L1064 1040 Z" fill="#16281E" />
+        </g>
+      )}
     </svg>
   );
 }

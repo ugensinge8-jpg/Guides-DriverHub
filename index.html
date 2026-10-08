@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <meta name="theme-color" content="#21402F" />
+    <meta name="theme-color" content="#FFFFFF" />
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
     <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png" />
     <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
@@ -13,6 +13,10 @@
     <meta name="apple-mobile-web-app-title" content="Bhutan Tourism Hub" />
     <title>Bhutan Tourism Hub — Verified guides &amp; drivers in Bhutan</title>
     <meta name="description" content="Bhutan's verified marketplace for licensed guides and drivers. Real reviews from real guests, tied to real trips." />
+
+    <!-- Open the connection to the database while the app is still downloading: saves a round trip on slow links -->
+    <link rel="preconnect" href="https://nxnsdnayzimzfiwjrkvv.supabase.co" crossorigin />
+    <link rel="dns-prefetch" href="https://nxnsdnayzimzfiwjrkvv.supabase.co" />
 
     <!-- Link preview (WhatsApp, Messenger, iMessage, Facebook, LinkedIn) -->
     <meta property="og:type" content="website" />
@@ -34,8 +38,62 @@
     <meta name="twitter:image" content="https://bhutantourismhub.com/preview.png" />
 
     <link rel="canonical" href="https://bhutantourismhub.com/" />
+
+    <!-- Splash: inline, no network, no JavaScript needed to draw. It is on screen from the first byte,
+         so on a slow connection people see the mark assembling instead of a white page while the app downloads. -->
+    <style>
+      html, body { background: #FFFFFF; }
+      #bth-splash { position: fixed; inset: 0; z-index: 9999; background: #FFFFFF; display: flex; flex-direction: column; align-items: center; justify-content: center;
+        font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", Inter, "Helvetica Neue", system-ui, "Segoe UI", Roboto, sans-serif; -webkit-font-smoothing: antialiased;
+        padding-bottom: 8vh; transition: opacity .26s ease; }
+      #bth-splash.out { opacity: 0; pointer-events: none; }
+      #bth-splash svg { width: 128px; height: 128px; display: block; overflow: visible; }
+      #bth-splash .s-sun { transform-origin: 120px 120px; animation: sSun .34s cubic-bezier(.2,.7,.2,1) both; }
+      #bth-splash .s-back { animation: sRise .42s cubic-bezier(.2,.8,.2,1) .26s both; }
+      #bth-splash .s-front { animation: sRise .42s cubic-bezier(.2,.8,.2,1) .48s both; }
+      #bth-splash .s-name { margin-top: 22px; font-size: 20px; font-weight: 700; letter-spacing: -.022em; color: #1D1D1F; animation: sFade .32s ease .78s both; }
+      #bth-splash .s-sub { margin-top: 6px; font-size: 11px; font-weight: 500; letter-spacing: .22em; color: #626269; animation: sFade .32s ease .9s both; }
+      #bth-splash .s-slow { position: absolute; bottom: calc(28px + env(safe-area-inset-bottom)); font-size: 12px; color: #626269; opacity: 0; transition: opacity .4s ease; }
+      #bth-splash.slow .s-slow { opacity: 1; }
+      #bth-splash.waiting .s-sun { animation: sBreathe 1.8s ease-in-out 1.3s infinite; }
+      @keyframes sSun { from { opacity: 0; transform: scale(.9); } to { opacity: 1; transform: scale(1); } }
+      @keyframes sRise { from { opacity: 0; transform: translateY(26px); } to { opacity: 1; transform: translateY(0); } }
+      @keyframes sFade { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+      @keyframes sBreathe { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.035); } }
+      @media (prefers-reduced-motion: reduce) { #bth-splash * { animation-duration: .001ms !important; animation-delay: 0s !important; } }
+    </style>
   </head>
   <body>
+    <div id="bth-splash" aria-hidden="true">
+      <svg viewBox="0 0 240 240" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <linearGradient id="sAu" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#F3E8CF"/><stop offset="1" stop-color="#DDB45A"/></linearGradient>
+          <clipPath id="sDisc"><circle cx="120" cy="120" r="100"/></clipPath>
+        </defs>
+        <circle class="s-sun" cx="120" cy="120" r="100" fill="url(#sAu)"/>
+        <g clip-path="url(#sDisc)">
+          <path class="s-back" d="M0.5 226.7 L75.0 107.1 L106.4 149.0 L143.8 90.5 L245.7 226.7 Z" fill="#2C4F3B"/>
+          <path class="s-front" d="M-6.7 245.7 L90.2 168.3 L131.4 207.1 L177.4 155.5 L251.4 245.7 Z" fill="#16281E"/>
+        </g>
+      </svg>
+      <div class="s-name">Bhutan Tourism Hub</div>
+      <div class="s-sub">KUZUZANGPO</div>
+      <div class="s-slow">Slow connection — still loading</div>
+    </div>
+    <script>
+      // The app calls window.__bthSplashDone() once its first real screen is ready.
+      // The splash stays at least 1.15 s so the mark finishes assembling, then fades out.
+      (function () {
+        var el = document.getElementById("bth-splash"), t0 = Date.now(), MIN = 1150, done = false;
+        setTimeout(function () { if (el && !done) el.classList.add("waiting"); }, 1200);
+        setTimeout(function () { if (el && !done) el.classList.add("slow"); }, 6000);
+        window.__bthSplashDone = function () {
+          if (done || !el) return; done = true;
+          var wait = Math.max(0, MIN - (Date.now() - t0));
+          setTimeout(function () { el.classList.add("out"); setTimeout(function () { if (el.parentNode) el.parentNode.removeChild(el); }, 300); }, wait);
+        };
+      })();
+    </script>
     <div id="root"></div>
     <script type="module" src="/main.jsx"></script>
   </body>
