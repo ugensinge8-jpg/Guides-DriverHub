@@ -64,7 +64,7 @@ const CLOUD = Boolean(supabase);
   } catch (e) {}
 })();
 const DEMO_MODE = false;   // set true only for local demos without a database
-const BUILD = "BUILD 48 — 8 Oct";   // bump every deploy; shown at the top of the welcome screen
+const BUILD = "BUILD 49 — 9 Oct";   // bump every deploy; shown at the top of the welcome screen
 // which device someone is on — shown beside the build so a screenshot tells us both
 const DEVICE = (() => {
   try {
@@ -351,11 +351,16 @@ export default function App() {
 
   const loadProfiles = async () => {
     if (!CLOUD) return;
-    const { data, error } = await supabase.from("profiles").select("*");
+    // BUILD 49: the full directory (phone, email, licence details) is for signed-in members only.
+    // A visitor who is not signed in gets the public columns through the profiles_public view.
+    let signedIn = false;
+    try { const { data: s } = await supabase.auth.getSession(); signedIn = Boolean(s && s.session); } catch { signedIn = false; }
+    const { data, error } = await supabase.from(signedIn ? "profiles" : "profiles_public").select("*");
     if (error) { console.error("loadProfiles failed:", error.message); return; }
     if (data) { PROFILE_DIR = {}; data.forEach((p) => { PROFILE_DIR[p.id] = profileToTalent(p); }); setDirTick((t) => t + 1); }
   };
-  const reloadMe = () => { setProfileTick((t) => t + 1); loadProfiles(); };
+  // Bumping profileTick re-runs the session effect below, which reloads the directory once signed in.
+  const reloadMe = () => { setProfileTick((t) => t + 1); };
 
   /* ---- Stories (24h, then the file itself is deleted) ---- */
   const fetchStories = async () => {
@@ -530,6 +535,7 @@ export default function App() {
   useEffect(() => {
     if (!CLOUD || !session) { setMyProfile(null); return; }
     let on = true;
+    loadProfiles();   // BUILD 49: the full directory only opens once signed in, so refresh it here
     supabase.from("profiles").select("*").eq("id", session.user.id).maybeSingle()
       .then(({ data }) => { if (on) setMyProfile(data || false); });
     return () => { on = false; };
@@ -6568,17 +6574,14 @@ function GuestReview({ token }) {
     let on = true;
     (async () => {
       if (!CLOUD) { setState("invalid"); return; }
-      const { data, error } = await supabase
-        .from("review_tokens").select("*").eq("token", token).maybeSingle();
+      // BUILD 49: one database function answers what this link is for. It never returns the
+      // guest's email or phone, and the token table itself is no longer readable from here.
+      const { data, error } = await supabase.rpc("review_token_peek", { p_token: token });
       if (!on) return;
-      if (error || !data) { setState("invalid"); return; }
-      if (data.used_at) { setState("used"); return; }
-      if (new Date(data.expires_at) < new Date()) { setState("expired"); return; }
-      setInfo(data);
-      const { data: prof } = await supabase
-        .from("profiles").select("*").eq("id", data.talent_id).maybeSingle();
-      if (!on) return;
-      if (prof) setTalent(profileToTalent(prof));
+      if (error || !data || !data.state) { setState("invalid"); return; }
+      if (data.state !== "ok") { setState(data.state); return; }   // "used" | "expired" | "invalid"
+      setInfo(data.token);
+      if (data.talent) setTalent(profileToTalent(data.talent));
       setState("form");
     })();
     return () => { on = false; };
@@ -6587,27 +6590,24 @@ function GuestReview({ token }) {
   const submit = async () => {
     if (!rating) { setErr("Please choose an overall rating."); return; }
     setBusy(true); setErr(null);
-    const { error } = await supabase.from("guest_reviews").insert({
-      token,
-      talent_id: info.talent_id,
-      trip_id: info.trip_id || null,
-      guest_name: info.guest_name || null,
-      guest_country: country.trim() || null,
-      rating,
-      knowledge: knowledge || null,
-      care: care || null,
-      communication: comms || null,
-      body: body.trim() || null,
-      trip_label: info.trip_label || null,
+    // BUILD 49: the review is saved and the link spent in one database step (the token row is
+    // locked while it runs), so a second tap or a second device gets "used" and writes nothing.
+    const { data, error } = await supabase.rpc("submit_guest_review", {
+      p_token: token,
+      p_rating: rating,
+      p_knowledge: knowledge || null,
+      p_care: care || null,
+      p_communication: comms || null,
+      p_body: body.trim() || null,
+      p_country: country.trim() || null,
     });
-    if (error) {
-      setBusy(false);
+    setBusy(false);
+    if (error || !data || !data.ok) {
+      if (data && data.state === "used") { setState("used"); return; }
+      if (data && data.state === "expired") { setState("expired"); return; }
       setErr("We couldn't save your review. The link may already have been used.");
       return;
     }
-    // consume the token so the link cannot be reused
-    await supabase.from("review_tokens").update({ used_at: new Date().toISOString() }).eq("token", token);
-    setBusy(false);
     setState("done");
   };
 
