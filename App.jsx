@@ -63,7 +63,7 @@ const CLOUD = Boolean(supabase);
   } catch (e) {}
 })();
 const DEMO_MODE = false;   // set true only for local demos without a database
-const BUILD = "BUILD 44 — 8 Oct";   // bump every deploy; shown at the top of the welcome screen
+const BUILD = "BUILD 46 — 8 Oct";   // bump every deploy; shown at the top of the welcome screen
 // which device someone is on — shown beside the build so a screenshot tells us both
 const DEVICE = (() => {
   try {
@@ -833,7 +833,7 @@ export default function App() {
       arrivalPoint: tr.arrival_point || null,
       visaStatus: tr.visa_status || "not_started", sdfStatus: tr.sdf_status || "not_started",
       permitsStatus: tr.permits_status || "not_needed", hotelsStatus: tr.hotels_status || "not_started",
-      insuranceOk: !!tr.insurance_ok,
+      insuranceOk: !!tr.insurance_ok, nightTowns: (tr.night_towns && typeof tr.night_towns === "object") ? tr.night_towns : {},
       guestCount: tr.guest_count || null, guestNotes: tr.guest_notes || null,
       emergencyName: tr.emergency_name || null, emergencyPhone: tr.emergency_phone || null,
       members: (M || []).filter((m) => m.trip_id === tr.id).map((m) => {
@@ -2849,8 +2849,59 @@ function TripHub({ user, meId, trip, actions, onBack }) {
   const tripDone = state === "active" || state === "completed";
   const canInvite = tripDone && (user.kind === "operator" || user.kind === "admin");
   const isTalent = user.kind === "guide" || user.kind === "driver";
-  const [hotelsOpen, setHotelsOpen] = useState(() => (trip.hotelsStatus || "not_started") === "in_progress");
+  const [section, setSection] = useState(null);   // tasks | hotels | guests | crew | itinerary | details
   if (chatOpen) return <TripChatView user={user} meId={meId} trip={trip} actions={actions} onBack={() => setChatOpen(false)} />;
+  if (section && !isTalent) {
+    const titles = { tasks: "Operator tasks", hotels: "Hotels", guests: "Guests", crew: "Crew", itinerary: "Itinerary", details: "Trip details" };
+    return (
+      <div className="pb-6 fade">
+        <div className="h-14 px-4 flex items-center gap-3" style={{ borderBottom: `1px solid ${C.lineSoft}` }}>
+          <button onClick={() => setSection(null)} className="tap w-9 h-9 rounded-full flex items-center justify-center" style={{ border: `1px solid ${C.line}`, background: C.card }} aria-label="Back to trip"><ChevronLeft size={19} color={C.ink} /></button>
+          <div className="flex-1 min-w-0"><div className="text-[15px] font-semibold truncate" style={{ color: C.ink }}>{titles[section]}</div>
+            <div className="text-[12px] truncate" style={{ color: C.muted }}>{trip.title} · {fmtDate(trip.start)} – {fmtDate(trip.end)}</div></div>
+        </div>
+        <div className="px-5 py-4">
+          {section === "tasks" && <TripEssentials trip={trip} canEdit actions={actions} show="tasks" onOpenHotels={() => setSection("hotels")} />}
+          {section === "details" && <TripEssentials trip={trip} canEdit actions={actions} show="details" />}
+          {section === "hotels" && <TripHotels trip={trip} user={user} actions={actions} headless />}
+          {section === "guests" && <GuestRoster trip={trip} canEdit actions={actions} />}
+          {section === "itinerary" && <ItineraryBuilder trip={trip} canEdit onChanged={actions.reloadTrips} embedded />}
+          {section === "crew" && (<>
+            <div className="rounded-2xl divide-y mb-5" style={{ background: C.card, border: `1px solid ${C.line}`, borderColor: C.line }}>
+              {(trip.members || []).length === 0 && <div className="px-4 py-3 text-[13px]" style={{ color: C.muted }}>No crew on this trip yet.</div>}
+              {(trip.members || []).map((m) => (
+                <div key={m.id} className="flex items-center gap-3 px-4 py-3">
+                  <Avatar initials={m.initials} size={36} />
+                  <div className="flex-1"><div className="text-[14px] font-semibold" style={{ color: C.ink }}>{m.name}</div>
+                    <div className="text-[12px] capitalize" style={{ color: C.muted }}>{String(m.roleInTrip || "crew").replace("_", " ")}</div></div>
+                </div>
+              ))}
+            </div>
+            <CrewInvites trip={trip} actions={actions} />
+          </>)}
+        </div>
+      </div>
+    );
+  }
+  // one-line summaries for the section rows
+  const notReady = CHECKLIST.filter((c) => !["done", "not_needed"].includes(trip[c.key] || "not_started"));
+  const daysOut = trip.start ? Math.ceil((new Date(trip.start + "T00:00") - Date.now()) / 86400e3) : null;
+  const urgent = daysOut !== null && daysOut <= 21 && daysOut >= 0 && notReady.length > 0;
+  const stays = isTalent ? [] : tripStays(trip);
+  const staysUnset = stays.filter((st) => !st.townKey).reduce((n, st) => n + st.nights, 0);
+  const nightsTotal = trip.start && trip.end ? nightsBetween(trip.start, trip.end) : 0;
+  const plannedDays = (trip.itinerary || []).length;
+  const hotelSummary = { not_started: "Not started", in_progress: "In progress", done: "All nights confirmed", not_needed: "Not needed" }[trip.hotelsStatus || "not_started"];
+  const rows = [
+    { id: "tasks", Icon: CheckCheck, title: "Operator tasks", sub: notReady.length ? `${CHECKLIST.length - notReady.length} of ${CHECKLIST.length} done · ${notReady.map((c) => c.label.toLowerCase()).join(", ")}` : "All done", tone: notReady.length ? (urgent ? "warn" : "todo") : "ok" },
+    { id: "hotels", Icon: BedDouble, title: "Hotels", sub: !nightsTotal ? "Set the trip dates first" : staysUnset ? `${nightsTotal} nights · ${staysUnset} without a town yet` : `${nightsTotal} nights · ${hotelSummary}`, tone: trip.hotelsStatus === "done" ? "ok" : staysUnset ? "todo" : "neutral" },
+    { id: "guests", Icon: Users, title: "Guests", sub: (trip.guests || []).length ? `${trip.guests.length} listed${trip.guestCount && trip.guestCount !== trip.guests.length ? ` of ${trip.guestCount}` : ""}` : "No one listed yet", tone: (trip.guests || []).length ? "neutral" : "todo" },
+    { id: "crew", Icon: UserCheck, title: "Crew", sub: (trip.members || []).length ? (trip.members || []).map((m) => `${m.name || talentById(m.id)?.name || "Crew"} · ${String(m.roleInTrip || m.role || "crew").replace("_", " ")}`).join(", ") : "No crew yet — invite a guide and a driver", tone: (trip.members || []).length ? "neutral" : "todo" },
+    { id: "itinerary", Icon: CalendarDays, title: "Itinerary", sub: !plannedDays ? "No days planned yet" : nightsTotal ? `${plannedDays} of ${nightsTotal + 1} days planned` : `${plannedDays} days planned`, tone: plannedDays && nightsTotal && plannedDays >= nightsTotal + 1 ? "ok" : plannedDays ? "neutral" : "todo" },
+    { id: "details", Icon: Compass, title: "Trip details", sub: trip.arrivalFlight ? `Arrives ${trip.arrivalFlight}${trip.departureFlight ? ` · departs ${trip.departureFlight}` : ""}` : "Flights, arrival point, emergency contact", tone: trip.arrivalFlight ? "neutral" : "todo" },
+  ];
+  const toneBg = { ok: C.successSoft, todo: C.goldSoft, warn: C.maroonSoft, neutral: C.pineSoft };
+  const toneFg = { ok: C.success, todo: C.goldText, warn: C.maroon, neutral: C.pine };
   return (
     <div className="pb-6 fade">
       <div className="h-14 px-4 flex items-center gap-3" style={{ borderBottom: `1px solid ${C.lineSoft}` }}>
@@ -2861,11 +2912,27 @@ function TripHub({ user, meId, trip, actions, onBack }) {
       </div>
 
       <div className="px-5 py-4">
-        {isTalent
-          ? <CrewBrief trip={trip} user={user} />
-          : <TripEssentials trip={trip} canEdit actions={actions} onOpenHotels={() => setHotelsOpen(true)} />}
-        {!isTalent && <GuestRoster trip={trip} canEdit actions={actions} />}
-        {!isTalent && <TripHotels trip={trip} user={user} actions={actions} open={hotelsOpen} onToggle={() => setHotelsOpen((v) => !v)} />}
+        {isTalent && <CrewBrief trip={trip} user={user} />}
+        {!isTalent && urgent && (
+          <div className="rounded-xl px-3.5 py-3 mb-3 flex gap-2.5" style={{ background: C.maroonSoft }}>
+            <ShieldAlert size={16} color={C.maroon} className="shrink-0 mt-0.5" />
+            <p className="text-[13px] leading-snug" style={{ color: C.maroon }}>Departs in {daysOut} {daysOut === 1 ? "day" : "days"} and {notReady.length} {notReady.length === 1 ? "item isn't" : "items aren't"} ready: {notReady.map((c) => c.label).join(", ")}.</p>
+          </div>
+        )}
+        {!isTalent && (
+          <div className="rounded-2xl overflow-hidden mb-4" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+            {rows.map((r, i) => (
+              <button key={r.id} onClick={() => setSection(r.id)} className="tap w-full text-left px-4 py-3 flex items-center gap-3" style={{ borderTop: i ? `1px solid ${C.lineSoft}` : "none" }}>
+                <div className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0" style={{ background: toneBg[r.tone] }}><r.Icon size={16} color={toneFg[r.tone]} /></div>
+                <div className="flex-1 min-w-0">
+                  <div className="text-[14px] font-semibold" style={{ color: C.ink }}>{r.title}</div>
+                  <div className="text-[12px] truncate" style={{ color: r.tone === "warn" ? C.maroon : C.muted }}>{r.sub}</div>
+                </div>
+                <ChevronLeft size={16} color={C.muted} style={{ transform: "rotate(180deg)" }} />
+              </button>
+            ))}
+          </div>
+        )}
 
         {canInvite && (
           <button onClick={() => setInviting(true)}
@@ -2904,8 +2971,8 @@ function TripHub({ user, meId, trip, actions, onBack }) {
         {inviting && <ReviewInvite user={user} trip={trip} onClose={() => setInviting(false)} />}
         {askingOperator && <OperatorInvite user={user} trip={trip} onClose={() => setAskingOperator(false)} />}
 
-        <SectionLabel>Crew</SectionLabel>
-        <div className="rounded-2xl divide-y mb-5" style={{ background: C.card, border: `1px solid ${C.line}`, borderColor: C.line }}>
+        {isTalent && <SectionLabel>Crew</SectionLabel>}
+        {isTalent && <div className="rounded-2xl divide-y mb-5" style={{ background: C.card, border: `1px solid ${C.line}`, borderColor: C.line }}>
           {(trip.members || []).map((m) => (
             <div key={m.id} className="flex items-center gap-3 px-4 py-3">
               <Avatar initials={m.initials} size={36} />
@@ -2914,15 +2981,8 @@ function TripHub({ user, meId, trip, actions, onBack }) {
               {m.id === meId && <span className="text-[11px] font-semibold rounded-full px-2 py-0.5" style={{ background: C.goldSoft, color: C.goldText }}>You</span>}
             </div>
           ))}
-        </div>
+        </div>}
 
-        {!isTalent && <CrewInvites trip={trip} actions={actions} />}
-
-        {!isTalent && (
-          <div className="mb-5">
-            <ItineraryBuilder trip={trip} canEdit onChanged={actions.reloadTrips} />
-          </div>
-        )}
 
         <SectionLabel trailing={(trip.chat?.messages || []).length ? `${trip.chat.messages.length} messages` : ""}>Trip chat</SectionLabel>
         <button type="button" onClick={() => setChatOpen(true)} className="tap w-full text-left rounded-xl px-4 py-3.5 flex items-center gap-3" style={{ background: C.card, border: `1px solid ${C.line}` }}>
@@ -7561,7 +7621,7 @@ function EnquiryForm({ user, enquiry, actions, onBack, onSaved }) {
 /* ========================================================================== */
 /*  ITINERARY BUILDER — operator adds the day-by-day plan                      */
 /* ========================================================================== */
-function ItineraryBuilder({ trip, canEdit, onChanged }) {
+function ItineraryBuilder({ trip, canEdit, onChanged, embedded }) {
   const [days, setDays] = useState(trip.itinerary || []);
   const [adding, setAdding] = useState(false);
   const [title, setTitle] = useState("");
@@ -7612,10 +7672,12 @@ function ItineraryBuilder({ trip, canEdit, onChanged }) {
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-3">
-        <div className="text-[12px] font-semibold tracking-[.14em] uppercase" style={{ color: C.goldText }}>Itinerary</div>
-        {nights && <span className="text-[12px]" style={{ color: C.muted }}>{days.length}/{nights} days planned</span>}
-      </div>
+      {!embedded && (
+        <div className="flex items-center justify-between mb-3">
+          <div className="text-[12px] font-semibold tracking-[.14em] uppercase" style={{ color: C.goldText }}>Itinerary</div>
+          {nights && <span className="text-[12px]" style={{ color: C.muted }}>{days.length}/{nights} days planned</span>}
+        </div>
+      )}
 
       {days.length === 0 && !adding && (
         <div className="rounded-2xl px-5 py-6 text-center mb-3" style={{ background: C.card, border: `1px dashed ${C.line}` }}>
@@ -8057,7 +8119,7 @@ const CHECKLIST = [
     action: "hotels", linkLabel: "Manage" },
 ];
 
-function TripEssentials({ trip, canEdit, actions, onOpenHotels }) {
+function TripEssentials({ trip, canEdit, actions, onOpenHotels, show = "all" }) {
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [f, setF] = useState({
@@ -8195,7 +8257,7 @@ function TripEssentials({ trip, canEdit, actions, onOpenHotels }) {
 
   return (
     <div className="mb-4">
-      {urgent && (
+      {urgent && show !== "details" && (
         <div className="rounded-xl px-3.5 py-3 mb-3 flex gap-2.5" style={{ background: C.maroonSoft }}>
           <ShieldAlert size={16} color={C.maroon} className="shrink-0 mt-0.5" />
           <p className="text-[13px] leading-snug" style={{ color: C.maroon }}>
@@ -8206,7 +8268,7 @@ function TripEssentials({ trip, canEdit, actions, onOpenHotels }) {
       )}
 
       {/* arrival / departure */}
-      <div className="rounded-2xl overflow-hidden mb-3" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+      {show !== "tasks" && <div className="rounded-2xl overflow-hidden mb-3" style={{ background: C.card, border: `1px solid ${C.line}` }}>
         <div className="px-4 py-3 flex items-center justify-between" style={{ borderBottom: `1px solid ${C.lineSoft}` }}>
           <span className="text-[13px] font-semibold" style={{ color: C.ink }}>Arrival & departure</span>
           {canEdit && (
@@ -8264,10 +8326,10 @@ function TripEssentials({ trip, canEdit, actions, onOpenHotels }) {
             </a>
           )}
         </div>
-      </div>
+      </div>}
 
       {/* the checklist */}
-      <div className="rounded-2xl overflow-hidden" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+      {show !== "details" && <div className="rounded-2xl overflow-hidden" style={{ background: C.card, border: `1px solid ${C.line}` }}>
         <div className="px-4 py-3 flex items-center justify-between gap-3" style={{ borderBottom: `1px solid ${C.lineSoft}` }}>
           <div>
             <span className="text-[13px] font-semibold" style={{ color: C.ink }}>Operator tasks</span>
@@ -8309,7 +8371,7 @@ function TripEssentials({ trip, canEdit, actions, onOpenHotels }) {
             <div className="text-[12px]" style={{ color: C.muted }}>Required for trekking routes.</div>
           </div>
         </button>
-      </div>
+      </div>}
     </div>
   );
 }
@@ -12053,28 +12115,35 @@ const hotelTownKey = (text) => {
 const fmtNu = (n) => (n === null || n === undefined || n === "" ? "" : `Nu. ${Number(n).toLocaleString("en-IN")}`);
 const BK_WINDOW_DAYS = 400;
 
-/** Read the itinerary written by Drukpah ("… · Night in Paro (3-star)") and
- *  group consecutive nights in one town into stays. Falls back to one stay
- *  for the whole trip when the plan has no night information. */
+/** The town a hand-written day title ends in: "Paro → Thimphu" gives Thimphu; "Night in Paro (3-star)" gives Paro. */
+function dkNightFromTitle(title) {
+  const t = String(title || "");
+  const m = /Night in ([^(·]+?)\s*\(([^)]*)\)/.exec(t);
+  if (m) { const tierKey = Object.entries(DK_HOTEL).find(([k, v]) => v.toLowerCase() === m[2].trim().toLowerCase()); return { townKey: hotelTownKey(m[1]), tier: tierKey ? tierKey[0] : null }; }
+  const tail = t.includes("→") ? t.split("→").pop() : t;
+  let best = null, bestAt = -1;
+  for (const [k, v] of Object.entries(DK_TOWNS)) { const at = tail.toLowerCase().lastIndexOf(v.n.toLowerCase()); if (at > bestAt) { bestAt = at; best = k; } }
+  return { townKey: best, tier: null };
+}
+/** One entry per night of the trip, then consecutive nights in the same town grouped into stays.
+ *  Town comes from the operator's allocation (trip.nightTowns) first, then from the itinerary. */
 function tripStays(trip) {
-  const days = (trip.itinerary || []).slice().sort((a, b) => a.day - b.day);
+  const total = trip.start && trip.end ? nightsBetween(trip.start, trip.end) : 0;
+  if (total <= 0) return [];
+  const byDay = {}; (trip.itinerary || []).forEach((d) => { byDay[d.day] = d; });
   const nights = [];
-  days.forEach((d) => {
-    const m = /Night in ([^(·]+?)\s*\(([^)]*)\)/.exec(d.title || "");
-    if (!m) return;
-    const townKey = hotelTownKey(m[1]);
-    const tierKey = Object.entries(DK_HOTEL).find(([k, v]) => v.toLowerCase() === m[2].trim().toLowerCase());
-    nights.push({ date: addDays(trip.start, d.day - 1), townKey, townName: m[1].trim(), tier: tierKey ? tierKey[0] : null, day: d.day });
-  });
-  if (!nights.length) {
-    const n = nightsBetween(trip.start, trip.end);
-    return n > 0 ? [{ from: trip.start, to: trip.end, nights: n, townKey: null, townName: "", tier: null, days: [] }] : [];
+  for (let i = 0; i < total; i++) {
+    const date = addDays(trip.start, i);
+    const d = byDay[i + 1];
+    const parsed = d ? dkNightFromTitle(d.title) : { townKey: null, tier: null };
+    const townKey = (trip.nightTowns && trip.nightTowns[date]) || parsed.townKey || null;
+    nights.push({ date, townKey, tier: parsed.tier, day: i + 1 });
   }
   const stays = [];
   nights.forEach((n) => {
     const last = stays[stays.length - 1];
-    if (last && last.townName === n.townName && addDays(last.to, 0) === n.date) { last.to = addDays(n.date, 1); last.nights += 1; last.days.push(n.day); }
-    else stays.push({ from: n.date, to: addDays(n.date, 1), nights: 1, townKey: n.townKey, townName: n.townName, tier: n.tier, days: [n.day] });
+    if (last && last.townKey === n.townKey && last.to === n.date) { last.to = addDays(n.date, 1); last.nights += 1; last.days.push(n.day); if (!last.tier && n.tier) last.tier = n.tier; }
+    else stays.push({ from: n.date, to: addDays(n.date, 1), nights: 1, townKey: n.townKey, townName: n.townKey ? hotelTownName(n.townKey) : "", tier: n.tier, days: [n.day] });
   });
   return stays;
 }
@@ -12741,13 +12810,15 @@ function HotelProfile({ user, onSaved }) {
 /* ================================ OPERATOR ================================= */
 /* Hotels per stay inside a trip. Nights come from the Drukpah plan; each stay
    can hold one or more room requests. hotels_status on the trip follows along. */
-function TripHotels({ trip, user, actions, open, onToggle }) {
+function TripHotels({ trip, user, actions, open, onToggle, headless }) {
   const [bookings, setBookings] = useState(null);
   const [finding, setFinding] = useState(null);   // stay
+  const [allocating, setAllocating] = useState(false);
   const [err, setErr] = useState(null);
   const boxRef = useRef(null);
   useEffect(() => { if (open && boxRef.current) boxRef.current.scrollIntoView({ block: "start", behavior: "smooth" }); }, [open]);
-  const stays = useMemo(() => tripStays(trip), [trip.itinerary, trip.start, trip.end]);
+  const stays = useMemo(() => tripStays(trip), [trip.itinerary, trip.start, trip.end, trip.nightTowns]);
+  const unallocated = stays.filter((st) => !st.townKey).reduce((n, st) => n + st.nights, 0);
   const load = async () => {
     if (!CLOUD) { setBookings([]); return; }
     const { data, error } = await supabase.from("room_bookings").select("*").eq("trip_id", trip.id).order("check_in", { ascending: true });
@@ -12782,9 +12853,10 @@ function TripHotels({ trip, user, actions, open, onToggle }) {
 
   const pendingCount = live.filter((b) => b.status === "requested").length;
   const declinedCount = live.filter((b) => b.status === "declined").length;
+  const isOpen = headless || open;
   return (
-    <div ref={boxRef} className="rounded-2xl mb-4 overflow-hidden" style={{ background: C.card, border: `1px solid ${C.line}`, scrollMarginTop: 72 }}>
-      <button onClick={onToggle} className="tap w-full text-left px-4 py-3 flex items-center gap-3">
+    <div ref={boxRef} className={headless ? "" : "rounded-2xl mb-4 overflow-hidden"} style={headless ? undefined : { background: C.card, border: `1px solid ${C.line}`, scrollMarginTop: 72 }}>
+      {!headless && <button onClick={onToggle} className="tap w-full text-left px-4 py-3 flex items-center gap-3">
         <div className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0" style={{ background: totalNights && confirmedNights === totalNights ? C.successSoft : C.pineSoft }}>
           <BedDouble size={16} color={totalNights && confirmedNights === totalNights ? C.success : C.pine} />
         </div>
@@ -12795,8 +12867,19 @@ function TripHotels({ trip, user, actions, open, onToggle }) {
           </div>
         </div>
         {bookings === null ? <Loader2 size={16} className="animate-spin" color={C.muted} /> : <ChevronLeft size={16} color={C.muted} style={{ transform: open ? "rotate(90deg)" : "rotate(-90deg)", transition: "transform .2s" }} />}
-      </button>
-      {open && <div className="px-4 pb-4">
+      </button>}
+      {isOpen && <div className={headless ? "" : "px-4 pb-4"}>
+      {headless && <div className="text-[13px] mb-3" style={{ color: C.muted }}>{!stays.length ? "Set the trip dates to see the nights." : `${confirmedNights} of ${totalNights} nights confirmed${pendingCount ? ` · ${pendingCount} waiting` : ""}${declinedCount ? ` · ${declinedCount} declined` : ""}`}</div>}
+      {stays.length > 0 && (
+        <button onClick={() => setAllocating(true)} className="tap w-full rounded-xl px-3.5 py-3 mb-3 flex items-center gap-3 text-left" style={{ background: unallocated ? C.goldSoft : C.card, border: `1px solid ${unallocated ? "transparent" : C.line}` }}>
+          <CalendarDays size={16} color={unallocated ? C.goldText : C.pine} className="shrink-0" />
+          <div className="flex-1 min-w-0">
+            <div className="text-[13px] font-semibold" style={{ color: unallocated ? C.goldText : C.ink }}>{unallocated ? `${unallocated} ${unallocated === 1 ? "night has" : "nights have"} no town yet` : "Nights by town"}</div>
+            <div className="text-[12px]" style={{ color: unallocated ? C.goldText : C.muted }}>{unallocated ? "Set where the group sleeps each night, then find a hotel per stay." : "Change where the group sleeps on any night."}</div>
+          </div>
+          <ChevronLeft size={15} color={unallocated ? C.goldText : C.muted} style={{ transform: "rotate(180deg)" }} />
+        </button>
+      )}
 
       {stays.map((s, i) => {
         const mine = live.filter((b) => b.checkIn < s.to && b.checkOut > s.from);
@@ -12809,7 +12892,7 @@ function TripHotels({ trip, user, actions, open, onToggle }) {
                 <BedDouble size={16} color={confirmed || requested ? "#fff" : C.muted} />
               </div>
               <div className="flex-1 min-w-0">
-                <div className="text-[14px] font-semibold truncate" style={{ color: C.ink }}>{s.townName || "Whole trip"}{s.tier ? <span className="font-normal" style={{ color: C.muted }}> · {DK_HOTEL[s.tier]}</span> : null}</div>
+                <div className="text-[14px] font-semibold truncate" style={{ color: s.townKey ? C.ink : C.goldText }}>{s.townName || "Town not set"}{s.tier ? <span className="font-normal" style={{ color: C.muted }}> · {DK_HOTEL[s.tier]}</span> : null}</div>
                 <div className="text-[12px]" style={{ color: C.muted }}>{fmtNights(s.from, s.to)}{s.days.length ? ` · day${s.days.length > 1 ? "s" : ""} ${s.days[0]}${s.days.length > 1 ? `–${s.days[s.days.length - 1]}` : ""}` : ""}</div>
               </div>
               {!confirmed && (
@@ -12843,7 +12926,47 @@ function TripHotels({ trip, user, actions, open, onToggle }) {
       {err && <div className="text-[13px] mt-2 rounded-lg px-3 py-2" style={{ background: C.maroonSoft, color: C.maroon }}>{err}</div>}
       </div>}
       {finding && <FindHotelSheet trip={trip} stay={finding} user={user} onClose={() => setFinding(null)} onSent={() => { setFinding(null); load(); }} />}
+      {allocating && <NightAllocator trip={trip} actions={actions} onClose={() => setAllocating(false)} />}
     </div>
+  );
+}
+
+/* Which town on which night. Saved on the trip; the Hotels section groups nights into stays from it. */
+function NightAllocator({ trip, actions, onClose }) {
+  const total = nightsBetween(trip.start, trip.end);
+  const stays = tripStays(trip);
+  const initial = {}; stays.forEach((st) => st.days.forEach((d, i) => { initial[addDays(st.from, i)] = st.townKey || ""; }));
+  const [map, setMap] = useState(initial);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const towns = Object.entries(DK_TOWNS).filter(([, v]) => v.stay).sort((a, b) => a[1].n.localeCompare(b[1].n));
+  const field = { background: C.bg, border: `1px solid ${C.line}`, color: C.ink };
+  const save = async () => {
+    setBusy(true); setErr(null);
+    const clean = {}; Object.entries(map).forEach(([d, k]) => { if (k) clean[d] = k; });
+    const r = await actions.saveTripDetails(trip.id, { night_towns: clean });
+    setBusy(false);
+    if (!r || !r.ok) { setErr((r && r.reason) || "Couldn't save"); return; }
+    onClose();
+  };
+  const fillDown = (date, key) => { setMap((m) => { const n = { ...m, [date]: key }; let d = addDays(date, 1); while (nightsBetween(trip.start, d) < total && !n[d]) { n[d] = key; d = addDays(d, 1); } return n; }); };
+  return (
+    <Sheet onClose={onClose}>
+      <div className="text-[18px] font-semibold mb-1" style={{ color: C.ink }}>Where does the group sleep?</div>
+      <p className="text-[13px] mb-3" style={{ color: C.muted }}>Pick a town for each night. Choosing a town fills the empty nights after it, so a 3-night stay is one tap.</p>
+      {Array.from({ length: total }, (_, i) => { const date = addDays(trip.start, i);
+        return (
+          <div key={date} className="flex items-center gap-3 py-2" style={{ borderTop: i ? `1px solid ${C.lineSoft}` : "none" }}>
+            <div className="w-20 shrink-0"><div className="text-[13px] font-semibold" style={{ color: C.ink }}>Night {i + 1}</div><div className="text-[11px]" style={{ color: C.muted }}>{fmtDate(date)}</div></div>
+            <select value={map[date] || ""} onChange={(e) => fillDown(date, e.target.value)} className="flex-1 h-10 px-3 rounded-xl text-[14px]" style={field}>
+              <option value="">Not set</option>
+              {towns.map(([k, v]) => <option key={k} value={k}>{v.n}</option>)}
+            </select>
+          </div>
+        ); })}
+      {err && <div className="text-[13px] mt-3 rounded-lg px-3 py-2" style={{ background: C.maroonSoft, color: C.maroon }}>{err}</div>}
+      <div className="mt-4"><OCta busy={busy} onClick={save}>Save nights</OCta></div>
+    </Sheet>
   );
 }
 
