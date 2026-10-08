@@ -46,7 +46,8 @@ const profileToTalent = (p) => ({
 });
 const talentById = (id) => TALENT.find((t) => t.id === id) || PROFILE_DIR[id] || null;
 const initialsOf = (name) => (String(name || "?").trim().split(/\s+/).filter(Boolean).map((w) => w[0]).slice(0, 2).join("") || "?").toUpperCase();
-const isoDay = (offset = 0) => new Date(Date.now() + offset * 86400e3).toISOString().slice(0, 10);
+const localISO = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+const isoDay = (offset = 0) => { const d = new Date(); d.setHours(12, 0, 0, 0); d.setDate(d.getDate() + offset); return localISO(d); };
 const sysMsg = (text) => ({ id: uid(), senderId: null, kind: "system", body: text, photo: null, ts: Date.now() });
 
 /* ── Cloud (Supabase) ── posts are global when configured; everything falls back to local demo mode when not. */
@@ -63,7 +64,7 @@ const CLOUD = Boolean(supabase);
   } catch (e) {}
 })();
 const DEMO_MODE = false;   // set true only for local demos without a database
-const BUILD = "BUILD 47 — 8 Oct";   // bump every deploy; shown at the top of the welcome screen
+const BUILD = "BUILD 48 — 8 Oct";   // bump every deploy; shown at the top of the welcome screen
 // which device someone is on — shown beside the build so a screenshot tells us both
 const DEVICE = (() => {
   try {
@@ -782,6 +783,7 @@ export default function App() {
     title: j.title, role: j.role_needed, start: j.start_date, end: j.end_date,
     languages: j.languages || [], notes: j.notes || "", status: j.status, createdAt: new Date(j.created_at).getTime(),
     deletedAt: j.deleted_at ? new Date(j.deleted_at).getTime() : null,
+    declineReason: j.decline_reason || null, respondedAt: j.responded_at ? new Date(j.responded_at).getTime() : null,
   });
 
   const fetchJobs = async () => {
@@ -806,14 +808,15 @@ export default function App() {
   }, [dirTick]);
 
   const sendJob = async (job) => {
-    if (!CLOUD) { setJobs((j) => [{ id: uid(), status: "pending", createdAt: Date.now(), ...job }, ...j]); return; }
+    if (!CLOUD) { setJobs((j) => [{ id: uid(), status: "pending", createdAt: Date.now(), ...job }, ...j]); return { ok: true }; }
     const { error: jrErr } = await supabase.from("job_requests").insert({
       operator_id: realUserRef.current, operator_name: job.operator, talent_id: job.toTalentId,
       title: job.title, role_needed: job.role, start_date: job.start, end_date: job.end,
       languages: job.languages || [], notes: job.notes || null,
     });
-    if (jrErr) console.error("job_requests.insert failed:", jrErr.message);
+    if (jrErr) { console.error("job_requests.insert failed:", jrErr.message); return { ok: false, reason: friendlyBookingError(jrErr.message) }; }
     fetchJobs();
+    return { ok: true };
   };
 
   /* ---- Trips in the database ---- */
@@ -829,7 +832,7 @@ export default function App() {
     if (tErr) console.error("fetchTrips failed:", tErr.message);
     if (!T) return;
     setTrips(T.map((tr) => ({
-      id: tr.id, operatorId: tr.operator_id, operator: tr.operator_name, title: tr.title,
+      id: tr.id, operatorId: tr.operator_id, operator: tr.operator_name, title: tr.title, status: tr.status || "confirmed",
       start: tr.start_date, end: tr.end_date, meetingPoint: tr.meeting_point || null,
       arrivalFlight: tr.arrival_flight || null, arrivalAt: tr.arrival_at || null,
       departureFlight: tr.departure_flight || null, departureAt: tr.departure_at || null,
@@ -900,13 +903,14 @@ export default function App() {
     const { error: tmErr } = await supabase.from("trip_members").upsert({
       trip_id: tripId, user_id: job.toTalentId, display_name: t?.name || "Member", role_in_trip: t?.role || "guide",
     });
-    if (tmErr) console.error("trip_members.upsert failed:", tmErr.message);
+    if (tmErr) { console.error("trip_members.upsert failed:", tmErr.message); fetchTrips(); return { ok: false, reason: friendlyBookingError(tmErr.message) }; }
     { const { error: _e } = await supabase.from("trip_messages").insert({ trip_id: tripId, sender_id: null, kind: "system", body: `${t?.name || "A crew member"} joined the trip.` }); if (_e) console.error("trip_messages.join failed:", _e.message); }
     fetchTrips();
+    return { ok: true };
   };
 
   const createTripFromJob = (job) => {
-    if (CLOUD) { createTripCloud(job); return; }
+    if (CLOUD) { return createTripCloud(job); }
     const t = talentById(job.toTalentId);
     const talentMember = { id: job.toTalentId, name: t.name, initials: t.initials, roleInTrip: t.role };
     setTrips((prev) => {
@@ -933,10 +937,18 @@ export default function App() {
   };
 
   const setJobStatus = async (id, status) => {
-    setJobs((j) => j.map((x) => (x.id === id ? { ...x, status } : x)));
     const job = jobs.find((x) => x.id === id);
-    if (CLOUD) { const { error: jsErr } = await supabase.from("job_requests").update({ status }).eq("id", id); if (jsErr) console.error("job_requests.status failed:", jsErr.message); fetchJobs(); }
+    if (CLOUD && status === "accepted") {
+      // trip, membership and status change together, or not at all (DOUBLE_BOOKED rolls everything back)
+      const { error } = await supabase.rpc("accept_job_request", { p_id: id });
+      if (error) { console.error("accept_job_request failed:", error.message); fetchJobs(); return { ok: false, reason: friendlyBookingError(error.message) }; }
+      fetchJobs(); fetchTrips();
+      return { ok: true };
+    }
+    setJobs((j) => j.map((x) => (x.id === id ? { ...x, status } : x)));
+    if (CLOUD) { const { error: jsErr } = await supabase.from("job_requests").update({ status, responded_at: new Date().toISOString() }).eq("id", id); if (jsErr) console.error("job_requests.status failed:", jsErr.message); fetchJobs(); }
     if (status === "accepted" && job) createTripFromJob(job);
+    return { ok: true };
   };
 
   const postChat = async (tripId, msg) => {
@@ -1031,6 +1043,11 @@ export default function App() {
     fetchJobs();
   };
   const hireApplicant = async (listing, applicant) => {
+    if (CLOUD) {
+      // the trip first: if the person is already booked for these dates the database refuses and nothing else changes
+      const r = await createTripCloud({ id: `${listing.id}_${applicant.talentId}`, toTalentId: applicant.talentId, operator: listing.operator, title: listing.title, start: listing.start, end: listing.end });
+      if (!r || !r.ok) return r || { ok: false, reason: "Couldn't create the trip" };
+    }
     await setApplicant(listing.id, applicant.talentId, "hired");
     const hiredRoles = new Set((listing.applicants || []).filter((a) => a.status === "hired" || a.talentId === applicant.talentId).map((a) => talentById(a.talentId)?.role).filter(Boolean));
     const filled = listing.role === "both" ? (hiredRoles.has("guide") && hiredRoles.has("driver")) : true;
@@ -1039,7 +1056,8 @@ export default function App() {
       if (CLOUD) { const { error: jfErr } = await supabase.from("job_listings").update({ status: "filled" }).eq("id", listing.id); if (jfErr) console.error("job_listings.filled failed:", jfErr.message); }
     }
     if (CLOUD) fetchJobs();
-    createTripFromJob({ id: `${listing.id}_${applicant.talentId}`, toTalentId: applicant.talentId, operator: listing.operator, title: listing.title, start: listing.start, end: listing.end });
+    else createTripFromJob({ id: `${listing.id}_${applicant.talentId}`, toTalentId: applicant.talentId, operator: listing.operator, title: listing.title, start: listing.start, end: listing.end });
+    return { ok: true };
   };
 
   // The HTML splash (index.html) stays up until the first real screen is known: the review form, the sign-in
@@ -1427,6 +1445,9 @@ function Shell({ user, posts, jobs, trips, listings, enquiries, actions, engagem
     // direct job requests to me
     (jobs || []).filter((j) => j && !j.deletedAt && j.toTalentId === actorId && j.status === "pending").forEach((j) =>
       add({ id: `job-${j.id}`, kind: "job", who: j.operatorId, text: j.title, ts: j.createdAt }));
+    // answers to the requests I sent
+    (jobs || []).filter((j) => j && !j.deletedAt && j.operatorId === actorId && j.respondedAt && Date.now() - j.respondedAt < 7 * 86400e3 && (j.status === "accepted" || j.status === "declined")).forEach((j) =>
+      add({ id: `jobans-${j.id}-${j.status}`, kind: j.status === "accepted" ? "jobAccepted" : "jobDeclined", who: j.toTalentId, text: `${j.title} · ${fmtDate(j.start)}–${fmtDate(j.end)}${j.declineReason === "booked" ? " · booked by another operator for these dates" : ""}`, ts: j.respondedAt }));
 
     // open listings matching my role (guides see guide jobs, drivers see driver jobs)
     if (user.kind === "guide" || user.kind === "driver") {
@@ -1597,7 +1618,7 @@ function Shell({ user, posts, jobs, trips, listings, enquiries, actions, engagem
         <VerifyBanner user={user} />
         {overlay ? (
           overlay.type === "profile" ? (
-            <TalentProfile talent={talentById(overlay.talentId)} posts={posts} eng={eng}
+            <TalentProfile talent={talentById(overlay.talentId)} posts={posts} eng={eng} trips={trips} jobs={jobs}
               onOpenProfile={openProfile}
               onMessage={(id) => { setOverlay(null); setTab("chats"); setDmWith(id); }}
               canRequest={user.kind === "operator"} self={user.talentId === overlay.talentId} contactOnly={user.kind === "admin"}
@@ -1606,15 +1627,15 @@ function Shell({ user, posts, jobs, trips, listings, enquiries, actions, engagem
           ) : (
             <RequestForm talent={talentById(overlay.talentId)} operator={user.name}
               onBack={() => setOverlay({ type: "profile", talentId: overlay.talentId })}
-              onSend={(job) => { actions.sendJob(job); setOverlay(null); setTab("requests"); }} />
+              onSend={async (job) => { const r = await actions.sendJob(job); if (r && r.ok === false) return r; setOverlay(null); setTab("requests"); return r; }} />
           )
         ) : (
           <div key={tab} className="fade">
             {tab === "post" && <PostTab user={user} posts={posts} onAdd={actions.addPost} eng={eng} onOpenProfile={openProfile} />}
-            {tab === "jobs" && <JobsHub user={user} jobs={jobs} listings={listings} actions={actions} />}
+            {tab === "jobs" && <JobsHub user={user} jobs={jobs} listings={listings} actions={actions} trips={trips} />}
             {tab === "trips" && <TripsTab user={user} trips={trips} actions={actions} />}
             {tab === "chats" && <ChatsTab user={user} me={actorId} dm={dm} trips={trips} actions={actions} posts={posts} dirTick={dirTick} onOpenPost={setSharedPost} openWith={dmWith} onOpened={() => setDmWith(null)} onOpenProfile={openProfile} />}
-            {tab === "profile" && <TalentProfile talent={talentById(user.talentId)} posts={posts} eng={eng} self onSetAvailability={actions.setAvailability} onProfileSaved={actions.reloadDirectory} onOpenProfile={openProfile} onBack={null} />}
+            {tab === "profile" && <TalentProfile talent={talentById(user.talentId)} posts={posts} eng={eng} trips={trips} jobs={jobs} self onSetAvailability={actions.setAvailability} onProfileSaved={actions.reloadDirectory} onOpenProfile={openProfile} onBack={null} />}
             {tab === "bookings" && user.kind !== "hotel" && <BookingsTab user={user} enquiries={enquiries} trips={trips} actions={actions} onOpenProfile={openProfile} />}
             {tab === "hotel_home" && <HotelHome user={user} data={hotelData} setTab={setTab} posts={posts} />}
             {tab === "bookings" && user.kind === "hotel" && <HotelBookings user={user} data={hotelData} />}
@@ -1795,7 +1816,7 @@ function StatusBadge({ status, reason }) {
     approved: { bg: C.pineSoft, fg: C.pine, Icon: Check, label: "Live" },
     rejected: { bg: C.maroonSoft, fg: C.maroon, Icon: X, label: "Not approved" },
     accepted: { bg: C.pineSoft, fg: C.pine, Icon: Check, label: "Accepted" },
-    declined: { bg: C.maroonSoft, fg: C.maroon, Icon: X, label: "Declined" },
+    declined: { bg: C.maroonSoft, fg: C.maroon, Icon: X, label: reason === "booked" ? "Booked elsewhere" : "Declined" },
   }[status];
   return (
     <span className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[12px] font-semibold" style={{ background: m.bg, color: m.fg }}>
@@ -1839,6 +1860,13 @@ function prettyNumber(raw) {
 }
 
 const displayName = (t) => (t?.role === "hotel" && t.company ? t.company : t?.name);
+const friendlyBookingError = (m) => {
+  const t = String(m || "");
+  if (/DOUBLE_BOOKED/.test(t)) return t.replace(/^.*DOUBLE_BOOKED:\s*/, "Already booked: ").replace(/\s*\(.*$/, "");
+  if (/NOT_AVAILABLE/.test(t)) return "Not available on those dates. Check the calendar and pick other days.";
+  if (/no longer open/.test(t)) return "This request has already been answered.";
+  return t.replace(/^.*?:\s*/, "") || "Something went wrong";
+};
 const roleLabel = (r) => (r === "guide" ? "Guide" : r === "operator" ? "Tour Operator" : r === "hotel" ? "Hotel" : r === "admin" ? "Admin" : r === "both" ? "Guide + Driver" : "Driver");
 const listingFits = (l, kind) => l.role === kind || (l.role === "both" && (kind === "guide" || kind === "driver"));
 
@@ -2128,8 +2156,21 @@ function Composer({ talent, onAdd }) {
 }
 
 /* ========================= Jobs inbox (talent) =========================== */
-function JobsInbox({ user, jobs, onSet }) {
+function JobsInbox({ user, jobs, onSet, trips }) {
   const mine = jobs.filter((j) => !j.deletedAt && j.toTalentId === user.talentId);
+  const { blocks } = useTalentBusy({ talentId: user.talentId, self: true, trips, jobs, from: isoDay(-45), to: isoDay(400) });
+  const [busyId, setBusyId] = useState(null);
+  const [errs, setErrs] = useState({});
+  const [confirming, setConfirming] = useState(null);   // request id awaiting "accept anyway"
+  const competing = (j) => mine.filter((x) => x.id !== j.id && x.status === "pending" && rangesOverlap(j.start, j.end || j.start, x.start, x.end || x.start)).length;
+  const ownBlock = (j) => blocks.find((b) => rangesOverlap(j.start, j.end || j.start, b.from, b.to));
+  const answer = async (j, status) => {
+    if (status === "accepted" && confirming !== j.id && ownBlock(j)) { setConfirming(j.id); return; }
+    setBusyId(j.id); setErrs((e) => ({ ...e, [j.id]: null }));
+    const r = await onSet(j.id, status);
+    setBusyId(null); setConfirming(null);
+    if (r && r.ok === false) setErrs((e) => ({ ...e, [j.id]: r.reason || "Couldn't update this request." }));
+  };
   return (
     <div className="px-5 py-4">
       <SectionLabel trailing={`${mine.length} total`}>Job requests</SectionLabel>
@@ -2149,10 +2190,14 @@ function JobsInbox({ user, jobs, onSet }) {
                 {j.languages?.map((l) => <Pill key={l}>{l}</Pill>)}
               </div>
               {j.notes && <p className="text-[14px] leading-snug mt-3" style={{ color: C.ink }}>{j.notes}</p>}
+              {j.status === "pending" && competing(j) > 0 && <div className="text-[12px] mt-3 rounded-lg px-2.5 py-2" style={{ background: C.goldSoft, color: C.goldText }}>{competing(j)} other operator{competing(j) === 1 ? "" : "s"} asked for these dates too. Accepting this one declines the other{competing(j) === 1 ? "" : "s"}.</div>}
+              {j.status === "pending" && confirming === j.id && <div className="text-[12px] mt-3 rounded-lg px-2.5 py-2" style={{ background: C.maroonSoft, color: C.maroon }}>You blocked some of these days{ownBlock(j)?.label ? ` (${ownBlock(j).label})` : ""}. Accept anyway? The trip will take those days.</div>}
+              {errs[j.id] && <div className="text-[12px] mt-3 rounded-lg px-2.5 py-2" style={{ background: C.maroonSoft, color: C.maroon }}>{errs[j.id]}</div>}
+              {j.status === "declined" && j.declineReason === "booked" && <div className="text-[12px] mt-3" style={{ color: C.muted }}>Closed automatically: you confirmed another trip for these dates.</div>}
               {j.status === "pending" && (
                 <div className="flex gap-2.5 mt-3.5">
-                  <button onClick={() => onSet(j.id, "declined")} className="tap flex-1 h-11 rounded-xl text-[14px] font-semibold inline-flex items-center justify-center gap-2" style={{ background: C.card, border: `1.5px solid ${C.maroon}`, color: C.maroon }}><X size={17} /> Decline</button>
-                  <button onClick={() => onSet(j.id, "accepted")} className="tap flex-1 h-11 rounded-xl text-[14px] font-semibold inline-flex items-center justify-center gap-2" style={{ background: C.pine, color: "#fff" }}><Check size={17} /> Accept</button>
+                  <button disabled={busyId === j.id} onClick={() => answer(j, "declined")} className="tap flex-1 h-11 rounded-xl text-[14px] font-semibold inline-flex items-center justify-center gap-2" style={{ background: C.card, border: `1.5px solid ${C.maroon}`, color: C.maroon }}><X size={17} /> Decline</button>
+                  <button disabled={busyId === j.id} onClick={() => answer(j, "accepted")} className="tap flex-1 h-11 rounded-xl text-[14px] font-semibold inline-flex items-center justify-center gap-2" style={{ background: C.pine, color: "#fff" }}><Check size={17} /> Accept</button>
                 </div>
               )}
             </div>
@@ -2271,8 +2316,9 @@ function SentRequests({ operator, operatorId, jobs, actions, onOpen }) {
                       <div className="text-[12px]" style={{ color: C.muted }}>{roleLabel(t.role)} · {t.base}</div>
                     </div>
                   </button>
-                  <StatusBadge status={j.status} />
+                  <StatusBadge status={j.status} reason={j.declineReason} />
                 </div>
+                {j.status === "declined" && j.declineReason === "booked" && <div className="text-[12px] mt-2 rounded-lg px-2.5 py-1.5" style={{ background: C.maroonSoft, color: C.maroon }}>Another operator's booking was confirmed for these dates first. Pick someone else from Find talent.</div>}
                 <div className="text-[14px] font-medium mt-3" style={{ color: C.ink }}>{j.title}</div>
                 <div className="flex flex-wrap gap-2 mt-2"><Pill Icon={CalendarCheck}>{fmtDate(j.start)} – {fmtDate(j.end)}</Pill>{(j.languages || []).map((l) => <Pill key={l}>{l}</Pill>)}</div>
                 {actions?.binRequest && j.status !== "accepted" && (
@@ -2496,7 +2542,7 @@ function ModCard({ post, onApprove, onReject, eng }) {
 }
 
 /* ============================= Talent profile ============================ */
-function TalentProfile({ talent, posts, canRequest, self, contactOnly, eng, onRequest, onMessage, onSetAvailability, onOpenProfile, onBack, onProfileSaved }) {
+function TalentProfile({ talent, posts, canRequest, self, contactOnly, eng, onRequest, onMessage, onSetAvailability, onOpenProfile, onBack, onProfileSaved, trips, jobs }) {
   const t = talent;
   const live = posts.filter((p) => p.talentId === t.id && p.status === "approved").length;
   const located = posts.filter((p) => p.talentId === t.id && p.status === "approved" && p.location);
@@ -2580,7 +2626,9 @@ function TalentProfile({ talent, posts, canRequest, self, contactOnly, eng, onRe
       </div>
 
       <div className="px-5">
-        {self && t.role !== "operator" && <AvailabilityEditor talent={t} onSet={onSetAvailability} />}
+        {self && t.role !== "operator" && t.role !== "hotel" && <AvailabilityEditor talent={t} onSet={onSetAvailability} />}
+        {self && (t.role === "guide" || t.role === "driver") && <TalentCalendar talent={t} self trips={trips} jobs={jobs} />}
+        {!self && canRequest && (t.role === "guide" || t.role === "driver") && <TalentCalendar talent={t} self={false} />}
         {self && t.role !== "operator" && <ProfileSetupCard talent={t} onSaved={onProfileSaved} />}
 
         <PastTrips talent={t} self={!!self} />
@@ -2739,7 +2787,17 @@ function RequestForm({ talent, operator, onBack, onSend }) {
   const [end, setEnd] = useState("");
   const [langs, setLangs] = useState([]);
   const [notes, setNotes] = useState("");
-  const canSend = title.trim() && start && end;
+  const [sending, setSending] = useState(false);
+  const [err, setErr] = useState(null);
+  const avail = useRequestAvailability(talent, start, end);
+  const canSend = title.trim() && start && end && end >= start && avail.ok && !sending;
+  const send = async () => {
+    if (!canSend) return;
+    setSending(true); setErr(null);
+    const r = await onSend({ operator, toTalentId: talent.id, title: title.trim(), role: talent.role, start, end, languages: langs, notes: notes.trim() });
+    setSending(false);
+    if (r && r.ok === false) setErr(r.reason || "Couldn't send the request.");
+  };
 
   const toggle = (l) => setLangs((x) => (x.includes(l) ? x.filter((y) => y !== l) : [...x, l]));
 
@@ -2759,6 +2817,7 @@ function RequestForm({ talent, operator, onBack, onSend }) {
         <Label>Trip title</Label>
         <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="e.g. 7-day Western Cultural Tour" className="w-full h-12 px-4 rounded-xl text-[15px] mb-4" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }} />
 
+        <div className="mb-4"><TalentCalendar talent={talent} self={false} compact title={`${String(talent.name || "").split(" ")[0]}'s availability`} /></div>
         <div className="grid grid-cols-2 gap-3 mb-4">
           <div><Label>Start</Label><input type="date" value={start} onChange={(e) => setStart(e.target.value)} className="w-full h-12 px-3.5 rounded-xl text-[14px]" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }} /></div>
           <div><Label>End</Label><input type="date" value={end} onChange={(e) => setEnd(e.target.value)} className="w-full h-12 px-3.5 rounded-xl text-[14px]" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }} /></div>
@@ -2770,7 +2829,9 @@ function RequestForm({ talent, operator, onBack, onSend }) {
         <Label>Notes</Label>
         <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={3} placeholder="Group size, route, anything they should know." className="w-full px-3.5 py-3 rounded-xl text-[15px] leading-relaxed resize-none mb-5" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }} />
 
-        <button onClick={() => canSend && onSend({ operator, toTalentId: talent.id, title: title.trim(), role: talent.role, start, end, languages: langs, notes: notes.trim() })}
+        {avail.note && <div className="text-[13px] mb-3 rounded-xl px-3.5 py-2.5" style={{ background: avail.ok ? C.goldSoft : C.maroonSoft, color: avail.ok ? C.goldText : C.maroon }}>{avail.note}</div>}
+        {err && <div className="text-[13px] mb-3 rounded-xl px-3.5 py-2.5" style={{ background: C.maroonSoft, color: C.maroon }}>{err}</div>}
+        <button onClick={send}
           disabled={!canSend} className="tap w-full rounded-xl flex items-center justify-center gap-2 text-[15px] font-semibold" style={{ height: 52, background: canSend ? C.pine : "#C7CEC7", color: "#fff", cursor: canSend ? "pointer" : "not-allowed" }}>
           <Send size={18} /> Send request to {String(talent.name || "them").split(" ")[0]}
         </button>
@@ -3179,7 +3240,7 @@ function AppStatusBadge({ status }) {
 }
 
 /* ---- Talent: jobs hub ---- */
-function JobsHub({ user, jobs, listings, actions }) {
+function JobsHub({ user, jobs, listings, actions, trips }) {
   const [sub, setSub] = useState("board");
   const t = talentById(user.talentId);
   const open = listings.filter((l) => !l.deletedAt && l.status === "open" && listingFits(l, user.kind));
@@ -3196,7 +3257,7 @@ function JobsHub({ user, jobs, listings, actions }) {
         ]} />
       </div>
       {sub === "board" && <OpenBoard talent={t} listings={open} onApply={actions.applyToListing} />}
-      {sub === "invites" && <JobsInbox user={user} jobs={jobs} onSet={actions.setJobStatus} />}
+      {sub === "invites" && <JobsInbox user={user} jobs={jobs} onSet={actions.setJobStatus} trips={trips} />}
       {sub === "applied" && <MyApplications talent={t} listings={applied} />}
     </div>
   );
@@ -3336,6 +3397,8 @@ function OperatorListings({ listings, actions, onPost, onManage }) {
 }
 
 function ManageApplicants({ listing, actions, onViewProfile, onBack }) {
+  const [hireErr, setHireErr] = useState(null);
+  const hire = async (a) => { setHireErr(null); const r = await actions.hireApplicant(listing, a); if (r && r.ok === false) setHireErr(`${talentById(a.talentId)?.name || "This person"}: ${r.reason}`); };
   return (
     <div className="pb-6 fade">
       <div className="h-14 px-4 flex items-center gap-3" style={{ borderBottom: `1px solid ${C.lineSoft}` }}>
@@ -3345,6 +3408,7 @@ function ManageApplicants({ listing, actions, onViewProfile, onBack }) {
       </div>
 
       <div className="px-5 py-4">
+        {hireErr && <div className="rounded-xl px-3.5 py-2.5 mb-3 text-[13px]" style={{ background: C.maroonSoft, color: C.maroon }}>{hireErr}</div>}
         {listing.role === "both" && listing.status === "open" && (() => {
           const hired = new Set((listing.applicants || []).filter((a) => a.status === "hired").map((a) => talentById(a.talentId)?.role));
           const need = ["guide", "driver"].filter((r) => !hired.has(r));
@@ -3393,7 +3457,7 @@ function ManageApplicants({ listing, actions, onViewProfile, onBack }) {
                 {a.status === "applied" && (
                   <div className="flex gap-2.5 mt-3">
                     <button onClick={() => actions.setApplicant(listing.id, a.talentId, "declined")} className="tap flex-1 h-11 rounded-xl text-[14px] font-semibold inline-flex items-center justify-center gap-2" style={{ background: C.card, border: `1.5px solid ${C.maroon}`, color: C.maroon }}><X size={17} /> Decline</button>
-                    <button onClick={() => actions.hireApplicant(listing, a)} className="tap flex-1 h-11 rounded-xl text-[14px] font-semibold inline-flex items-center justify-center gap-2" style={{ background: C.pine, color: "#fff" }}><Check size={17} /> Hire</button>
+                    <button onClick={() => hire(a)} className="tap flex-1 h-11 rounded-xl text-[14px] font-semibold inline-flex items-center justify-center gap-2" style={{ background: C.pine, color: "#fff" }}><Check size={17} /> Hire</button>
                   </div>
                 )}
               </div>
@@ -5755,6 +5819,8 @@ function AlertsSheet({ items, onClose, onOpenProfile, onOpenMessages, onOpenJobs
     listing:   { Icon: Briefcase,     bg: C.goldSoft,   fg: C.goldText,  verb: "posted a job you can apply for" },
     applicant: { Icon: UserCheck,     bg: C.pineSoft,   fg: C.pine,     verb: "applied to your job" },
     joined:    { Icon: UserPlus,      bg: C.goldSoft,   fg: C.goldText,  verb: "joined Bhutan Tourism Hub" },
+    jobAccepted:     { Icon: Check,       bg: C.successSoft, fg: C.success,  verb: "accepted your request" },
+    jobDeclined:     { Icon: X,           bg: C.maroonSoft, fg: C.maroon,   verb: "can't take your request" },
     roomRequest:     { Icon: BedDouble,   bg: C.goldSoft,   fg: C.goldText, verb: "asked for rooms" },
     roomConfirmed:   { Icon: BedDouble,   bg: C.successSoft, fg: C.success,  verb: "confirmed your rooms" },
     roomDeclined:    { Icon: BedDouble,   bg: C.maroonSoft, fg: C.maroon,   verb: "couldn't take your rooms" },
@@ -5818,7 +5884,7 @@ function AlertsSheet({ items, onClose, onOpenProfile, onOpenMessages, onOpenJobs
                     const p = m.self ? null : talentById(a.who);
                     const go = () => {
                       if (a.kind === "message" || a.kind === "share" || a.kind === "official") return onOpenMessages();
-                      if (a.kind === "job" || a.kind === "listing" || a.kind === "applicant") return onOpenJobs();
+                      if (a.kind === "job" || a.kind === "listing" || a.kind === "applicant" || a.kind === "jobAccepted" || a.kind === "jobDeclined") return onOpenJobs();
                       if (a.kind === "roomRequest" || a.kind === "roomConfirmed" || a.kind === "roomDeclined") return onOpenTrips && onOpenTrips();
                       if (a.kind === "tripSoon" || a.kind === "askReview" || a.kind === "crewRequest") return onOpenTrips && onOpenTrips();
                       if (a.kind === "creditRequest") return onOpenUsers && onOpenUsers();
@@ -12131,7 +12197,7 @@ const BK_STATUS = {
   declined:  { label: "Declined", bg: C.maroonSoft, fg: C.maroon, dot: C.maroon },
   cancelled: { label: "Cancelled", bg: C.bg, fg: C.muted, dot: "#C7CEC7" },
 };
-const addDays = (iso, n) => { const d = new Date(iso + "T00:00"); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); };
+const addDays = (iso, n) => { const d = new Date(iso + "T12:00"); d.setDate(d.getDate() + n); return localISO(d); };
 const nightsBetween = (a, b) => Math.max(0, Math.round((new Date(b + "T00:00") - new Date(a + "T00:00")) / 86400e3));
 const fmtNights = (a, b) => { const n = nightsBetween(a, b); return `${fmtDate(a)} – ${fmtDate(b)} · ${n} ${n === 1 ? "night" : "nights"}`; };
 const hotelTownName = (key) => (DK_TOWNS[key] ? DK_TOWNS[key].n : (key || ""));
@@ -13176,4 +13242,212 @@ function CrewHotelsBrief({ trip }) {
         ); })}
     </div>
   );
+}
+
+/* ========================================================================== */
+/*  TALENT CALENDAR — where a guide or driver is booked, blocked, or asked.    */
+/*  Confirmed trips are exclusive (the database refuses a second booking for   */
+/*  the same days). Own blocks count as busy. Pending requests may overlap     */
+/*  each other; accepting one declines the rest for those days.               */
+/* ========================================================================== */
+const CAL_KIND = {
+  trip:    { label: "Confirmed trip", bg: C.pine, fg: "#fff" },
+  block:   { label: "Blocked by you", bg: "#D7D7DC", fg: C.ink },
+  pending: { label: "Request waiting", bg: C.goldSoft, fg: C.goldText, ring: C.gold },
+};
+const rangesOverlap = (a1, a2, b1, b2) => a1 <= b2 && a2 >= b1;
+const dayKindsFor = (date, ranges) => ranges.filter((r) => r.from <= date && r.to >= date).map((r) => r.kind);
+
+/** Loads busy ranges for a talent. For the person themself: trips from props, own blocks from the table,
+ *  pending requests from props. For anyone else: the privacy-safe RPC (busy/blocked/pending ranges only). */
+function useTalentBusy({ talentId, self, trips, jobs, from, to }) {
+  const [blocks, setBlocks] = useState([]);
+  const [remote, setRemote] = useState(null);   // ranges from the RPC, non-self only
+  const [tick, setTick] = useState(0);
+  const reload = () => setTick((t) => t + 1);
+  useEffect(() => {
+    if (!CLOUD || !talentId) { setRemote([]); return; }
+    let on = true;
+    if (self) {
+      supabase.from("talent_blocks").select("*").eq("talent_id", talentId).order("start_date", { ascending: true })
+        .then(({ data }) => { if (on) setBlocks((data || []).map((b) => ({ id: b.id, from: b.start_date, to: b.end_date, label: b.label || "", kind: "block" }))); });
+    } else {
+      supabase.rpc("talent_busy", { p_talent: String(talentId), p_from: from, p_to: to })
+        .then(({ data, error }) => { if (!on) return; if (error) { console.error("talent_busy:", error.message); setRemote([]); return; } setRemote((data || []).map((r) => ({ kind: r.kind, from: r.from_date, to: r.to_date }))); });
+    }
+    return () => { on = false; };
+  }, [talentId, self, from, to, tick, (trips || []).length, (jobs || []).length]);
+  const ranges = useMemo(() => {
+    if (!self) return remote || [];
+    const me = String(talentId);
+    const tripRanges = (trips || []).filter((t) => t && t.status !== "cancelled" && (t.members || []).some((m) => String(m.id) === me && !["operator", "moderator", "manager"].includes(m.roleInTrip)))
+      .map((t) => ({ kind: "trip", from: t.start, to: t.end || t.start, title: t.title, operator: t.operator, id: t.id }));
+    const pend = (jobs || []).filter((j) => j && !j.deletedAt && String(j.toTalentId) === me && j.status === "pending")
+      .map((j) => ({ kind: "pending", from: j.start, to: j.end || j.start, title: j.title, operator: j.operator, id: j.id }));
+    return [...tripRanges, ...blocks, ...pend];
+  }, [self, remote, trips, jobs, blocks, talentId]);
+  return { ranges, blocks, loaded: self ? true : remote !== null, reload };
+}
+
+function CalMonth({ month, ranges, selFrom, selTo, onPick, compact }) {
+  const first = new Date(month + "-01T00:00");
+  const daysIn = new Date(first.getFullYear(), first.getMonth() + 1, 0).getDate();
+  const lead = (first.getDay() + 6) % 7;
+  const today = isoDay(0);
+  return (
+    <div>
+      <div className="text-[13px] font-semibold mb-1.5" style={{ color: C.ink }}>{first.toLocaleDateString("en-GB", { month: "long", year: "numeric" })}</div>
+      <div className="grid grid-cols-7 gap-[3px] mb-1">{["M", "T", "W", "T", "F", "S", "S"].map((w, i) => <div key={i} className="text-center text-[10px] font-semibold" style={{ color: C.muted }}>{w}</div>)}</div>
+      <div className="grid grid-cols-7 gap-[3px]">
+        {Array.from({ length: lead }).map((_, i) => <div key={"l" + i} />)}
+        {Array.from({ length: daysIn }, (_, i) => {
+          const d = `${month}-${String(i + 1).padStart(2, "0")}`;
+          const kinds = dayKindsFor(d, ranges);
+          const main = kinds.includes("trip") ? "trip" : kinds.includes("block") ? "block" : null;
+          const pend = kinds.includes("pending");
+          const sel = selFrom && selTo && d >= selFrom && d <= selTo;
+          const past = d < today;
+          const m = main ? CAL_KIND[main] : null;
+          return (
+            <button key={d} type="button" disabled={!onPick} onClick={() => onPick && onPick(d)} aria-label={`${fmtDate(d)}${main ? ": " + CAL_KIND[main].label : ""}${pend ? ", request waiting" : ""}`}
+              className="tap rounded-md flex items-center justify-center relative" style={{ height: compact ? 30 : 36, background: m ? m.bg : sel ? C.pineSoft : C.card, color: m ? m.fg : sel ? C.pine : C.ink,
+                border: `1.5px solid ${sel ? C.pine : d === today ? C.pine : pend ? C.gold : C.lineSoft}`, opacity: past ? .45 : 1, fontSize: compact ? 11 : 12, fontWeight: main || sel ? 600 : 500 }}>
+              {i + 1}
+              {pend && !main && <span className="absolute rounded-full" style={{ width: 5, height: 5, background: C.gold, bottom: 3, left: "50%", marginLeft: -2.5 }} />}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+const monthKey = (d) => String(d).slice(0, 7);
+const shiftMonth = (m, n) => { const d = new Date(m + "-01T12:00"); d.setMonth(d.getMonth() + n); return localISO(d).slice(0, 7); };
+
+/** The calendar card. `self`: full editor (block dates, see trips and requests). Otherwise read-only. */
+function TalentCalendar({ talent, self, trips, jobs, compact, title }) {
+  const talentId = talent?.id;
+  const [month, setMonth] = useState(monthKey(isoDay(0)));
+  const from = isoDay(-45), to = isoDay(400);
+  const { ranges, blocks, loaded, reload } = useTalentBusy({ talentId, self, trips, jobs, from, to });
+  const [blocking, setBlocking] = useState(null);   // { from, to } while adding a block
+  const [err, setErr] = useState(null);
+  const today = isoDay(0);
+  const upcomingTrips = ranges.filter((r) => r.kind === "trip" && r.to >= today).sort((a, b) => a.from.localeCompare(b.from)).slice(0, 6);
+  const upcomingBlocks = blocks.filter((b) => b.to >= today).sort((a, b) => a.from.localeCompare(b.from));
+  const pendingCount = ranges.filter((r) => r.kind === "pending" && r.to >= today).length;
+  const removeBlock = async (id) => {
+    setErr(null);
+    const { error } = await supabase.from("talent_blocks").delete().eq("id", id);
+    if (error) setErr(error.message); else reload();
+  };
+  const pick = (d) => {
+    if (!self) return;
+    const kinds = dayKindsFor(d, ranges);
+    if (kinds.includes("trip")) return;                      // confirmed days are not editable here
+    const b = blocks.find((x) => x.from <= d && x.to >= d);
+    if (b) { setBlocking({ edit: b }); return; }
+    setBlocking({ from: d, to: d });
+  };
+  return (
+    <div className={compact ? "" : "rounded-2xl p-4 mt-5"} style={compact ? undefined : { background: C.card, border: `1px solid ${C.line}` }}>
+      <div className="flex items-center justify-between mb-1">
+        <div className="flex items-center gap-2"><CalendarDays size={16} color={C.gold} /><span className="text-[14px] font-semibold" style={{ color: C.ink }}>{title || (self ? "Your calendar" : "Availability")}</span></div>
+        <div className="flex items-center gap-1">
+          <button type="button" onClick={() => setMonth(shiftMonth(month, -1))} className="tap w-8 h-8 rounded-full flex items-center justify-center" style={{ background: C.grey }} aria-label="Previous month"><ChevronLeft size={15} color={C.ink} /></button>
+          <button type="button" onClick={() => setMonth(shiftMonth(month, 1))} className="tap w-8 h-8 rounded-full flex items-center justify-center" style={{ background: C.grey }} aria-label="Next month"><ChevronLeft size={15} color={C.ink} style={{ transform: "rotate(180deg)" }} /></button>
+        </div>
+      </div>
+      <p className="text-[12px] mb-3" style={{ color: C.muted }}>
+        {self ? "Confirmed trips block these days automatically. Tap a free day to block it yourself." : "Dark days are taken. Gold dots mean another operator has already asked; you can still ask."}
+      </p>
+      {!loaded && <div className="text-[12px] mb-2" style={{ color: C.muted }}>Loading…</div>}
+      <div className={compact ? "" : "grid gap-4"} style={compact ? undefined : { gridTemplateColumns: "1fr" }}>
+        <CalMonth month={month} ranges={ranges} onPick={self ? pick : null} compact={compact} />
+        {!compact && <CalMonth month={shiftMonth(month, 1)} ranges={ranges} onPick={self ? pick : null} compact={compact} />}
+      </div>
+      <div className="flex flex-wrap gap-3 text-[11px] mt-3" style={{ color: C.muted }}>
+        <span className="inline-flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm" style={{ background: C.pine }} /> confirmed trip</span>
+        {self && <span className="inline-flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm" style={{ background: "#D7D7DC" }} /> blocked by you</span>}
+        {!self && <span className="inline-flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm" style={{ background: "#D7D7DC" }} /> not available</span>}
+        <span className="inline-flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm" style={{ border: `1.5px solid ${C.gold}` }} /> request waiting</span>
+      </div>
+
+      {self && (
+        <>
+          <button type="button" onClick={() => setBlocking({ from: isoDay(1), to: isoDay(1) })} className="tap w-full h-11 mt-3 rounded-xl text-[14px] font-semibold inline-flex items-center justify-center gap-1.5" style={{ background: C.grey, color: C.ink }}><Lock size={14} /> Block dates</button>
+          {(upcomingTrips.length > 0 || upcomingBlocks.length > 0 || pendingCount > 0) && (
+            <div className="mt-3 rounded-xl divide-y" style={{ border: `1px solid ${C.lineSoft}`, borderColor: C.lineSoft }}>
+              {pendingCount > 0 && <div className="px-3 py-2.5 text-[12px]" style={{ color: C.goldText }}>{pendingCount} request{pendingCount === 1 ? "" : "s"} waiting for your answer, under Jobs → Invites.</div>}
+              {upcomingTrips.map((t) => (
+                <div key={t.id} className="px-3 py-2.5 flex items-center gap-3">
+                  <span className="w-2 h-2 rounded-full shrink-0" style={{ background: C.pine }} />
+                  <div className="flex-1 min-w-0"><div className="text-[13px] font-medium truncate" style={{ color: C.ink }}>{t.title}</div><div className="text-[11px]" style={{ color: C.muted }}>{fmtDate(t.from)} – {fmtDate(t.to)}{t.operator ? ` · ${t.operator}` : ""}</div></div>
+                </div>
+              ))}
+              {upcomingBlocks.map((b) => (
+                <div key={b.id} className="px-3 py-2.5 flex items-center gap-3">
+                  <span className="w-2 h-2 rounded-full shrink-0" style={{ background: "#B4B4BA" }} />
+                  <div className="flex-1 min-w-0"><div className="text-[13px] font-medium truncate" style={{ color: C.ink }}>{b.label || "Blocked"}</div><div className="text-[11px]" style={{ color: C.muted }}>{fmtDate(b.from)} – {fmtDate(b.to)} · only you see the note</div></div>
+                  <button type="button" onClick={() => removeBlock(b.id)} className="tap h-8 px-3 rounded-lg text-[12px] font-semibold" style={{ background: C.grey, color: C.maroon }}>Unblock</button>
+                </div>
+              ))}
+            </div>
+          )}
+          {err && <div className="text-[12px] mt-2 rounded-lg px-3 py-2" style={{ background: C.maroonSoft, color: C.maroon }}>{err}</div>}
+          {blocking && <BlockDatesSheet talentId={talentId} init={blocking} ranges={ranges} onClose={() => setBlocking(null)} onSaved={() => { setBlocking(null); reload(); }} onRemove={blocking.edit ? () => { removeBlock(blocking.edit.id); setBlocking(null); } : null} />}
+        </>
+      )}
+    </div>
+  );
+}
+
+function BlockDatesSheet({ talentId, init, ranges, onClose, onSaved, onRemove }) {
+  const edit = init.edit || null;
+  const [from, setFrom] = useState(edit ? edit.from : init.from);
+  const [to, setTo] = useState(edit ? edit.to : init.to);
+  const [label, setLabel] = useState(edit ? edit.label : "");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const field = { background: C.bg, border: `1px solid ${C.line}`, color: C.ink };
+  const tripClash = ranges.find((r) => r.kind === "trip" && rangesOverlap(from, to, r.from, r.to));
+  const pendClash = ranges.filter((r) => r.kind === "pending" && rangesOverlap(from, to, r.from, r.to));
+  const save = async () => {
+    if (!from || !to || to < from) { setErr("The end date must be on or after the start."); return; }
+    if (tripClash) { setErr(`You're already confirmed on "${tripClash.title}" for some of these days; those stay booked either way.`); return; }
+    setBusy(true); setErr(null);
+    if (edit) { const { error } = await supabase.from("talent_blocks").delete().eq("id", edit.id); if (error) { setBusy(false); setErr(error.message); return; } }
+    const { error } = await supabase.from("talent_blocks").insert({ talent_id: talentId, start_date: from, end_date: to, label: label.trim() || null, source: "manual" });
+    setBusy(false);
+    if (error) { setErr(/duplicate|unique/i.test(error.message) ? "Those exact dates are already blocked." : error.message); return; }
+    onSaved();
+  };
+  return (
+    <Sheet onClose={onClose}>
+      <div className="text-[18px] font-semibold mb-1" style={{ color: C.ink }}>{edit ? "Blocked dates" : "Block dates"}</div>
+      <p className="text-[13px] mb-3" style={{ color: C.muted }}>Operators can't send you requests for these days. Remove the block any time.</p>
+      <div className="grid grid-cols-2 gap-3 mb-3">
+        <div><Label>From</Label><input type="date" value={from} min={isoDay(0)} onChange={(e) => { setFrom(e.target.value); if (to < e.target.value) setTo(e.target.value); }} className="w-full h-11 px-3 rounded-xl text-[14px]" style={field} /></div>
+        <div><Label>To</Label><input type="date" value={to} min={from} onChange={(e) => setTo(e.target.value)} className="w-full h-11 px-3 rounded-xl text-[14px]" style={field} /></div>
+      </div>
+      <Label>Note for yourself (optional, private)</Label>
+      <input value={label} onChange={(e) => setLabel(e.target.value)} maxLength={60} placeholder="Family · own tour · rest" className="w-full h-11 px-3.5 rounded-xl text-[14px] mb-3" style={field} />
+      {pendClash.length > 0 && <div className="text-[12px] mb-3 rounded-lg px-3 py-2" style={{ background: C.goldSoft, color: C.goldText }}>{pendClash.length} request{pendClash.length === 1 ? "" : "s"} waiting for these days will stay open; decline {pendClash.length === 1 ? "it" : "them"} under Jobs → Invites if you're not taking work then.</div>}
+      {err && <div className="text-[13px] mb-3 rounded-lg px-3 py-2" style={{ background: C.maroonSoft, color: C.maroon }}>{err}</div>}
+      <OCta busy={busy} onClick={save}>{edit ? "Save changes" : "Block these dates"}</OCta>
+      {onRemove && <button type="button" onClick={onRemove} className="tap w-full h-10 mt-2 text-[13px] font-semibold" style={{ color: C.maroon }}>Unblock these dates</button>}
+    </Sheet>
+  );
+}
+
+/** Conflict check for a request the operator is about to send: confirmed/blocked days refuse; pending days warn. */
+function useRequestAvailability({ talent, start, end }) {
+  const from = isoDay(-45), to = isoDay(400);
+  const { ranges, loaded } = useTalentBusy({ talentId: talent?.id, self: false, from, to });
+  if (!start || !end || end < start) return { ok: true, note: null, ranges, loaded };
+  const taken = ranges.filter((r) => (r.kind === "trip" || r.kind === "block") && rangesOverlap(start, end, r.from, r.to));
+  const pend = ranges.filter((r) => r.kind === "pending" && rangesOverlap(start, end, r.from, r.to));
+  if (taken.length) return { ok: false, note: `${String(talent?.name || "They").split(" ")[0]} is not available ${taken.map((r) => `${fmtDate(r.from)}–${fmtDate(r.to)}`).join(", ")}. Choose other dates.`, ranges, loaded };
+  if (pend.length) return { ok: true, note: `${pend.length} other request${pend.length === 1 ? "" : "s"} already waiting for these dates. You can still ask; whoever ${String(talent?.name || "they").split(" ")[0]} accepts first gets the booking.`, ranges, loaded, soft: true };
+  return { ok: true, note: null, ranges, loaded };
 }
