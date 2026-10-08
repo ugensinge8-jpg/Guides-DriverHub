@@ -63,7 +63,7 @@ const CLOUD = Boolean(supabase);
   } catch (e) {}
 })();
 const DEMO_MODE = false;   // set true only for local demos without a database
-const BUILD = "BUILD 42 — 8 Oct";   // bump every deploy; shown at the top of the welcome screen
+const BUILD = "BUILD 43 — 8 Oct";   // bump every deploy; shown at the top of the welcome screen
 // which device someone is on — shown beside the build so a screenshot tells us both
 const DEVICE = (() => {
   try {
@@ -1421,6 +1421,14 @@ function Shell({ user, posts, jobs, trips, listings, enquiries, actions, engagem
         add({ id: `new-${p.id}`, kind: "joined", who: p.id, text: roleLabel(p.role), ts: p.joinedAt });
     });
 
+    /* ---- Room bookings: hotels hear about requests, operators about answers ---- */
+    (hotelData.bookings || []).forEach((b) => {
+      if (user.kind === "hotel" && b.status === "requested" && b.checkOut >= new Date().toISOString().slice(0, 10))
+        add({ id: `room-${b.id}`, kind: "roomRequest", who: b.operatorId, text: `${b.rooms} ${b.rooms === 1 ? "room" : "rooms"} · ${fmtDate(b.checkIn)}–${fmtDate(b.checkOut)}`, ts: b.createdAt, urgent: Date.now() - b.createdAt > 86400e3 });
+      if (user.kind === "operator" && b.respondedAt && Date.now() - b.respondedAt < 7 * 86400e3 && (b.status === "confirmed" || b.status === "declined"))
+        add({ id: `room-${b.id}-${b.status}`, kind: b.status === "confirmed" ? "roomConfirmed" : "roomDeclined", who: b.hotelId, text: `${fmtDate(b.checkIn)}–${fmtDate(b.checkOut)}${b.hotelNote ? ` · ${b.hotelNote}` : ""}`, ts: b.respondedAt });
+    });
+
     /* ---- Crew invitations ---- */
     (crewInvites || []).forEach((inv) => {
       if (inv.talentId === actorId && inv.status === "pending")
@@ -1514,7 +1522,7 @@ function Shell({ user, posts, jobs, trips, listings, enquiries, actions, engagem
 
     return out.sort((a, b) => (b.ts || 0) - (a.ts || 0)).slice(0, 50);
     } catch (e) { console.error('alertItems failed:', e); return []; }
-  }, [dm?.dms, engagement?.likes, engagement?.comments, engagement?.follows, jobs, listings, posts, trips, actorId, dirTick, user.licenseStatus, crewInvites, openCreditRequests]);
+  }, [dm?.dms, engagement?.likes, engagement?.comments, engagement?.follows, jobs, listings, posts, trips, actorId, dirTick, user.licenseStatus, crewInvites, openCreditRequests, hotelData.bookings]);
 
   // notify the device when something new arrives
   useEffect(() => {
@@ -1588,7 +1596,7 @@ function Shell({ user, posts, jobs, trips, listings, enquiries, actions, engagem
             {tab === "insights" && <InsightsTab user={user} trips={trips} enquiries={enquiries} />}
             {tab === "discover" && <Discover onOpen={openProfile} initialQuery={searchTerm} dirTick={dirTick} />}
             {tab === "requests" && <OperatorJobs user={user} jobs={jobs} listings={listings} posts={posts} actions={actions} eng={eng} onOpen={openProfile} />}
-            {tab === "feed" && <Feed posts={posts} eng={eng} admin={user.kind === "admin"} onDelete={actions.deletePost} onOpenProfile={openProfile} following={myFollowing} />}
+            {tab === "feed" && <Feed posts={posts} eng={eng} admin={user.kind === "admin"} onDelete={actions.deletePost} onOpenProfile={openProfile} following={myFollowing} user={user} trips={trips} stays={hotelData} />}
             {tab === "review" && <Review posts={posts} onApprove={actions.approve} onReject={actions.reject} eng={eng} />}
             {tab === "users" && <AdminUsers onChanged={actions.reloadDirectory} currentAdminId={actorId} />}
           </div>
@@ -1810,7 +1818,7 @@ const listingFits = (l, kind) => l.role === kind || (l.role === "both" && (kind 
 function PostTab({ user, posts, onAdd, eng, onOpenProfile }) {
   const me = user.talentId;
   const t = talentById(me) || { id: me, name: user.name || "You", initials: user.initials || "?" };
-  const visible = posts.filter((p) => p.status === "approved" || p.talentId === me);
+  const visible = posts.filter((p) => (p.status === "approved" || p.talentId === me) && (user.kind === "hotel" ? (isHotelPost(p) || p.talentId === me) : !isHotelPost(p)));
   return (
     <div className="px-5 py-4">
       <Composer talent={t} onAdd={onAdd} />
@@ -2256,21 +2264,30 @@ function SentRequests({ operator, operatorId, jobs, actions, onOpen }) {
 }
 
 /* ========================= Feed (operator & admin) ======================== */
-function Feed({ posts, eng, admin, onDelete, onOpenProfile, following }) {
+const isHotelPost = (p) => (talentById(p.talentId) || {}).role === "hotel";
+function Feed({ posts, eng, admin, onDelete, onOpenProfile, following, user, trips, stays }) {
   const [scope, setScope] = useState("all");
+  const [asking, setAsking] = useState(null);     // hotel talent → request sheet
+  const [sent, setSent] = useState(null);
   const base = admin ? posts : posts.filter((p) => p.status === "approved");
-  const live = scope === "following" && following?.length ? base.filter((p) => following.includes(p.talentId)) : base;
+  const crew = base.filter((p) => !isHotelPost(p));
+  const hotelPosts = base.filter(isHotelPost);
+  const live = scope === "stays" ? hotelPosts : scope === "following" && following?.length ? crew.filter((p) => following.includes(p.talentId)) : crew;
+  const canRequest = user && user.kind === "operator";
   return (
     <div className="px-5 py-4">
       <SectionLabel trailing={admin ? `${live.length} total` : undefined}>Highlights</SectionLabel>
-      {!admin && following?.length > 0 && (
-        <div className="flex gap-2 mb-3.5">
-          <Chip on={scope === "all"} onClick={() => setScope("all")}>Everyone</Chip>
-          <Chip on={scope === "following"} onClick={() => setScope("following")}>Following · {following.length}</Chip>
-        </div>
-      )}
+      <div className="flex gap-2 mb-3.5 flex-wrap">
+        <Chip on={scope === "all"} onClick={() => setScope("all")}>Everyone</Chip>
+        {!admin && following?.length > 0 && <Chip on={scope === "following"} onClick={() => setScope("following")}>Following · {following.length}</Chip>}
+        <Chip on={scope === "stays"} onClick={() => setScope("stays")}>Hotels & stays{hotelPosts.length ? ` · ${hotelPosts.length}` : ""}</Chip>
+      </div>
+      {scope === "stays" && canRequest && stays && <StayRequests user={user} data={stays} />}
+      {sent && <div className="rounded-xl px-3.5 py-3 mb-3 text-[13px]" style={{ background: C.successSoft, color: C.success }}>Request sent to {sent}. They answer here, under Your room requests, and in your trip's Hotels section.</div>}
       {live.length === 0 ? (
-        <Empty Icon={Inbox} title="No highlights yet" body="Approved posts from guides and drivers appear here." />
+        scope === "stays"
+          ? <Empty Icon={BedDouble} title="No hotel posts yet" body="Hotels and boutique stays on the hub post rooms, views and offers here. You can request rooms straight from a post." />
+          : <Empty Icon={Inbox} title="No highlights yet" body="Approved posts from guides and drivers appear here." />
       ) : (
         <div className="space-y-3.5">
           {live.map((p) => {
@@ -2288,6 +2305,9 @@ function Feed({ posts, eng, admin, onDelete, onOpenProfile, following }) {
                   {admin && p.status !== "approved" && <StatusBadge status={p.status} reason={p.reason} />}
                   {admin && <DeletePost onConfirm={() => onDelete(p.id)} />}
                 </div>
+                {t?.role === "hotel" && (
+                  <div className="text-[12px] mt-1" style={{ color: C.muted }}>{[hotelTownName(t.hotelTown), t.starRating ? `${t.starRating}★` : null, t.stayKind ? STAY_KINDS[t.stayKind] : null, t.hotelTier ? DK_HOTEL[t.hotelTier] : null].filter(Boolean).join(" · ")}</div>
+                )}
                 {p.text && <p className="text-[15px] leading-relaxed mt-3" style={{ color: C.ink }}>{p.text}</p>}
                 {p.location && p.media && p.media.kind === "photo" ? (
                   <div className="mt-3"><MapCinema location={p.location} photo={p.media.dataUri} /></div>
@@ -2296,11 +2316,66 @@ function Feed({ posts, eng, admin, onDelete, onOpenProfile, following }) {
                   <PostLocation location={p.location} showMap />
                 </>)}
                 <PostEngagement post={p} eng={eng} />
+                {t?.role === "hotel" && canRequest && (
+                  <button onClick={() => { setSent(null); setAsking(t); }} className="tap w-full h-11 mt-3 rounded-xl text-[14px] font-semibold inline-flex items-center justify-center gap-2" style={{ background: C.pine, color: "#fff" }}>
+                    <BedDouble size={16} /> Request rooms
+                  </button>
+                )}
               </div>
             );
           })}
         </div>
       )}
+      {asking && (
+        <FindHotelSheet trip={null} trips={trips || []} presetHotel={asking} user={user}
+          stay={{ from: isoDay(7), to: isoDay(9), nights: 2, townKey: asking.hotelTown || null, townName: hotelTownName(asking.hotelTown), tier: asking.hotelTier || null, days: [] }}
+          onClose={() => setAsking(null)} onSent={() => { setSent(asking.company || asking.name); setAsking(null); }} />
+      )}
+    </div>
+  );
+}
+
+/* An operator's own room requests, newest first, with where each stands in the hotel's queue. */
+function StayRequests({ user, data }) {
+  const today = isoDay(0);
+  const list = (data.bookings || []).filter((b) => b.checkOut >= today || Date.now() - (b.respondedAt || b.createdAt) < 7 * 86400e3).sort((a, b) => b.createdAt - a.createdAt).slice(0, 8);
+  const [q, setQ] = useState({});
+  const [open, setOpen] = useState(true);
+  useEffect(() => {
+    let on = true;
+    const pend = list.filter((b) => b.status === "requested");
+    if (!CLOUD || !pend.length) return;
+    Promise.all(pend.map((b) => supabase.rpc("room_queue_position", { p_booking: b.id }).then(({ data }) => [b.id, data && data[0]]))).then((rows) => { if (on) { const m = {}; rows.forEach(([id, r]) => { if (r) m[id] = r; }); setQ(m); } });
+    return () => { on = false; };
+  }, [list.map((b) => b.id + b.status).join("|")]);
+  const cancel = async (b) => { await supabase.from("room_bookings").update({ status: "cancelled" }).eq("id", b.id); data.reload && data.reload(); };
+  if (!list.length) return null;
+  const waiting = list.filter((b) => b.status === "requested").length;
+  return (
+    <div className="rounded-2xl mb-4" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+      <button onClick={() => setOpen((v) => !v)} className="tap w-full flex items-center justify-between px-4 py-3 text-left">
+        <div><div className="text-[14px] font-semibold" style={{ color: C.ink }}>Your room requests</div><div className="text-[12px]" style={{ color: C.muted }}>{waiting ? `${waiting} waiting for a hotel's answer` : "All answered"}</div></div>
+        <ChevronLeft size={16} color={C.muted} style={{ transform: open ? "rotate(-90deg)" : "rotate(180deg)", transition: "transform .2s" }} />
+      </button>
+      {open && list.map((b) => { const h = talentById(b.hotelId); const pos = q[b.id];
+        return (
+          <div key={b.id} className="px-4 py-3" style={{ borderTop: `1px solid ${C.lineSoft}` }}>
+            <div className="flex items-center justify-between gap-2">
+              <div className="min-w-0">
+                <div className="text-[14px] font-semibold truncate" style={{ color: C.ink }}>{h?.company || h?.name || "Hotel"}</div>
+                <div className="text-[12px]" style={{ color: C.muted }}>{fmtNights(b.checkIn, b.checkOut)} · {b.rooms} {b.rooms === 1 ? "room" : "rooms"}</div>
+              </div>
+              <BkBadge status={b.status} />
+            </div>
+            {b.status === "requested" && pos && (
+              <div className="text-[12px] mt-1.5" style={{ color: pos.fits ? C.pine : C.goldText }}>
+                {pos.ahead === 0 ? "First in line for these dates" : `${pos.place}${pos.place === 2 ? "nd" : pos.place === 3 ? "rd" : "th"} in line · ${pos.ahead} ${pos.ahead === 1 ? "request" : "requests"} ahead`}{pos.fits ? " · rooms still free" : " · may not fit anymore"}
+              </div>
+            )}
+            {b.hotelNote && <div className="text-[12px] mt-1.5 rounded px-2.5 py-2" style={{ background: b.status === "declined" ? C.maroonSoft : C.pineSoft, color: b.status === "declined" ? C.maroon : C.pine }}>{h?.company || "Hotel"}: {b.hotelNote}</div>}
+            {(b.status === "requested" || b.status === "confirmed") && <button onClick={() => cancel(b)} className="tap text-[12px] font-semibold mt-1.5" style={{ color: C.muted }}>{b.status === "confirmed" ? "Cancel booking" : "Withdraw"}</button>}
+          </div>
+        ); })}
     </div>
   );
 }
@@ -5591,6 +5666,9 @@ function AlertsSheet({ items, onClose, onOpenProfile, onOpenMessages, onOpenJobs
     listing:   { Icon: Briefcase,     bg: C.goldSoft,   fg: C.goldText,  verb: "posted a job you can apply for" },
     applicant: { Icon: UserCheck,     bg: C.pineSoft,   fg: C.pine,     verb: "applied to your job" },
     joined:    { Icon: UserPlus,      bg: C.goldSoft,   fg: C.goldText,  verb: "joined Bhutan Tourism Hub" },
+    roomRequest:     { Icon: BedDouble,   bg: C.goldSoft,   fg: C.goldText, verb: "asked for rooms" },
+    roomConfirmed:   { Icon: BedDouble,   bg: C.successSoft, fg: C.success,  verb: "confirmed your rooms" },
+    roomDeclined:    { Icon: BedDouble,   bg: C.maroonSoft, fg: C.maroon,   verb: "couldn't take your rooms" },
     licenceSoon:     { Icon: Clock,       bg: C.goldSoft,   fg: C.goldText, verb: "Your licence is expiring", self: true },
     licenceExpired:  { Icon: ShieldAlert, bg: C.maroonSoft, fg: C.maroon,  verb: "Your licence has expired", self: true },
     licenceRejected: { Icon: ShieldAlert, bg: C.maroonSoft, fg: C.maroon,  verb: "Your licence wasn't approved", self: true },
@@ -5652,6 +5730,7 @@ function AlertsSheet({ items, onClose, onOpenProfile, onOpenMessages, onOpenJobs
                     const go = () => {
                       if (a.kind === "message" || a.kind === "share" || a.kind === "official") return onOpenMessages();
                       if (a.kind === "job" || a.kind === "listing" || a.kind === "applicant") return onOpenJobs();
+                      if (a.kind === "roomRequest" || a.kind === "roomConfirmed" || a.kind === "roomDeclined") return onOpenTrips && onOpenTrips();
                       if (a.kind === "tripSoon" || a.kind === "askReview" || a.kind === "crewRequest") return onOpenTrips && onOpenTrips();
                       if (a.kind === "creditRequest") return onOpenUsers && onOpenUsers();
                       if (m.self) return onOpenSelf && onOpenSelf();
@@ -12040,6 +12119,22 @@ function occupancyOn(date, rooms, bookings, closures) {
   return { total, used, pending, free: Math.max(0, total - used) };
 }
 
+/** Up to three windows of the same length, near the requested dates, where the room type still has enough free rooms. */
+function freeWindowsNear(room, checkIn, nights, roomsNeeded, bookings, closures) {
+  const out = [];
+  const start = isoDay(0) > addDays(checkIn, -21) ? isoDay(0) : addDays(checkIn, -21);
+  let d = start, guard = 0;
+  while (out.length < 3 && d <= addDays(checkIn, 28) && guard++ < 80) {
+    let ok = true;
+    for (let i = 0; i < nights; i++) { if (room.count - roomsUsedOn(room.id, addDays(d, i), bookings, closures) < roomsNeeded) { ok = false; break; } }
+    const overlapsAsked = d < addDays(checkIn, nights) && addDays(d, nights) > checkIn;
+    if (ok && !overlapsAsked) { out.push([d, addDays(d, nights)]); d = addDays(d, nights); } else d = addDays(d, 1);
+  }
+  return out;
+}
+const fmtWindow = ([a, b]) => `${fmtDate(a)}–${fmtDate(addDays(b, -1))}`;
+const ordinal = (n) => `${n}${n === 1 ? "st" : n === 2 ? "nd" : n === 3 ? "rd" : "th"}`;
+
 function BkBadge({ status }) {
   const m = BK_STATUS[status] || BK_STATUS.requested;
   return <span className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[12px] font-semibold" style={{ background: m.bg, color: m.fg }}><span className="w-1.5 h-1.5 rounded-full" style={{ background: m.dot }} />{m.label}</span>;
@@ -12192,6 +12287,14 @@ function HotelBookingCard({ b, data, user, compact }) {
   const tight = room ? Math.min(...Array.from({ length: nightsBetween(b.checkIn, b.checkOut) }, (_, i) => room.count - roomsUsedOn(room.id, addDays(b.checkIn, i), bookings, closures))) : 0;
   const fits = room ? tight >= b.rooms : false;
   const past = b.checkOut < isoDay(0);
+  // first come, first served: where this request sits among pending requests for the same room type on overlapping nights
+  const queue = bookings.filter((x) => x.roomId === b.roomId && x.status === "requested" && x.checkIn < b.checkOut && x.checkOut > b.checkIn).sort((x, y) => x.createdAt - y.createdAt);
+  const place = queue.findIndex((x) => x.id === b.id) + 1;
+  const nights = nightsBetween(b.checkIn, b.checkOut);
+  const windows = room && !fits ? freeWindowsNear(room, b.checkIn, nights, b.rooms, bookings, closures) : [];
+  const autoDecline = room ? (windows.length
+    ? `Sorry, we can't offer ${b.rooms} × ${room.name} for ${fmtDate(b.checkIn)}–${fmtDate(addDays(b.checkOut, -1))}. We do have ${b.rooms} free ${windows.map(fmtWindow).join(", ")}. Happy to hold any of those.`
+    : `Sorry, we can't offer ${b.rooms} × ${room.name} for ${fmtDate(b.checkIn)}–${fmtDate(addDays(b.checkOut, -1))}, and nothing nearby is free either.`) : "";
 
   const respond = async (status) => {
     setBusy(true); setErr(null);
@@ -12228,17 +12331,19 @@ function HotelBookingCard({ b, data, user, compact }) {
         <div className="mt-3">
           <div className="text-[12px] mb-2" style={{ color: fits ? C.pine : C.maroon }}>
             {room ? (fits ? `You have ${tight} ${room.name} free on the tightest night — this fits.` : `Only ${Math.max(0, tight)} ${room.name} free on the tightest night — confirming would overbook, so the app won't allow it.`) : "This room type no longer exists."}
+            {queue.length > 1 && <span style={{ color: C.muted }}> · {ordinal(place)} of {queue.length} asking for these nights{place === 1 ? " — answer this one first" : ""}</span>}
           </div>
           {!declining ? (
             <div className="flex gap-2">
               <button disabled={busy || !fits} onClick={() => respond("confirmed")} className="tap flex-1 h-11 rounded-xl text-[14px] font-semibold inline-flex items-center justify-center gap-1.5"
                 style={{ background: fits ? C.pine : "#C7CEC7", color: "#fff" }}>{busy ? <Loader2 size={16} className="animate-spin" /> : <><Check size={16} strokeWidth={2.6} /> Confirm</>}</button>
-              <button disabled={busy} onClick={() => setDeclining(true)} className="tap h-11 px-4 rounded-xl text-[14px] font-semibold" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.maroon }}>Decline</button>
+              <button disabled={busy} onClick={() => { setNote(!fits ? autoDecline : ""); setDeclining(true); }} className="tap h-11 px-4 rounded-xl text-[14px] font-semibold" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.maroon }}>{fits ? "Decline" : "Decline · send free dates"}</button>
               {op?.phone && <button onClick={() => openWhatsApp(op.phone, `Hello ${op.name}, about your room request at ${user.name} for ${fmtDate(b.checkIn)}–${fmtDate(b.checkOut)}:`)} className="tap h-11 w-11 rounded-xl inline-flex items-center justify-center" style={{ background: C.card, border: `1px solid ${C.line}` }} aria-label="WhatsApp the operator"><MessageCircle size={17} color={C.pine} /></button>}
             </div>
           ) : (
             <div>
-              <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={2} maxLength={240} placeholder="Optional: why, or what you can offer instead (other dates, another room type)…"
+              {!fits && windows.length > 0 && <div className="text-[12px] mb-1.5" style={{ color: C.muted }}>The operator will see these free dates with your reply. Edit the message if you like.</div>}
+              <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={!fits ? 4 : 2} maxLength={400} placeholder="Optional: why, or what you can offer instead (other dates, another room type)…"
                 className="w-full px-3 py-2.5 rounded-xl text-[14px] resize-none mb-2" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
               <div className="flex gap-2">
                 <button disabled={busy} onClick={() => respond("declined")} className="tap flex-1 h-11 rounded-xl text-[14px] font-semibold" style={{ background: C.maroon, color: "#fff" }}>{busy ? "…" : "Send decline"}</button>
@@ -12719,14 +12824,16 @@ function TripHotels({ trip, user, actions }) {
   );
 }
 
-function FindHotelSheet({ trip, stay, user, onClose, onSent }) {
+function FindHotelSheet({ trip, stay, user, onClose, onSent, presetHotel = null, trips = [] }) {
   const [from, setFrom] = useState(stay.from);
   const [to, setTo] = useState(stay.to);
   const [summary, setSummary] = useState(null);   // hotel_id → {total, free}
   const [town, setTown] = useState(stay.townKey || "all");
-  const [hotel, setHotel] = useState(null);
+  const [hotel, setHotel] = useState(presetHotel);
   const [rooms, setRooms] = useState(null);
-  const [f, setF] = useState({ roomId: null, rooms: 1, guests: Math.max(1, trip.guestCount || (trip.guests || []).length || 2), meal: "breakfast", notes: "", guestName: (trip.guests || [])[0]?.name || "" });
+  const [tripId, setTripId] = useState(trip ? trip.id : null);
+  const linkable = trip ? [] : (trips || []).filter((t) => t.end >= isoDay(0) && t.status !== "cancelled").slice(0, 8);
+  const [f, setF] = useState({ roomId: null, rooms: 1, guests: Math.max(1, (trip && (trip.guestCount || (trip.guests || []).length)) || 2), meal: "breakfast", notes: "", guestName: ((trip && trip.guests) || [])[0]?.name || "" });
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
   const set = (k, v) => setF((x) => ({ ...x, [k]: v }));
@@ -12774,7 +12881,7 @@ function FindHotelSheet({ trip, stay, user, onClose, onSent }) {
     if (Number(f.rooms) > room.free) { setErr(`Only ${room.free} ${room.name} free for these dates.`); return; }
     setBusy(true); setErr(null);
     const { error } = await supabase.from("room_bookings").insert({
-      hotel_id: hotel.id, room_id: room.room_id, operator_id: user.talentId || user.id, trip_id: trip.id,
+      hotel_id: hotel.id, room_id: room.room_id, operator_id: user.talentId || user.id, trip_id: tripId || null,
       check_in: from, check_out: to, rooms: Number(f.rooms) || 1, guests: Number(f.guests) || 1, meal_plan: f.meal,
       guest_name: f.guestName.trim() || null, notes: f.notes.trim() || null,
     });
@@ -12816,13 +12923,25 @@ function FindHotelSheet({ trip, stay, user, onClose, onSent }) {
         </>
       ) : (
         <>
-          <button onClick={() => setHotel(null)} className="tap inline-flex items-center gap-1 text-[13px] font-semibold mb-2" style={{ color: C.muted }}><ChevronLeft size={15} /> All hotels</button>
+          {!presetHotel && <button onClick={() => setHotel(null)} className="tap inline-flex items-center gap-1 text-[13px] font-semibold mb-2" style={{ color: C.muted }}><ChevronLeft size={15} /> All hotels</button>}
           <div className="text-[18px] font-semibold inline-flex items-center gap-1.5" style={{ color: C.ink }}>{hotel.company || hotel.name}{hotel.verified && <BadgeCheck size={16} color={C.pine} />}</div>
-          <div className="text-[13px] mb-3" style={{ color: C.muted }}>{fmtNights(from, to)}{hotel.hotelCheckin ? ` · check-in from ${hotel.hotelCheckin}` : ""}</div>
+          <div className="text-[13px] mb-3" style={{ color: C.muted }}>{[hotelTownName(hotel.hotelTown), hotel.hotelCheckin ? `check-in from ${hotel.hotelCheckin}` : null].filter(Boolean).join(" · ")}</div>
+          {presetHotel && (
+            <div className="grid grid-cols-2 gap-3 mb-3">
+              <div><Label>Check in</Label><input type="date" value={from} min={isoDay(0)} onChange={(e) => { setFrom(e.target.value); if (to <= e.target.value) setTo(addDays(e.target.value, 1)); }} className="w-full h-11 px-3 rounded-xl text-[14px]" style={field} /></div>
+              <div><Label>Check out</Label><input type="date" value={to} min={addDays(from, 1)} onChange={(e) => setTo(e.target.value)} className="w-full h-11 px-3 rounded-xl text-[14px]" style={field} /></div>
+            </div>
+          )}
+          {linkable.length > 0 && (
+            <div className="mb-3">
+              <Label>For which trip? (optional)</Label>
+              <div className="flex flex-wrap gap-2"><Chip on={!tripId} onClick={() => setTripId(null)}>No trip yet</Chip>{linkable.map((t) => <Chip key={t.id} on={tripId === t.id} onClick={() => setTripId(t.id)}>{t.title}</Chip>)}</div>
+            </div>
+          )}
           {hotel.hotelPolicy && <div className="text-[12px] rounded-lg px-3 py-2 mb-3" style={{ background: C.bg, color: C.ink }}>{hotel.hotelPolicy}</div>}
           <Label>Room type</Label>
           {rooms === null && <div className="text-[13px] mb-3" style={{ color: C.muted }}>Checking what's free…</div>}
-          {rooms && !rooms.length && <div className="text-[13px] mb-3" style={{ color: C.muted }}>This hotel hasn't listed room types yet. WhatsApp them from the trip page.</div>}
+          {rooms && !rooms.length && <div className="text-[13px] mb-3" style={{ color: C.muted }}>This hotel hasn't listed room types yet. Send them a message and ask.</div>}
           {(rooms || []).map((r) => (
             <button key={r.room_id} disabled={!r.free} onClick={() => set("roomId", r.room_id)} className="tap w-full text-left rounded-xl px-3.5 py-3 mb-2 flex items-center gap-3"
               style={{ background: f.roomId === r.room_id ? C.pineSoft : C.card, border: `1.5px solid ${f.roomId === r.room_id ? C.pine : C.line}`, opacity: r.free ? 1 : .5 }}>
