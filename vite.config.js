@@ -37,6 +37,8 @@ export default defineConfig({
       },
       workbox: {
         globPatterns: ["**/*.{js,css,html,jpg,png,svg,woff2}"],
+        // The app's offline fallback must not swallow real files: robots.txt, sitemap.xml, the demo pages, icons
+        navigateFallbackDenylist: [/^\/robots\.txt$/, /^\/sitemap\.xml$/, /\.(?:html|xml|txt|json|png|jpg|svg|ico|webmanifest)$/],
         cleanupOutdatedCaches: true,
         clientsClaim: true,
         skipWaiting: true
