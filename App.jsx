@@ -63,7 +63,7 @@ const CLOUD = Boolean(supabase);
   } catch (e) {}
 })();
 const DEMO_MODE = false;   // set true only for local demos without a database
-const BUILD = "BUILD 43 — 8 Oct";   // bump every deploy; shown at the top of the welcome screen
+const BUILD = "BUILD 44 — 8 Oct";   // bump every deploy; shown at the top of the welcome screen
 // which device someone is on — shown beside the build so a screenshot tells us both
 const DEVICE = (() => {
   try {
@@ -2849,6 +2849,7 @@ function TripHub({ user, meId, trip, actions, onBack }) {
   const tripDone = state === "active" || state === "completed";
   const canInvite = tripDone && (user.kind === "operator" || user.kind === "admin");
   const isTalent = user.kind === "guide" || user.kind === "driver";
+  const [hotelsOpen, setHotelsOpen] = useState(() => (trip.hotelsStatus || "not_started") === "in_progress");
   if (chatOpen) return <TripChatView user={user} meId={meId} trip={trip} actions={actions} onBack={() => setChatOpen(false)} />;
   return (
     <div className="pb-6 fade">
@@ -2862,9 +2863,9 @@ function TripHub({ user, meId, trip, actions, onBack }) {
       <div className="px-5 py-4">
         {isTalent
           ? <CrewBrief trip={trip} user={user} />
-          : <TripEssentials trip={trip} canEdit actions={actions} />}
+          : <TripEssentials trip={trip} canEdit actions={actions} onOpenHotels={() => setHotelsOpen(true)} />}
         {!isTalent && <GuestRoster trip={trip} canEdit actions={actions} />}
-        {!isTalent && <TripHotels trip={trip} user={user} actions={actions} />}
+        {!isTalent && <TripHotels trip={trip} user={user} actions={actions} open={hotelsOpen} onToggle={() => setHotelsOpen((v) => !v)} />}
 
         {canInvite && (
           <button onClick={() => setInviting(true)}
@@ -8043,16 +8044,20 @@ const READY_STATES = {
 
 const CHECKLIST = [
   { key: "visaStatus",    col: "visa_status",    label: "Visa clearance",
-    hint: "Applied through the Department of Tourism. Needs every guest's passport." },
+    hint: "Apply in the Department of Immigration portal with every guest's passport. Allow 5 working days.",
+    link: "https://immi.gov.bt/", linkLabel: "Apply" },
   { key: "sdfStatus",     col: "sdf_status",     label: "SDF paid",
-    hint: "Sustainable Development Fee — per guest, per night." },
+    hint: "Sustainable Development Fee, per guest per night, paid in the same portal with the visa.",
+    link: "https://immi.gov.bt/", linkLabel: "Pay" },
   { key: "permitsStatus", col: "permits_status", label: "Route permits",
-    hint: "Needed for restricted areas. Allow several days." },
+    hint: "For restricted areas, from Immigration in Thimphu. Allow several days.",
+    link: "https://immi.gov.bt/", linkLabel: "Request" },
   { key: "hotelsStatus",  col: "hotels_status",  label: "Hotels booked",
-    hint: "Every night of the trip confirmed." },
+    hint: "Every night of the trip confirmed. Request rooms from hub hotels below.",
+    action: "hotels", linkLabel: "Manage" },
 ];
 
-function TripEssentials({ trip, canEdit, actions }) {
+function TripEssentials({ trip, canEdit, actions, onOpenHotels }) {
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [f, setF] = useState({
@@ -8263,24 +8268,33 @@ function TripEssentials({ trip, canEdit, actions }) {
 
       {/* the checklist */}
       <div className="rounded-2xl overflow-hidden" style={{ background: C.card, border: `1px solid ${C.line}` }}>
-        <div className="px-4 py-3" style={{ borderBottom: `1px solid ${C.lineSoft}` }}>
-          <span className="text-[13px] font-semibold" style={{ color: C.ink }}>Before departure</span>
-          {canEdit && <span className="text-[12px] ml-2" style={{ color: C.muted }}>tap to change</span>}
+        <div className="px-4 py-3 flex items-center justify-between gap-3" style={{ borderBottom: `1px solid ${C.lineSoft}` }}>
+          <div>
+            <span className="text-[13px] font-semibold" style={{ color: C.ink }}>Operator tasks</span>
+            <span className="text-[12px] ml-2" style={{ color: C.muted }}>only you see this</span>
+          </div>
+          <span className="text-[12px] font-semibold" style={{ color: notReady.length ? C.goldText : C.success }}>{notReady.length ? `${CHECKLIST.length - notReady.length}/${CHECKLIST.length} done` : "All done"}</span>
         </div>
         {CHECKLIST.map((item, i) => {
           const st = READY_STATES[trip[item.key] || "not_started"] || READY_STATES.not_started;
+          const done = ["done", "not_needed"].includes(trip[item.key] || "not_started");
           return (
-            <button key={item.key} onClick={() => cycle(item)} disabled={!canEdit}
-              className="tap w-full text-left px-4 py-3 flex items-start gap-3"
-              style={{ borderTop: i ? `1px solid ${C.lineSoft}` : "none" }}>
-              <span className="rounded-full shrink-0 mt-1.5" style={{ width: 9, height: 9, background: st.dot }} />
-              <div className="flex-1 min-w-0">
-                <div className="text-[14px] font-medium" style={{ color: C.ink }}>{item.label}</div>
-                <div className="text-[12px] leading-snug mt-0.5" style={{ color: C.muted }}>{item.hint}</div>
+            <div key={item.key} className="flex items-start gap-3 px-4 py-3" style={{ borderTop: i ? `1px solid ${C.lineSoft}` : "none" }}>
+              <button onClick={() => cycle(item)} disabled={!canEdit} aria-label={`${item.label}: ${st.label}. Tap to change`}
+                className="tap w-6 h-6 rounded-md flex items-center justify-center shrink-0 mt-0.5"
+                style={{ background: done ? C.pine : C.card, border: `1.5px solid ${done ? C.pine : st.dot}` }}>
+                {done && <Check size={13} color="#fff" strokeWidth={3.2} />}
+              </button>
+              <button onClick={() => cycle(item)} disabled={!canEdit} className="tap flex-1 min-w-0 text-left">
+                <div className="text-[14px] font-medium" style={{ color: C.ink, textDecoration: done ? "line-through" : "none", opacity: done ? .7 : 1 }}>{item.label}</div>
+                {!done && <div className="text-[12px] leading-snug mt-0.5" style={{ color: C.muted }}>{item.hint}</div>}
+              </button>
+              <div className="flex flex-col items-end gap-1.5 shrink-0">
+                <span className="text-[11px] font-semibold rounded-full px-2 py-1" style={{ background: st.bg, color: st.fg }}>{st.label}</span>
+                {!done && item.link && <a href={item.link} target="_blank" rel="noreferrer" className="tap inline-flex items-center gap-1 text-[12px] font-semibold" style={{ color: C.pine }}>{item.linkLabel} <ExternalLink size={11} /></a>}
+                {!done && item.action === "hotels" && <button onClick={() => onOpenHotels && onOpenHotels()} className="tap inline-flex items-center gap-1 text-[12px] font-semibold" style={{ color: C.pine }}>{item.linkLabel} <ChevronLeft size={12} style={{ transform: "rotate(-90deg)" }} /></button>}
               </div>
-              <span className="text-[11px] font-semibold rounded-full px-2 py-1 shrink-0"
-                style={{ background: st.bg, color: st.fg }}>{st.label}</span>
-            </button>
+            </div>
           );
         })}
         <button onClick={() => canEdit && actions.saveTripDetails(trip.id, { insurance_ok: !trip.insuranceOk })}
@@ -8436,32 +8450,7 @@ function CrewBrief({ trip, user }) {
 
       {open && (
         <div className="px-4 py-3.5">
-          {/* 1. things that must not be got wrong */}
-          {trip.guestNotes && (
-            <div className="rounded-xl px-3.5 py-3 mb-3 flex gap-2.5" style={{ background: C.maroonSoft }}>
-              <ShieldAlert size={16} color={C.maroon} className="shrink-0 mt-0.5" />
-              <div>
-                <div className="text-[13px] font-bold mb-0.5" style={{ color: C.maroon }}>Important — read before the trip</div>
-                <p className="text-[13px] leading-snug" style={{ color: C.maroon }}>{trip.guestNotes}</p>
-              </div>
-            </div>
-          )}
-
-          {/* who is in the group: names, nationality, dietary — never documents */}
-          {(trip.guests || []).length > 0 && (
-            <>
-              <div className="text-[12px] font-semibold tracking-[.12em] uppercase mb-2" style={{ color: C.goldText }}>Who's travelling</div>
-              <div className="rounded-xl px-3.5 py-3 mb-3" style={{ background: C.bg, border: `1px solid ${C.line}` }}>
-                {trip.guests.map((g, k) => (
-                  <div key={g.id} className="text-[13px] leading-snug" style={{ color: C.muted, marginTop: k ? 4 : 0 }}>
-                    <span className="font-medium" style={{ color: C.ink }}>{g.name}</span>{g.nationality ? ` · ${g.nationality}` : ""}{g.dietary ? ` · ${g.dietary}` : ""}
-                  </div>
-                ))}
-              </div>
-            </>
-          )}
-
-          {/* 2. where to be, when */}
+          {/* 1. where to be, when — the flight comes first */}
           <div className="text-[12px] font-semibold tracking-[.12em] uppercase mb-2" style={{ color: C.goldText }}>Collection</div>
           {trip.arrivalFlight || arrival ? (
             <div className="rounded-xl px-3.5 py-3 mb-3" style={{ background: C.bg, border: `1px solid ${C.line}` }}>
@@ -8502,7 +8491,7 @@ function CrewBrief({ trip, user }) {
             </div>
           )}
 
-          {/* 3. check the flight */}
+          {/* 2. check the flight (seats, delays) */}
           <div className="text-[12px] font-semibold tracking-[.12em] uppercase mb-2" style={{ color: C.goldText }}>Check the flight</div>
           <div className="flex gap-2 mb-3">
             {AIRLINES.map((a) => (
@@ -8521,11 +8510,11 @@ function CrewBrief({ trip, user }) {
             a delayed landing changes everyone's day.
           </p>
 
-          {/* 4. the plan */}
+          {/* 3. the route */}
           {(trip.itinerary || []).length > 0 && (
             <>
               <div className="text-[12px] font-semibold tracking-[.12em] uppercase mb-2" style={{ color: C.goldText }}>
-                The plan · {(trip.itinerary || []).length} days
+                The route · {(trip.itinerary || []).length} days
               </div>
               <div className="rounded-xl overflow-hidden mb-3" style={{ border: `1px solid ${C.line}` }}>
                 {(trip.itinerary || []).map((it, i) => (
@@ -8541,7 +8530,32 @@ function CrewBrief({ trip, user }) {
             </>
           )}
 
-          {/* 5. who to call if something goes wrong */}
+          {/* 4. the guests: what must not be got wrong, and who they are */}
+          {trip.guestNotes && (
+            <div className="rounded-xl px-3.5 py-3 mb-3 flex gap-2.5" style={{ background: C.maroonSoft }}>
+              <ShieldAlert size={16} color={C.maroon} className="shrink-0 mt-0.5" />
+              <div>
+                <div className="text-[13px] font-bold mb-0.5" style={{ color: C.maroon }}>Important — read before the trip</div>
+                <p className="text-[13px] leading-snug" style={{ color: C.maroon }}>{trip.guestNotes}</p>
+              </div>
+            </div>
+          )}
+
+          {/* who is in the group: names, nationality, dietary — never documents */}
+          {(trip.guests || []).length > 0 && (
+            <>
+              <div className="text-[12px] font-semibold tracking-[.12em] uppercase mb-2" style={{ color: C.goldText }}>Who's travelling</div>
+              <div className="rounded-xl px-3.5 py-3 mb-3" style={{ background: C.bg, border: `1px solid ${C.line}` }}>
+                {trip.guests.map((g, k) => (
+                  <div key={g.id} className="text-[13px] leading-snug" style={{ color: C.muted, marginTop: k ? 4 : 0 }}>
+                    <span className="font-medium" style={{ color: C.ink }}>{g.name}</span>{g.nationality ? ` · ${g.nationality}` : ""}{g.dietary ? ` · ${g.dietary}` : ""}
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+
+          {/* 5. who to call */}
           {trip.emergencyPhone && (
             <a href={`tel:${dialNumber(trip.emergencyPhone)}`}
               className="tap w-full rounded-xl px-3.5 py-3 flex items-center gap-3"
@@ -12727,10 +12741,12 @@ function HotelProfile({ user, onSaved }) {
 /* ================================ OPERATOR ================================= */
 /* Hotels per stay inside a trip. Nights come from the Drukpah plan; each stay
    can hold one or more room requests. hotels_status on the trip follows along. */
-function TripHotels({ trip, user, actions }) {
+function TripHotels({ trip, user, actions, open, onToggle }) {
   const [bookings, setBookings] = useState(null);
   const [finding, setFinding] = useState(null);   // stay
   const [err, setErr] = useState(null);
+  const boxRef = useRef(null);
+  useEffect(() => { if (open && boxRef.current) boxRef.current.scrollIntoView({ block: "start", behavior: "smooth" }); }, [open]);
   const stays = useMemo(() => tripStays(trip), [trip.itinerary, trip.start, trip.end]);
   const load = async () => {
     if (!CLOUD) { setBookings([]); return; }
@@ -12764,17 +12780,23 @@ function TripHotels({ trip, user, actions }) {
   const confirmedNights = stays.filter((s) => live.some((b) => b.status === "confirmed" && b.checkIn <= s.from && b.checkOut >= s.to)).reduce((n, s) => n + s.nights, 0);
   const totalNights = stays.reduce((n, s) => n + s.nights, 0);
 
+  const pendingCount = live.filter((b) => b.status === "requested").length;
+  const declinedCount = live.filter((b) => b.status === "declined").length;
   return (
-    <div className="rounded-2xl p-4 mb-4" style={{ background: C.card, border: `1px solid ${C.line}` }}>
-      <div className="flex items-start justify-between gap-3 mb-3">
-        <div>
-          <div className="text-[11px] font-semibold tracking-[.14em] uppercase" style={{ color: C.goldText }}>Hotels</div>
-          <div className="text-[13px] mt-0.5" style={{ color: C.muted }}>
-            {!stays.length ? "Set the trip dates or apply an itinerary to see the nights." : totalNights ? `${confirmedNights} of ${totalNights} nights confirmed` : ""}
+    <div ref={boxRef} className="rounded-2xl mb-4 overflow-hidden" style={{ background: C.card, border: `1px solid ${C.line}`, scrollMarginTop: 72 }}>
+      <button onClick={onToggle} className="tap w-full text-left px-4 py-3 flex items-center gap-3">
+        <div className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0" style={{ background: totalNights && confirmedNights === totalNights ? C.successSoft : C.pineSoft }}>
+          <BedDouble size={16} color={totalNights && confirmedNights === totalNights ? C.success : C.pine} />
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="text-[14px] font-semibold" style={{ color: C.ink }}>Hotels</div>
+          <div className="text-[12px] truncate" style={{ color: C.muted }}>
+            {!stays.length ? "Set the trip dates or apply an itinerary to see the nights." : `${confirmedNights} of ${totalNights} nights confirmed${pendingCount ? ` · ${pendingCount} waiting` : ""}${declinedCount ? ` · ${declinedCount} declined` : ""}`}
           </div>
         </div>
-        {bookings === null && <Loader2 size={16} className="animate-spin" color={C.muted} />}
-      </div>
+        {bookings === null ? <Loader2 size={16} className="animate-spin" color={C.muted} /> : <ChevronLeft size={16} color={C.muted} style={{ transform: open ? "rotate(90deg)" : "rotate(-90deg)", transition: "transform .2s" }} />}
+      </button>
+      {open && <div className="px-4 pb-4">
 
       {stays.map((s, i) => {
         const mine = live.filter((b) => b.checkIn < s.to && b.checkOut > s.from);
@@ -12819,6 +12841,7 @@ function TripHotels({ trip, user, actions }) {
         );
       })}
       {err && <div className="text-[13px] mt-2 rounded-lg px-3 py-2" style={{ background: C.maroonSoft, color: C.maroon }}>{err}</div>}
+      </div>}
       {finding && <FindHotelSheet trip={trip} stay={finding} user={user} onClose={() => setFinding(null)} onSent={() => { setFinding(null); load(); }} />}
     </div>
   );
