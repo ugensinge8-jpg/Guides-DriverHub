@@ -1,0 +1,42 @@
+# robots.txt — Bhutan Tourism Hub (RFC 9309)
+# Everything public may be crawled, including scripts and styles, so pages render correctly for crawlers.
+# Only one-time personal links (review, crew-invite and attestation tokens) are kept out of indexes.
+
+User-agent: *
+Allow: /
+Disallow: /?review=
+Disallow: /?invite=
+Disallow: /?attest=
+
+# AI and answer-engine crawlers are welcome
+User-agent: GPTBot
+Allow: /
+
+User-agent: ChatGPT-User
+Allow: /
+
+User-agent: OAI-SearchBot
+Allow: /
+
+User-agent: ClaudeBot
+Allow: /
+
+User-agent: Claude-SearchBot
+Allow: /
+
+User-agent: PerplexityBot
+Allow: /
+
+User-agent: Google-Extended
+Allow: /
+
+User-agent: Applebot
+Allow: /
+
+User-agent: Bingbot
+Allow: /
+
+# Content signals (Cloudflare's convention): may be shown in search, used to answer questions, and used for training
+Content-Signal: search=yes, ai-input=yes, ai-train=yes
+
+Sitemap: https://bhutantourismhub.com/sitemap.xml

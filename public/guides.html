@@ -1,0 +1,248 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="description" content="For Bhutan's licensed guides and drivers: direct requests, a calendar nobody can double-book, and a record of your trips that travels with you. Free.">
+<meta property="og:title" content="Bhutan Tourism Hub for Guides"><meta property="og:description" content="Direct requests, a protected calendar, and your reviews and past trips in one place. Free for licensed guides and drivers."><meta property="og:image" content="https://bhutantourismhub.com/preview.png"><meta property="og:url" content="https://bhutantourismhub.com/guides.html">
+<link rel="icon" href="/favicon.ico" sizes="48x48"><link rel="icon" type="image/svg+xml" href="/icon.svg"><link rel="canonical" href="https://bhutantourismhub.com/guides.html"><meta name="robots" content="index, follow"><script type="application/ld+json">{"@context":"https://schema.org","@type":"WebPage","url":"https://bhutantourismhub.com/guides.html","name":"Bhutan Tourism Hub for Guides","description":"What licensed Bhutanese guides and drivers get on Bhutan Tourism Hub: direct requests from tour operators, a calendar that cannot be double-booked, a trip brief, and a record of reviews and attested past trips.","isPartOf":{"@id":"https://bhutantourismhub.com/#website"},"about":{"@id":"https://bhutantourismhub.com/#org"},"inLanguage":"en"}</script>
+<title>Bhutan Tourism Hub for Guides</title>
+<style>
+/* Layout: the app's own white system; one phone mock per feature, drawn in CSS so the page stays light on slow networks. */
+:root {
+  --bg:#FFFFFF; --bg2:#F5F5F7; --ink:#1D1D1F; --muted:#626269; --line:#E2E2E7; --lineSoft:#EEEEF2;
+  --brand:#21402F; --brandDeep:#16281E; --gold:#D9A94E; --goldSoft:#F3E8CF; --goldText:#8A6A1F;
+  --action:#0066CC; --actionSoft:#EAF2FD; --ok:#1F8A4C; --okSoft:#E8F5EC; --warn:#7A2E2E; --warnSoft:#F7E9E7;
+  --font:-apple-system,BlinkMacSystemFont,"SF Pro Text","SF Pro Display",Inter,"Helvetica Neue",system-ui,"Segoe UI",Roboto,sans-serif;
+  box-sizing:border-box; padding-top:env(safe-area-inset-top,0px); padding-bottom:env(safe-area-inset-bottom,0px);
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg:#000000; --bg2:#161617; --ink:#F5F5F7; --muted:#A1A1A6; --line:#3A3A3C; --lineSoft:#2C2C2E; --actionSoft:#0F2238; --goldSoft:#3A2F17; --goldText:#E9CF8E; --okSoft:#14301F; --warnSoft:#3A1A1A; color-scheme:dark; } }
+:root[data-theme="dark"] { --bg:#000000; --bg2:#161617; --ink:#F5F5F7; --muted:#A1A1A6; --line:#3A3A3C; --lineSoft:#2C2C2E; --actionSoft:#0F2238; --goldSoft:#3A2F17; --goldText:#E9CF8E; --okSoft:#14301F; --warnSoft:#3A1A1A; color-scheme:dark; }
+* { box-sizing:border-box; }
+html { scroll-behavior:smooth; }
+body { margin:0; overflow-x:hidden; background:var(--bg); color:var(--ink); font-family:var(--font); -webkit-font-smoothing:antialiased; line-height:1.47; letter-spacing:-.01em; }
+a { color:var(--action); text-decoration:none; }
+h1,h2,h3 { text-wrap:balance; margin:0; }
+.wrap { max-width:1024px; margin:0 auto; padding-inline:22px; }
+
+nav { position:sticky; top:env(safe-area-inset-top,0px); z-index:10; background:color-mix(in srgb, var(--bg) 88%, transparent); backdrop-filter:blur(12px); -webkit-backdrop-filter:blur(12px); border-bottom:1px solid var(--line); }
+nav .in { height:52px; display:flex; align-items:center; justify-content:space-between; font-size:14px; }
+nav .brand { display:flex; align-items:center; gap:9px; font-weight:600; color:var(--ink); }
+nav .pill { background:var(--action); color:#fff; padding:7px 14px; border-radius:980px; font-weight:600; font-size:13px; }
+
+.mark { width:28px; height:28px; display:block; flex:none; }
+.hero { text-align:center; padding:72px 0 28px; }
+.hero .eyebrow { color:var(--muted); font-size:16px; font-weight:500; margin-bottom:10px; letter-spacing:.01em; }
+.hero h1 { font-size:clamp(36px, 7vw, 64px); line-height:1.05; letter-spacing:-.03em; font-weight:700; margin:0 0 16px; }
+.hero p { font-size:clamp(17px, 2.3vw, 22px); color:var(--muted); max-width:620px; margin:0 auto 24px; line-height:1.35; }
+.cta-row { display:flex; gap:12px 22px; justify-content:center; align-items:center; flex-wrap:wrap; font-size:17px; }
+.btn { background:var(--action); color:#fff; border-radius:980px; padding:12px 22px; font-weight:600; display:inline-block; }
+.cta-row a:not(.btn)::after { content:" ›"; }
+
+.feature { padding:88px 0 0; text-align:center; }
+.feature .eyebrow { color:var(--goldText); font-weight:600; font-size:13px; letter-spacing:.08em; text-transform:uppercase; margin-bottom:10px; }
+.feature h2 { font-size:clamp(28px, 4.6vw, 44px); letter-spacing:-.025em; line-height:1.1; margin-bottom:12px; }
+.feature p { color:var(--muted); font-size:clamp(16px, 2vw, 19px); max-width:560px; margin:0 auto; line-height:1.4; }
+.feature .alt { background:var(--bg2); border-radius:28px; padding:40px 22px 0; margin-top:34px; display:flex; justify-content:center; }
+
+/* phone mock */
+.phone { width:300px; max-width:100%; background:var(--bg); border:1px solid var(--line); border-bottom:none; border-radius:34px 34px 0 0; padding:14px 12px 0; box-shadow:0 30px 60px -40px rgba(0,0,0,.35); text-align:left; }
+.phone .top { display:flex; align-items:center; gap:8px; padding:4px 4px 10px; border-bottom:1px solid var(--lineSoft); }
+.phone .top .search { flex:1; height:30px; border:1px solid var(--line); border-radius:980px; font-size:11px; color:var(--muted); display:flex; align-items:center; padding:0 10px; }
+.phone .title { font-size:20px; font-weight:700; letter-spacing:-.02em; margin:12px 4px 8px; }
+.card { border:1px solid var(--line); border-radius:14px; padding:12px; margin:0 4px 10px; background:var(--bg); }
+.card .t { font-size:14px; font-weight:600; }
+.card .s { font-size:11.5px; color:var(--muted); margin-top:2px; }
+.pills { display:flex; gap:6px; flex-wrap:wrap; margin-top:8px; }
+.pill2 { font-size:11px; border:1px solid var(--line); border-radius:980px; padding:3px 8px; background:var(--bg2); }
+.note { font-size:11px; border-radius:9px; padding:7px 9px; margin-top:8px; line-height:1.35; }
+.note.gold { background:var(--goldSoft); color:var(--goldText); }
+.note.ok { background:var(--okSoft); color:var(--ok); }
+.note.warn { background:var(--warnSoft); color:var(--warn); }
+.btns { display:flex; gap:8px; margin-top:10px; }
+.btns span { flex:1; height:34px; border-radius:10px; display:flex; align-items:center; justify-content:center; font-size:12.5px; font-weight:600; }
+.btns .primary { background:var(--action); color:#fff; }
+.btns .secondary { border:1.5px solid var(--line); color:var(--warn); }
+.badge { display:inline-flex; align-items:center; gap:4px; font-size:10.5px; font-weight:600; border-radius:980px; padding:3px 8px; }
+.badge.ok { background:var(--okSoft); color:var(--ok); }
+.badge.gold { background:var(--goldSoft); color:var(--goldText); }
+.tabs { display:flex; justify-content:space-around; border-top:1px solid var(--line); padding:8px 0 10px; font-size:9.5px; color:var(--muted); margin-top:6px; }
+.tabs b { color:var(--action); font-weight:600; }
+.seg { display:inline-flex; background:var(--bg2); border-radius:9px; padding:2px; font-size:11px; margin:0 4px 10px; }
+.seg span { padding:5px 10px; border-radius:7px; color:var(--muted); }
+.seg .on { background:var(--bg); color:var(--ink); font-weight:600; box-shadow:0 1px 3px rgba(0,0,0,.12); }
+
+/* calendar mock */
+.cal { margin:0 4px; }
+.cal .m { font-size:12px; font-weight:600; margin-bottom:6px; }
+.cal .g { display:grid; grid-template-columns:repeat(7,1fr); gap:3px; }
+.cal .g i { font-style:normal; height:30px; border:1.5px solid var(--lineSoft); border-radius:6px; display:flex; align-items:center; justify-content:center; font-size:11px; font-variant-numeric:tabular-nums; }
+.cal .g i.h { border:none; height:16px; font-size:9.5px; color:var(--muted); font-weight:600; }
+.cal .g i.trip { background:var(--action); color:#fff; font-weight:600; border-color:var(--action); }
+.cal .g i.block { background:#D7D7DC; color:#1D1D1F; font-weight:600; border-color:#D7D7DC; }
+.cal .g i.pend { border-color:var(--gold); }
+.cal .g i.today { border-color:var(--action); }
+.cal .g i.past { opacity:.45; }
+.legend { display:flex; gap:10px; flex-wrap:wrap; font-size:10px; color:var(--muted); margin:8px 4px 0; }
+.legend span { display:inline-flex; align-items:center; gap:4px; }
+.legend em { display:inline-block; width:9px; height:9px; border-radius:2px; }
+
+/* brief mock */
+.sec { font-size:10px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; color:var(--goldText); margin:12px 4px 6px; }
+.row { display:flex; gap:8px; align-items:flex-start; margin:0 4px 8px; font-size:12px; }
+.row b { font-weight:600; }
+.row .n { width:18px; height:18px; border-radius:5px; background:var(--action); color:#fff; font-size:10px; font-weight:700; display:flex; align-items:center; justify-content:center; flex:none; margin-top:1px; }
+.row small { color:var(--muted); font-size:11px; display:block; }
+
+/* profile mock */
+.avatar { width:44px; height:44px; border-radius:50%; background:linear-gradient(180deg,#2C4F3B,#16281E); color:var(--goldSoft); font-weight:700; font-size:16px; display:flex; align-items:center; justify-content:center; }
+.stars { color:var(--gold); letter-spacing:1px; font-size:12px; }
+.stat { display:flex; justify-content:space-around; margin:10px 4px; }
+.stat div { text-align:center; } .stat b { display:block; font-size:16px; } .stat small { font-size:10px; color:var(--muted); }
+
+/* steps + footer */
+.steps { display:grid; grid-template-columns:repeat(3,1fr); gap:18px; margin:40px auto 0; max-width:900px; text-align:left; }
+.step { border:1px solid var(--line); border-radius:20px; padding:20px; background:var(--bg); }
+.step .k { color:var(--goldText); font-size:12px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; }
+.step h3 { font-size:19px; letter-spacing:-.02em; margin:8px 0 6px; }
+.step p { font-size:14.5px; color:var(--muted); line-height:1.4; margin:0; }
+.close { text-align:center; padding:90px 0 60px; }
+.close h2 { font-size:clamp(28px, 5vw, 48px); letter-spacing:-.03em; margin-bottom:12px; }
+.close p { color:var(--muted); font-size:18px; max-width:560px; margin:0 auto 22px; }
+footer { border-top:1px solid var(--line); padding:26px 0 40px; font-size:13px; color:var(--muted); text-align:center; }
+footer .mail { display:inline-block; border:1px solid var(--line); border-radius:980px; padding:5px 12px; color:var(--ink); user-select:all; margin-top:8px; }
+@media (max-width:760px) { .steps { grid-template-columns:1fr; } .feature { padding-top:64px; } .hero { padding-top:48px; } }
+@media (prefers-reduced-motion: no-preference) { .phone { transition:transform .3s ease; } }
+</style>
+</head><body>
+
+<nav><div class="wrap in">
+  <span class="brand">
+    <svg class="mark" viewBox="0 0 1024 1024" aria-hidden="true"><defs><linearGradient id="au" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#F3E8CF"/><stop offset="1" stop-color="#DDB45A"/></linearGradient><clipPath id="disc"><circle cx="512" cy="512" r="420"/></clipPath></defs><circle cx="512" cy="512" r="420" fill="url(#au)"/><g clip-path="url(#disc)"><path d="M10 960 L323 458 L455 634 L612 388 L1040 960 Z" fill="#2C4F3B"/><path d="M-20 1040 L387 715 L560 878 L753 661 L1064 1040 Z" fill="#16281E"/></g></svg>
+    Bhutan Tourism Hub
+  </span>
+  <a class="pill" href="https://bhutantourismhub.com">Join free</a>
+</div></nav>
+
+<section class="hero wrap">
+  <div class="eyebrow">For licensed guides and drivers</div>
+  <h1>Kuzuzangpo. The operators come to you.</h1>
+  <p>Direct requests with the dates filled in, a calendar nobody can double-book, and a record of your trips that travels with you. Free, built in Bhutan.</p>
+  <div class="cta-row"><a class="btn" href="https://bhutantourismhub.com">Join the hub</a><a href="https://bhutantourismhub.com">I already have an account</a></div>
+</section>
+
+<section class="feature wrap">
+  <div class="eyebrow">Requests</div>
+  <h2>A request, not a phone call at 11 pm.</h2>
+  <p>Operators send the trip title, the dates, the languages and their notes. You tap once. Accepting creates the trip; declining takes a second.</p>
+  <div class="alt"><div class="phone">
+    <div class="top"><svg class="mark" viewBox="0 0 1024 1024" aria-hidden="true"><circle cx="512" cy="512" r="420" fill="#E9CF8E"/><g><path d="M10 960 L323 458 L455 634 L612 388 L1040 960 Z" fill="#2C4F3B"/><path d="M-20 1040 L387 715 L560 878 L753 661 L1064 1040 Z" fill="#16281E"/></g></svg><div class="search">Search people or add friends</div></div>
+    <div class="seg"><span>Find work</span><span class="on">Invites · 2</span><span>Applied</span></div>
+    <div class="card">
+      <div class="t">Cultural tour west</div><div class="s">from Druk Heritage Tours</div>
+      <div class="pills"><span class="pill2">21 Oct – 25 Oct</span><span class="pill2">English</span><span class="pill2">German</span></div>
+      <div class="note gold">1 other operator asked for these dates too. Accepting this one declines the other.</div>
+      <div class="btns"><span class="secondary">Decline</span><span class="primary">Accept</span></div>
+    </div>
+    <div class="card">
+      <div class="t">Trek support, Jomolhari</div><div class="s">from Himalayan Trails</div>
+      <div class="pills"><span class="pill2">23 Oct – 27 Oct</span><span class="pill2">English</span></div>
+      <div class="btns"><span class="secondary">Decline</span><span class="primary">Accept</span></div>
+    </div>
+    <div class="tabs"><span>Feed</span><b>Jobs</b><span>Trips</span><span>Messages</span><span>Profile</span></div>
+  </div></div>
+</section>
+
+<section class="feature wrap">
+  <div class="eyebrow">Calendar</div>
+  <h2>Your days, protected.</h2>
+  <p>Once you accept, nobody can book you for those dates. Block your own days for family, your own tours or rest; operators see them as unavailable and never see the note.</p>
+  <div class="alt"><div class="phone">
+    <div class="title">Your calendar</div>
+    <div class="cal">
+      <div class="m">November 2026</div>
+      <div class="g">
+        <i class="h">M</i><i class="h">T</i><i class="h">W</i><i class="h">T</i><i class="h">F</i><i class="h">S</i><i class="h">S</i>
+        <i></i><i></i><i></i><i></i><i></i><i></i><i>1</i>
+        <i>2</i><i class="today">3</i><i>4</i><i class="trip">5</i><i class="trip">6</i><i class="trip">7</i><i class="trip">8</i>
+        <i class="trip">9</i><i>10</i><i>11</i><i class="pend">12</i><i class="pend">13</i><i class="pend">14</i><i>15</i>
+        <i>16</i><i>17</i><i class="block">18</i><i class="block">19</i><i class="block">20</i><i>21</i><i>22</i>
+        <i>23</i><i class="trip">24</i><i class="trip">25</i><i class="trip">26</i><i class="trip">27</i><i>28</i><i>29</i>
+        <i>30</i><i></i><i></i><i></i><i></i><i></i><i></i>
+      </div>
+      <div class="legend"><span><em style="background:var(--action)"></em> confirmed trip</span><span><em style="background:#D7D7DC"></em> blocked by you</span><span><em style="border:1.5px solid var(--gold)"></em> request waiting</span></div>
+    </div>
+    <div class="card" style="margin-top:12px"><div class="t">Smith family · 5 nights</div><div class="s">5 Nov – 9 Nov · Druk Heritage Tours</div></div>
+    <div class="card"><div class="t">Tshechu with family</div><div class="s">18 Nov – 20 Nov · only you see the note</div></div>
+    <div class="tabs"><span>Feed</span><span>Jobs</span><span>Trips</span><span>Messages</span><b>Profile</b></div>
+  </div></div>
+</section>
+
+<section class="feature wrap">
+  <div class="eyebrow">On the day</div>
+  <h2>Everything for the trip, in order.</h2>
+  <p>The flight and where to be, a link to check it, the route day by day, what matters about the guests, where the group sleeps, who to call. No scrolling through chat to find the airport time.</p>
+  <div class="alt"><div class="phone">
+    <div class="card" style="background:var(--action);color:#fff;border-color:var(--action)"><div class="t">Your brief</div><div class="s" style="color:#fff;opacity:.85">Smith family · starts in 3 days</div></div>
+    <div class="sec">Collection</div>
+    <div class="row"><div><b>Paro airport, KB 201 lands 11:40</b><small>Be at arrivals by 11:15. Hold the sign "Smith · Druk Heritage".</small></div></div>
+    <div class="sec">Check the flight</div>
+    <div class="row"><div class="pills" style="margin:0"><span class="pill2">Drukair ›</span><span class="pill2">Bhutan Airlines ›</span></div></div>
+    <div class="sec">The route · 5 days</div>
+    <div class="row"><div class="n">1</div><div>Arrive Paro · Night in Paro (3-star)</div></div>
+    <div class="row"><div class="n">2</div><div>Paro → Thimphu · Night in Thimphu (4-star)</div></div>
+    <div class="row"><div class="n">3</div><div>Over Dochula to Punakha</div></div>
+    <div class="sec">Who's travelling</div>
+    <div class="row"><div><b>4 guests · 1 vegetarian · one knee injury</b><small>Short walks only on day 3.</small></div></div>
+    <div class="sec">Where the group sleeps</div>
+    <div class="row"><div><b>Zhiwa Boutique Stay, Paro</b><small>5 Nov · check-in from 14:00 · 17 12 34 56</small></div></div>
+    <div class="tabs"><span>Feed</span><span>Jobs</span><b>Trips</b><span>Messages</span><span>Profile</span></div>
+  </div></div>
+</section>
+
+<section class="feature wrap">
+  <div class="eyebrow">Your record</div>
+  <h2>Your reputation goes with you.</h2>
+  <p>Guests leave reviews through a link tied to a real trip. Past trips from before the hub are attested by the operator you did them for. Verified guides appear first when operators search.</p>
+  <div class="alt"><div class="phone">
+    <div class="row" style="align-items:center;margin-top:6px"><div class="avatar">KW</div><div><b style="font-size:15px">Karma Wangmo</b> <span class="badge ok">✓ Verified</span><small>Guide · Paro · 9 yrs · English, German</small></div></div>
+    <div class="stat"><div><b>4.9</b><small>guest rating</small></div><div><b>38</b><small>reviews</small></div><div><b>61</b><small>trips</small></div></div>
+    <div class="card"><div class="stars">★★★★★</div><div class="s" style="color:var(--ink);margin-top:4px">"Karma knew every chorten on Dochula and got our mother up to Taktsang at her own pace."</div><div class="s">Margaret, Australia · verified trip, Oct 2026</div></div>
+    <div class="card"><div class="t">Past trips</div><div class="s">Western loop, 7 days · Apr 2025 <span class="badge ok">Attested by Druk Heritage Tours</span></div><div class="s">Bumthang festival, 10 days · Nov 2024 <span class="badge ok">Attested by Yangphel Adventure</span></div></div>
+    <div class="tabs"><span>Feed</span><span>Jobs</span><span>Trips</span><span>Messages</span><b>Profile</b></div>
+  </div></div>
+</section>
+
+<section class="feature wrap">
+  <div class="eyebrow">Quiet months</div>
+  <h2>Find work when the phone is quiet.</h2>
+  <p>Operators post open jobs with dates and languages. Apply in one tap; the operator hires from the applicants, and the trip and calendar follow.</p>
+  <div class="alt"><div class="phone">
+    <div class="seg"><span class="on">Find work</span><span>Invites</span><span>Applied</span></div>
+    <div class="card"><div class="t">Guide + Driver for 12-day eastern circuit</div><div class="s">Yangphel Adventure · 2 Dec – 13 Dec</div><div class="pills"><span class="pill2">Guide + Driver</span><span class="pill2">English</span><span class="pill2">Japanese</span></div><div class="btns"><span class="primary">Apply</span></div></div>
+    <div class="card"><div class="t">Trekking guide, Druk Path</div><div class="s">Himalayan Trails · 18 Nov – 23 Nov <span class="badge gold">Short notice</span></div><div class="pills"><span class="pill2">Guide</span><span class="pill2">English</span></div><div class="btns"><span class="primary">Apply</span></div></div>
+    <div class="tabs"><span>Feed</span><b>Jobs</b><span>Trips</span><span>Messages</span><span>Profile</span></div>
+  </div></div>
+</section>
+
+<section class="feature wrap">
+  <div class="eyebrow">Getting started</div>
+  <h2>Ten minutes, no fee, no commission.</h2>
+  <p>You keep every ngultrum. The hub takes nothing from operators or guides.</p>
+  <div class="steps">
+    <div class="step"><div class="k">Step 1</div><h3>Create your account</h3><p>Name, phone, home base and languages. Two minutes on any phone; no app store needed.</p></div>
+    <div class="step"><div class="k">Step 2</div><h3>Upload your DoT licence</h3><p>A photo is enough. Once checked, your profile carries the Verified tick that operators look for first.</p></div>
+    <div class="step"><div class="k">Step 3</div><h3>Set your calendar</h3><p>Block the days you can't work. From then on, requests arrive only for days you're free.</p></div>
+  </div>
+</section>
+
+<section class="close wrap">
+  <h2>Built for Bhutan's guides.</h2>
+  <p>Works on any phone, in Dzongkha-friendly English, on slow connections. Join now and be in the operators' search by tonight.</p>
+  <a class="btn" href="https://bhutantourismhub.com">Join the hub</a>
+</section>
+
+<footer class="wrap">
+  bhutantourismhub.com · Bhutan Tourism Hub<br>
+  Questions? Write to <span class="mail">ugyen@bhutantourismhub.com</span>
+</footer>
+
+</body></html>
