@@ -4,15 +4,20 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="theme-color" content="#FFFFFF" />
-    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+    <!-- Icons: /favicon.ico (48px, what search engines fetch) · SVG for modern browsers · 96/192 as PNG fallbacks -->
+    <link rel="icon" href="/favicon.ico" sizes="48x48" />
+    <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+    <link rel="icon" type="image/png" sizes="96x96" href="/favicon-96.png" />
     <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png" />
     <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+    <meta name="robots" content="index, follow, max-image-preview:large" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-title" content="Bhutan Tourism Hub" />
-    <title>Bhutan Tourism Hub — Verified guides &amp; drivers in Bhutan</title>
-    <meta name="description" content="Bhutan's verified marketplace for licensed guides and drivers. Real reviews from real guests, tied to real trips." />
+    <title>Bhutan Tourism Hub — Verified guides, drivers, operators and hotels in Bhutan</title>
+    <meta name="description" content="Bhutan Tourism Hub is a Bhutan-based platform where tour operators book licensed, verified guides and drivers, request hotel rooms, and plan itineraries. Guest reviews are tied to real trips. Free, built in Bhutan." />
+    <meta name="keywords" content="Bhutan tour guide, Bhutan driver, licensed guide Bhutan, Bhutan tour operator, Bhutan hotels, Department of Tourism Bhutan, verified guides Bhutan" />
 
     <!-- Open the connection to the database while the app is still downloading: saves a round trip on slow links -->
     <link rel="preconnect" href="https://nxnsdnayzimzfiwjrkvv.supabase.co" crossorigin />
@@ -22,7 +27,7 @@
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content="Bhutan Tourism Hub" />
     <meta property="og:title" content="Bhutan Tourism Hub" />
-    <meta property="og:description" content="A verified record of the licensed guides and drivers who make Bhutan unforgettable. Share your review — it takes a minute." />
+    <meta property="og:description" content="Bhutan's platform for booking licensed guides and drivers, with guest reviews tied to real trips. Built in Bhutan. Free." />
     <meta property="og:url" content="https://bhutantourismhub.com/" />
     <meta property="og:image" content="https://bhutantourismhub.com/preview.png" />
     <meta property="og:image:secure_url" content="https://bhutantourismhub.com/preview.png" />
@@ -34,10 +39,50 @@
 
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:title" content="Bhutan Tourism Hub" />
-    <meta name="twitter:description" content="A verified record of the licensed guides and drivers who make Bhutan unforgettable." />
+    <meta name="twitter:description" content="Bhutan's platform for booking licensed guides and drivers, with guest reviews tied to real trips." />
     <meta name="twitter:image" content="https://bhutantourismhub.com/preview.png" />
 
     <link rel="canonical" href="https://bhutantourismhub.com/" />
+
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@graph": [
+        {
+          "@type": "Organization",
+          "@id": "https://bhutantourismhub.com/#org",
+          "name": "Bhutan Tourism Hub",
+          "alternateName": "BTH",
+          "url": "https://bhutantourismhub.com/",
+          "logo": { "@type": "ImageObject", "url": "https://bhutantourismhub.com/icon-512.png", "width": 512, "height": 512 },
+          "image": "https://bhutantourismhub.com/preview.png",
+          "description": "A Bhutan-based platform for discovering and booking verified Bhutanese tour guides, drivers, tour operators and hotels, with guest reviews tied to real trips.",
+          "areaServed": { "@type": "Country", "name": "Bhutan" },
+          "foundingLocation": { "@type": "Place", "name": "Thimphu, Bhutan" },
+          "email": "ugyen@bhutantourismhub.com",
+          "contactPoint": [{ "@type": "ContactPoint", "contactType": "customer support", "email": "ugyen@bhutantourismhub.com", "availableLanguage": ["English", "Dzongkha"] }],
+          "knowsAbout": ["Bhutan tourism", "licensed tour guides in Bhutan", "tourism drivers in Bhutan", "Bhutan tour operators", "Bhutan hotels", "Bhutan itineraries"]
+        },
+        {
+          "@type": "WebSite",
+          "@id": "https://bhutantourismhub.com/#website",
+          "url": "https://bhutantourismhub.com/",
+          "name": "Bhutan Tourism Hub",
+          "publisher": { "@id": "https://bhutantourismhub.com/#org" },
+          "inLanguage": "en"
+        },
+        {
+          "@type": "WebPage",
+          "@id": "https://bhutantourismhub.com/#webpage",
+          "url": "https://bhutantourismhub.com/",
+          "name": "Bhutan Tourism Hub — Verified guides, drivers, operators and hotels in Bhutan",
+          "isPartOf": { "@id": "https://bhutantourismhub.com/#website" },
+          "about": { "@id": "https://bhutantourismhub.com/#org" },
+          "primaryImageOfPage": "https://bhutantourismhub.com/preview.png"
+        }
+      ]
+    }
+    </script>
 
     <!-- Splash: inline, no network, no JavaScript needed to draw. It is on screen from the first byte,
          so on a slow connection people see the mark assembling instead of a white page while the app downloads. -->
@@ -56,6 +101,15 @@
       #bth-splash .s-slow { position: absolute; bottom: calc(28px + env(safe-area-inset-bottom)); font-size: 12px; color: #626269; opacity: 0; transition: opacity .4s ease; }
       #bth-splash.slow .s-slow { opacity: 1; }
       #bth-splash.waiting .s-sun { animation: sBreathe 1.8s ease-in-out 1.3s infinite; }
+      #bth-splash.failed { display: none; }
+      /* What search engines and no-JavaScript visitors read. Hidden under the splash, removed once the app renders. */
+      #bth-static { max-width: 640px; margin: 0 auto; padding: 40px 22px 60px; font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", Inter, "Helvetica Neue", system-ui, Roboto, sans-serif; color: #1D1D1F; line-height: 1.5; -webkit-font-smoothing: antialiased; }
+      #bth-static h1 { font-size: 30px; letter-spacing: -.02em; line-height: 1.15; margin: 0 0 10px; }
+      #bth-static h2 { font-size: 19px; letter-spacing: -.01em; margin: 26px 0 6px; }
+      #bth-static p, #bth-static li { font-size: 16px; color: #3A3A3F; margin: 0 0 8px; }
+      #bth-static a { color: #0066CC; text-decoration: none; }
+      #bth-static .retry { display: none; margin-top: 18px; padding: 12px 18px; border-radius: 12px; background: #0066CC; color: #fff; font-weight: 600; }
+      #bth-static.shown .retry { display: inline-block; }
       @keyframes sSun { from { opacity: 0; transform: scale(.9); } to { opacity: 1; transform: scale(1); } }
       @keyframes sRise { from { opacity: 0; transform: translateY(26px); } to { opacity: 1; transform: translateY(0); } }
       @keyframes sFade { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
@@ -64,6 +118,7 @@
     </style>
   </head>
   <body>
+    <noscript><style>#bth-splash { display: none; }</style></noscript>
     <div id="bth-splash" aria-hidden="true">
       <svg viewBox="0 0 240 240" xmlns="http://www.w3.org/2000/svg">
         <defs>
@@ -85,15 +140,44 @@
       // The splash stays at least 1.15 s so the mark finishes assembling, then fades out.
       (function () {
         var el = document.getElementById("bth-splash"), t0 = Date.now(), MIN = 1150, done = false;
+        var st = function () { return document.getElementById("bth-static"); };
         setTimeout(function () { if (el && !done) el.classList.add("waiting"); }, 1200);
         setTimeout(function () { if (el && !done) el.classList.add("slow"); }, 6000);
+        setTimeout(function () { if (el && !done) { el.classList.add("failed"); var s = st(); if (s) s.classList.add("shown"); } }, 20000);
         window.__bthSplashDone = function () {
           if (done || !el) return; done = true;
+          var s = st(); if (s && s.parentNode) s.parentNode.removeChild(s);
           var wait = Math.max(0, MIN - (Date.now() - t0));
           setTimeout(function () { el.classList.add("out"); setTimeout(function () { if (el.parentNode) el.parentNode.removeChild(el); }, 300); }, wait);
         };
       })();
     </script>
+    <main id="bth-static">
+      <h1>Bhutan Tourism Hub</h1>
+      <p>Bhutan Tourism Hub is a Bhutan-based platform for discovering and booking verified Bhutanese tour guides, drivers, tour operators and hotels. Every guide and driver carries a Department of Tourism licence that the hub checks. Guest reviews are tied to real trips, so a rating means a trip actually happened.</p>
+      <h2>For tour operators</h2>
+      <ul>
+        <li>Find licensed guides and drivers by language, skill and availability, and send a booking request with the dates filled in.</li>
+        <li>Plan the itinerary day by day with Drukpah, the hub's route planner for Bhutan's real roads and passes.</li>
+        <li>Request hotel rooms night by night; hotels confirm with one tap and can never be double-booked.</li>
+        <li>Keep the trip's checklist, guests, crew and chat in one place.</li>
+      </ul>
+      <h2>For guides and drivers</h2>
+      <ul>
+        <li>Receive direct requests from operators; accepting one protects those dates on your calendar.</li>
+        <li>Get a brief for each trip: the flight, the route, the guests' needs, where the group sleeps.</li>
+        <li>Build a record that travels with you: verified reviews from guests and past trips attested by operators.</li>
+      </ul>
+      <h2>For hotels</h2>
+      <ul>
+        <li>List room types once; receive room requests from operators and confirm or decline in one tap.</li>
+        <li>Post rooms, views and seasonal offers to every operator on the hub.</li>
+      </ul>
+      <p>Free for licensed guides, drivers, tour operators and hotels in Bhutan. No commission.</p>
+      <p><a href="/guides.html">How the hub works for guides and drivers</a> · <a href="/demo.html">How a trip runs from enquiry to review</a></p>
+      <p>Contact: ugyen@bhutantourismhub.com</p>
+      <a class="retry" href="/">The app didn't load. Tap to try again.</a>
+    </main>
     <div id="root"></div>
     <script type="module" src="/main.jsx"></script>
   </body>
