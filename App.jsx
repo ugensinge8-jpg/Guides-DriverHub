@@ -7735,6 +7735,42 @@ function EnquiryForm({ user, enquiry, actions, onBack, onSaved }) {
 /* ========================================================================== */
 /*  ITINERARY BUILDER — operator adds the day-by-day plan                      */
 /* ========================================================================== */
+
+/* A saved itinerary is plain text per day. When those lines were written by Drukpah (or follow its
+   "From → To · … · Night in Town (hotel)" shape), the route can be rebuilt for the map. BUILD 52. */
+function dkPlanFromItinerary(rows) {
+  if (!Array.isArray(rows) || rows.length === 0) return null;
+  const byName = {}; for (const k of Object.keys(DK_TOWNS)) byName[DK_TOWNS[k].n.toLowerCase()] = k;
+  const hotelKey = (t) => { const m = String(t || "").toLowerCase(); if (m.includes("home") || m.includes("farm")) return "home"; if (m.includes("lux")) return "lux"; if (m.includes("4")) return "4"; if (m.includes("3")) return "3"; return "3"; };
+  const days = []; let prevNight = null;
+  for (const r of rows.slice().sort((a, b) => (a.day || 0) - (b.day || 0))) {
+    const text = String(r.title || "");
+    const parts = text.split(" · ").map((x) => x.trim()).filter(Boolean);
+    let from = null, to = null, night = null, hotel = "3", h = 0;
+    const acts = [];
+    for (const part of parts) {
+      const mv = part.match(/^(.+?)\s*(?:→|->)\s*(.+?)(?:\s*\(.*\))?$/);
+      const nt = part.match(/^Night in (.+?)(?:\s*\((.*)\))?$/i);
+      const hm = part.match(/^(\d+)([¼½¾])?\s*h$/);
+      if (mv && byName[mv[1].toLowerCase()] && byName[mv[2].toLowerCase()]) { from = byName[mv[1].toLowerCase()]; to = byName[mv[2].toLowerCase()]; continue; }
+      if (nt && byName[nt[1].toLowerCase()]) { night = byName[nt[1].toLowerCase()]; hotel = hotelKey(nt[2]); continue; }
+      if (hm) { h = Number(hm[1]) + ({ "¼": 0.25, "½": 0.5, "¾": 0.75 }[hm[2]] || 0); continue; }
+      if (byName[part.toLowerCase()] && !from) { from = byName[part.toLowerCase()]; continue; }
+      acts.push(part);
+    }
+    if (!from) from = prevNight || night;
+    if (!from && !night) continue;
+    const moving = Boolean(to && from && to !== from);
+    let pts = [], passes = [], km = 0;
+    if (moving) { try { const leg = dkRoute(from, to); pts = leg.pts || []; passes = leg.passes || []; km = leg.km || 0; if (!h) h = leg.h || 0; } catch (e) { pts = [DK_TOWNS[from], DK_TOWNS[to]].filter(Boolean); } }
+    else { const t = DK_TOWNS[night || from]; pts = t ? [t] : []; }
+    days.push({ day: r.day, from, to: moving ? to : null, night: night || (moving ? to : from), hotel, moving, h, km, pts, passes, acts: acts.slice(1) });
+    prevNight = night || (moving ? to : from);
+  }
+  if (days.length === 0 || !days.some((d) => d.night)) return null;
+  return { days, notes: [] };
+}
+
 function ItineraryBuilder({ trip, canEdit, onChanged, embedded }) {
   const [days, setDays] = useState(trip.itinerary || []);
   const [adding, setAdding] = useState(false);
@@ -7742,8 +7778,10 @@ function ItineraryBuilder({ trip, canEdit, onChanged, embedded }) {
   const [busy, setBusy] = useState(false);
   const [editId, setEditId] = useState(null);
   const [editText, setEditText] = useState("");
+  const [mapSel, setMapSel] = useState(null);   // BUILD 52: the day lit up on the relief map
 
   useEffect(() => { setDays(trip.itinerary || []); }, [trip.itinerary]);
+  const mapPlan = useMemo(() => dkPlanFromItinerary(days), [days]);
 
   const nights = trip.start && trip.end
     ? Math.max(1, Math.round((new Date(trip.end) - new Date(trip.start)) / 86400e3) + 1)
@@ -7805,14 +7843,21 @@ function ItineraryBuilder({ trip, canEdit, onChanged, embedded }) {
         </div>
       )}
 
+      {mapPlan && (
+        <div className="mb-3">
+          <DkReliefMap plan={mapPlan} selected={mapSel} onSelect={setMapSel} />
+        </div>
+      )}
+
       {days.length > 0 && (
         <div className="space-y-2 mb-3">
           {days.map((it) => (
             <div key={it.day} className="rounded-xl px-3.5 py-3 flex items-start gap-3"
-              style={{ background: C.card, border: `1px solid ${C.line}` }}>
-              <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0" style={{ background: C.pine }}>
+              style={{ background: C.card, border: `1px solid ${mapSel === it.day ? C.pine : C.line}` }}>
+              <button type="button" onClick={() => mapPlan && setMapSel(mapSel === it.day ? null : it.day)} aria-label={`Show day ${it.day} on the map`}
+                className="tap w-8 h-8 rounded-lg flex items-center justify-center shrink-0" style={{ background: mapSel === it.day ? C.maroon : C.pine, border: 0 }}>
                 <span className="text-[12px] font-bold" style={{ color: C.goldSoft }}>{it.day}</span>
-              </div>
+              </button>
               {editId === it.day ? (
                 <div className="flex-1">
                   <input value={editText} onChange={(e) => setEditText(e.target.value)} maxLength={120}
