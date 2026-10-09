@@ -64,7 +64,7 @@ const CLOUD = Boolean(supabase);
   } catch (e) {}
 })();
 const DEMO_MODE = false;   // set true only for local demos without a database
-const BUILD = "BUILD 51 — 9 Oct";   // bump every deploy; shown at the top of the welcome screen
+const BUILD = "BUILD 52 — 9 Oct";   // bump every deploy; shown at the top of the welcome screen
 // which device someone is on — shown beside the build so a screenshot tells us both
 const DEVICE = (() => {
   try {
@@ -1174,6 +1174,8 @@ export default function App() {
         .dk-note{ animation: noteIn .32s cubic-bezier(.2,.8,.2,1) both; }
         .dk-note-under{ animation: fade .25s ease both; }
         .dk-note-over{ animation: noteUp .28s cubic-bezier(.2,.8,.2,1) both; }
+        .dk-note-side{ animation: noteSide .28s cubic-bezier(.2,.8,.2,1) both; }
+        @keyframes noteSide{ from{ opacity: 0; transform: translateX(10px); } to{ opacity: 1; transform: none; } }
         @keyframes noteUp{ from{ opacity: 0; transform: translateY(10px); } to{ opacity: 1; transform: none; } }
         @keyframes segIn{ from{ opacity: 0; } to{ opacity: 1; } }
         .dk-seg{ animation: segIn .5s ease both; }
@@ -9332,7 +9334,7 @@ function useMapSettings() {
   const [st, setSt] = useState(null);
   useEffect(() => {
     let on = true;
-    if (!_mapSettingsPromise) _mapSettingsPromise = dkLoadSettings().then((x) => ({ gmaps: x.gmaps || "", provider: x.mapProvider || "esri" })).catch(() => ({ gmaps: "", provider: "esri" }));
+    if (!_mapSettingsPromise) _mapSettingsPromise = dkLoadSettings().then((x) => ({ gmaps: x.gmaps || "", provider: x.mapProvider || "relief" })).catch(() => ({ gmaps: "", provider: "relief" }));
     _mapSettingsPromise.then((x) => { if (on) setSt(x); });
     return () => { on = false; };
   }, []);
@@ -9361,7 +9363,7 @@ const LIBRE_STYLES = {
   topo: { version: 8, sources: { otm: { type: "raster", tiles: ["https://a.tile.opentopomap.org/{z}/{x}/{y}.png", "https://b.tile.opentopomap.org/{z}/{x}/{y}.png", "https://c.tile.opentopomap.org/{z}/{x}/{y}.png"], tileSize: 256, maxzoom: 17, attribution: "© OpenStreetMap contributors, SRTM · © OpenTopoMap (CC-BY-SA)" } }, layers: [{ id: "otm", type: "raster", source: "otm" }] },
 };
 function dkMarkerEl(html, cls) { const el = document.createElement("div"); el.className = cls || ""; el.innerHTML = html; el.style.cursor = "pointer"; return el; }
-function DkLibreMap({ plan, selected, onSelect }) {
+function DkLibreMap({ plan, selected, onSelect, onBack }) {
   const boxRef = useRef(null);
   const mapRef = useRef(null);
   const markersRef = useRef([]);
@@ -9481,12 +9483,7 @@ function DkLibreMap({ plan, selected, onSelect }) {
     const ideas = (DK_SEE[townKey] || []).filter((x) => !planned.some((a) => a.includes(x.t.toLowerCase().split(",")[0]))).slice(0, 3);
     note = { town, ideas, passes: [], planned: (day.acts || []).length, profile: [] };
   }
-  if (failed) return (
-    <div>
-      <DkRouteMap plan={plan} selected={selected} onSelect={onSelect} />
-      {notice && <div className="text-[11.5px] mt-1.5" style={{ color: C.muted }}>{notice}</div>}
-    </div>
-  );
+  if (failed) return <DkReliefMap plan={plan} selected={selected} onSelect={onSelect} fallbackNote={notice || "Satellite imagery is not available on this connection — showing the relief model."} />;
   return (
     <div className="dk-map-sticky">
       <div className="relative rounded-2xl overflow-hidden" style={{ border: `1px solid ${C.line}`, background: "#0b1a12", aspectRatio: wide ? "2 / 1" : "4 / 3" }}>
@@ -9494,13 +9491,14 @@ function DkLibreMap({ plan, selected, onSelect }) {
         {!ready && <div className="absolute inset-0 flex items-center justify-center text-[12px]" style={{ color: "#fff", opacity: .8 }}><Loader2 size={16} className="animate-spin mr-2" /> Loading satellite map…</div>}
         {ready && (
           <div className="absolute left-2 top-2 inline-flex rounded-lg overflow-hidden" style={{ background: "rgba(255,255,255,.92)", boxShadow: "0 1px 3px rgba(0,0,0,.25)", zIndex: 5 }} onClick={(e) => e.stopPropagation()}>
+            {onBack && <button type="button" onClick={onBack} className="tap px-2.5 h-7 text-[11px] font-semibold" style={{ background: "transparent", color: C.ink }}>Relief</button>}
             {[["satellite", "Satellite"], ["topo", "Contours"]].map(([k, l]) => (
               <button key={k} type="button" onClick={() => setKind(k)} className="tap px-2.5 h-7 text-[11px] font-semibold" style={{ background: kind === k ? C.pine : "transparent", color: kind === k ? "#fff" : C.ink }}>{l}</button>
             ))}
           </div>
         )}
         {ready && note && wide && (
-          <div className="absolute right-2 top-2 dk-note" style={{ width: 250, maxHeight: "calc(100% - 16px)", overflowY: "auto", zIndex: 5 }} onClick={(e) => e.stopPropagation()}>
+          <div className="absolute right-2 top-2 dk-note-side" style={{ width: 250, maxHeight: "calc(100% - 16px)", overflowY: "auto", zIndex: 5 }} onClick={(e) => e.stopPropagation()}>
             <DkNoteBody note={note} day={day} onClose={() => onSelect && onSelect(null)} />
           </div>
         )}
@@ -9652,7 +9650,7 @@ function DkGoogleMap({ plan, selected, onSelect, apiKey }) {
           </div>
         )}
         {ready && note && wide && (
-          <div className="absolute right-2 top-2 dk-note" style={{ width: 250, maxHeight: "calc(100% - 16px)", overflowY: "auto", zIndex: 5 }} onClick={(e) => e.stopPropagation()}>
+          <div className="absolute right-2 top-2 dk-note-side" style={{ width: 250, maxHeight: "calc(100% - 16px)", overflowY: "auto", zIndex: 5 }} onClick={(e) => e.stopPropagation()}>
             <DkNoteBody note={note} day={day} onClose={() => onSelect && onSelect(null)} />
           </div>
         )}
@@ -9674,12 +9672,263 @@ function DkGoogleMap({ plan, selected, onSelect, apiKey }) {
   );
 }
 /* Picks the map the admin chose: free satellite (default), Google with a key, or the painted relief. */
+/* ── Relief map: a self-contained 2.5-D model of Bhutan, drawn on the device (BUILD 52). ──────────
+   No tiles, no network, no WebGL: it is on screen with the first paint, even on a slow connection.
+   The terrain is a stylised relief shaped from surveyed spot heights (towns, passes, peaks), so the
+   figures on the map are the real ones while the shape between them is an artist's model. ─────── */
+const DKR = {
+  KX: 98.6, KY: 111,     // km per degree of longitude / latitude at Bhutan's latitude
+  TILT: 0.6,             // the ground plane leans away from the viewer (1 = flat top view)
+  ZK: 0.0075,            // metres of height → map units (one unit is about a kilometre on the ground)
+  COLS: 128, ROWS: 72,   // terrain grid
+  PX: 6,                 // canvas pixels per map unit
+};
+const dkrPlane = (lng, lat) => ({ x: (lng - BT.W) * DKR.KX, y: (BT.N - lat) * DKR.KY });
+const dkrProject = (lng, lat, z) => { const p = dkrPlane(lng, lat); return { x: p.x, y: p.y * DKR.TILT - (z || 0) * DKR.ZK }; };
+
+let _dkrTerrain = null;
+function dkrTerrain() {
+  if (_dkrTerrain) return _dkrTerrain;
+  const W = (BT.E - BT.W) * DKR.KX, H = (BT.N - BT.S) * DKR.KY;
+  const C = DKR.COLS, R = DKR.ROWS;
+  // Control points: valley floors (towns), ridges (passes), summits (peaks), the Himalayan crest along
+  // the north and the Duars plain along the south, plus a few ridge lines between the valleys.
+  const pts = [];
+  for (const t of Object.values(DK_TOWNS)) pts.push({ ...dkrPlane(t.lng, t.lat), z: t.alt, r: 9 });
+  for (const p of Object.values(DK_PASSES)) pts.push({ ...dkrPlane(p.lng, p.lat), z: p.alt, r: 7 });
+  for (const p of DK_PEAKS) pts.push({ ...dkrPlane(p.lng, p.lat), z: p.alt, r: 6 });
+  const crest = [[89.0, 28.1, 6200], [89.3, 28.25, 6600], [89.7, 28.3, 6900], [90.1, 28.2, 6400], [90.5, 28.1, 7000], [90.9, 28.15, 6500], [91.3, 28.1, 6200], [91.7, 27.95, 5600], [92.0, 27.6, 4800]];
+  const duars = [[89.2, 26.8, 350], [89.7, 26.75, 260], [90.2, 26.8, 260], [90.7, 26.8, 280], [91.2, 26.8, 300], [91.7, 26.85, 350], [92.0, 27.0, 500]];
+  const ridges = [[89.5, 27.2, 2800], [89.85, 27.3, 3200], [90.0, 27.75, 4200], [90.35, 27.35, 3300], [90.6, 27.8, 4300], [90.9, 27.4, 3000], [91.0, 27.75, 3800], [91.4, 27.5, 2900], [91.6, 27.1, 1800], [89.1, 27.5, 3600], [89.9, 27.0, 1500], [90.6, 27.05, 1500]];
+  for (const [lng, lat, z] of crest) pts.push({ ...dkrPlane(lng, lat), z, r: 14 });
+  for (const [lng, lat, z] of duars) pts.push({ ...dkrPlane(lng, lat), z, r: 22 });
+  for (const [lng, lat, z] of ridges) pts.push({ ...dkrPlane(lng, lat), z, r: 14 });
+  const base = (y) => { const t = Math.max(0, Math.min(1, 1 - y / H)); return 300 + 2600 * Math.pow(t, 1.4); };   // y = 0 is the north; the crest points add the high Himalaya
+  const hash = (i, j) => { const n = Math.sin(i * 127.1 + j * 311.7) * 43758.5453; return n - Math.floor(n); };
+  const z = new Float32Array((C + 1) * (R + 1));
+  for (let j = 0; j <= R; j++) for (let i = 0; i <= C; i++) {
+    const x = (i / C) * W, y = (j / R) * H, b = base(y);
+    let sw = 0, sr = 0;
+    for (const p of pts) { const dx = x - p.x, dy = y - p.y, w = Math.exp(-(dx * dx + dy * dy) / (2 * p.r * p.r)); sw += w; sr += w * (p.z - base(p.y)); }
+    let v = b + sr / (sw + 0.08);
+    v += (hash(i, j) - 0.5) * 2 * (25 + v * 0.006);   // a little texture so slopes are not glassy
+    z[j * (C + 1) + i] = Math.max(150, v);
+  }
+  // height at any plane point (bilinear)
+  const at = (x, y) => {
+    const fx = Math.max(0, Math.min(C - 1e-6, (x / W) * C)), fy = Math.max(0, Math.min(R - 1e-6, (y / H) * R));
+    const i = Math.floor(fx), j = Math.floor(fy), tx = fx - i, ty = fy - j, s = C + 1;
+    return z[j * s + i] * (1 - tx) * (1 - ty) + z[j * s + i + 1] * tx * (1 - ty) + z[(j + 1) * s + i] * (1 - tx) * ty + z[(j + 1) * s + i + 1] * tx * ty;
+  };
+  return (_dkrTerrain = { z, W, H, C, R, at });
+}
+const DKR_RAMP = [[0, [60, 110, 50]], [1200, [96, 146, 70]], [2200, [132, 160, 84]], [3000, [158, 150, 96]], [3800, [142, 122, 96]], [4600, [150, 146, 140]], [5200, [236, 239, 243]], [8000, [250, 251, 253]]];
+function dkrColor(zv, shade) {
+  let a = DKR_RAMP[0], b = DKR_RAMP[DKR_RAMP.length - 1];
+  for (let k = 0; k < DKR_RAMP.length - 1; k++) if (zv >= DKR_RAMP[k][0] && zv < DKR_RAMP[k + 1][0]) { a = DKR_RAMP[k]; b = DKR_RAMP[k + 1]; break; }
+  const t = Math.max(0, Math.min(1, (zv - a[0]) / (b[0] - a[0] || 1)));
+  const c = [0, 1, 2].map((i) => Math.round((a[1][i] + (b[1][i] - a[1][i]) * t) * shade));
+  return `rgb(${c[0]},${c[1]},${c[2]})`;
+}
+let _dkrImage = null;
+function dkrImage() {
+  if (_dkrImage) return _dkrImage;
+  const T = dkrTerrain(); const { z, W, H, C, R } = T; const S = DKR.PX;
+  const y0 = -7800 * DKR.ZK, y1 = H * DKR.TILT + 6;
+  const cv = document.createElement("canvas"); cv.width = Math.round(W * S); cv.height = Math.round((y1 - y0) * S);
+  const g = cv.getContext("2d"); if (!g) return null;
+  const P = (x, y, zz) => [x * S, (y * DKR.TILT - zz * DKR.ZK - y0) * S];
+  // the slab: the country's outline, pushed down a little in a dark tone, reads as the model's thickness
+  const border = BT_BORDER.map(([lng, lat]) => { const p = dkrPlane(lng, lat); return { x: p.x, y: p.y, z: T.at(p.x, p.y) }; });
+  g.fillStyle = "#3a4a40";
+  g.beginPath(); border.forEach((b, i) => { const q = P(b.x, b.y, b.z - 900); if (i === 0) g.moveTo(q[0], q[1] + 2.5 * S); else g.lineTo(q[0], q[1] + 2.5 * S); }); g.closePath(); g.fill();
+  // terrain, clipped to the outline, painted from the far (north) rows to the near (south) rows
+  g.save();
+  g.beginPath(); border.forEach((b, i) => { const q = P(b.x, b.y, b.z + 200); if (i === 0) g.moveTo(q[0], q[1]); else g.lineTo(q[0], q[1]); }); g.closePath(); g.clip();
+  g.fillStyle = "#56704a"; g.fillRect(0, 0, cv.width, cv.height);
+  const L = [-0.52, -0.5, 0.69]; const E = 2.4;
+  const idx = (i, j) => j * (C + 1) + i;
+  for (let j = 0; j < R; j++) for (let i = 0; i < C; i++) {
+    const zA = z[idx(i, j)], zB = z[idx(i + 1, j)], zC = z[idx(i + 1, j + 1)], zD = z[idx(i, j + 1)];
+    const x0 = (i / C) * W, x1 = ((i + 1) / C) * W, ya = (j / R) * H, yb = ((j + 1) / R) * H;
+    const dzdx = ((zB - zA) + (zC - zD)) / 2 / 1000 / (W / C), dzdy = ((zD - zA) + (zC - zB)) / 2 / 1000 / (H / R);
+    let nx = -dzdx * E, ny = -dzdy * E, nz = 1; const nl = Math.hypot(nx, ny, nz); nx /= nl; ny /= nl; nz /= nl;
+    const shade = 0.58 + 0.5 * Math.max(0, nx * L[0] + ny * L[1] + nz * L[2]);
+    g.fillStyle = dkrColor((zA + zB + zC + zD) / 4, shade); g.strokeStyle = g.fillStyle; g.lineWidth = 0.6;
+    const a = P(x0, ya, zA), b = P(x1, ya, zB), c = P(x1, yb, zC), d = P(x0, yb, zD);
+    g.beginPath(); g.moveTo(a[0], a[1]); g.lineTo(b[0], b[1]); g.lineTo(c[0], c[1]); g.lineTo(d[0], d[1]); g.closePath(); g.fill(); g.stroke();
+  }
+  g.restore();
+  // a soft rim along the outline
+  g.strokeStyle = "rgba(255,255,255,.35)"; g.lineWidth = 1.2 * S;
+  g.beginPath(); border.forEach((b, i) => { const q = P(b.x, b.y, b.z + 200); if (i === 0) g.moveTo(q[0], q[1]); else g.lineTo(q[0], q[1]); }); g.closePath(); g.stroke();
+  let url = null; try { url = cv.toDataURL("image/png"); } catch (e) { url = null; }
+  return (_dkrImage = url ? { url, x: 0, y: y0, w: W, h: y1 - y0 } : null);
+}
+// the road between two points, sampled so it follows the relief
+function dkrRoad(pts) {
+  const T = dkrTerrain(); const out = [];
+  for (let k = 0; k < pts.length; k++) {
+    const p = pts[k]; const a = dkrPlane(p.lng, p.lat);
+    if (k === 0) { out.push({ x: a.x, y: a.y, z: T.at(a.x, a.y) + 40 }); continue; }
+    const q = pts[k - 1]; const b = dkrPlane(q.lng, q.lat); const n = 14;
+    for (let s = 1; s <= n; s++) { const t = s / n; const x = b.x + (a.x - b.x) * t, y = b.y + (a.y - b.y) * t; out.push({ x, y, z: T.at(x, y) + 40 }); }
+  }
+  return out.map((p) => { const s = { x: p.x, y: p.y * DKR.TILT - p.z * DKR.ZK }; return `${s.x.toFixed(2)},${s.y.toFixed(2)}`; }).join(" ");
+}
+const dkrEase = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
+function DkReliefMap({ plan, selected, onSelect, fallbackNote }) {
+  const boxRef = useRef(null);
+  const [box, setBox] = useState({ w: 360, h: 270 });
+  const [img, setImg] = useState(null);
+  const [mode, setMode] = useState("relief");   // relief | satellite
+  const day = selected ? plan.days.find((d) => d.day === selected) : null;
+  const wide = box.w >= 560;
+
+  useEffect(() => {
+    const el = boxRef.current; if (!el) return;
+    const check = () => { const r = el.getBoundingClientRect(); if (r.width > 0) setBox({ w: r.width, h: r.height }); };
+    check(); if (typeof ResizeObserver === "undefined") { window.addEventListener("resize", check); return () => window.removeEventListener("resize", check); }
+    const ro = new ResizeObserver(check); ro.observe(el); return () => ro.disconnect();
+  }, []);
+  useEffect(() => { let on = true; const id = setTimeout(() => { if (on) setImg(dkrImage()); }, 0); return () => { on = false; clearTimeout(id); }; }, []);
+
+  const stops = useMemo(() => { const out = []; const seen = new Set(); for (const d of plan.days) if (d.night && !seen.has(d.night)) { seen.add(d.night); out.push({ key: d.night, n: out.length + 1, day: d.day }); } return out; }, [plan]);
+  const routePts = useMemo(() => { const pts = []; for (const d of plan.days) for (const p of d.pts || []) { const last = pts[pts.length - 1]; if (!last || last.lat !== p.lat || last.lng !== p.lng) pts.push(p); } return pts; }, [plan]);
+  const passesOnRoute = useMemo(() => { const set = new Set(); for (const d of plan.days) for (const pk of d.passes || []) set.add(pk); return [...set]; }, [plan]);
+  const roadAll = useMemo(() => dkrRoad(routePts), [routePts]);
+  const roadDay = useMemo(() => (day && day.moving && day.pts && day.pts.length > 1 ? dkrRoad(day.pts) : null), [day]);
+
+  // the view: a rectangle in map units, animated between the whole country and a day
+  const T = dkrTerrain();
+  const A = box.w / Math.max(1, box.h);
+  const fit = (x0, y0, x1, y1, pad, maxZoom) => {
+    let w = (x1 - x0) + pad * 2, h = (y1 - y0) + pad * 2;
+    if (w / h < A) w = h * A; else h = w / A;
+    const full = fit0(); const minW = full.w / maxZoom;
+    if (w < minW) { w = minW; h = w / A; }
+    if (w > full.w) { w = full.w; h = full.h; }
+    return { x: (x0 + x1) / 2 - w / 2, y: (y0 + y1) / 2 - h / 2, w, h };
+  };
+  const fit0 = () => { const y0 = -7800 * DKR.ZK, y1 = T.H * DKR.TILT + 6; let w = T.W + 12, h = (y1 - y0) + 8; if (w / h < A) w = h * A; else h = w / A; return { x: T.W / 2 - w / 2, y: (y0 + y1) / 2 - h / 2 + (wide ? 0 : 0), w, h }; };
+  const target = useMemo(() => {
+    if (!day) {
+      if (!routePts.length) return fit0();
+      const ps = routePts.map((p) => dkrProject(p.lng, p.lat, p.alt || 0)); const xs = ps.map((p) => p.x), ys = ps.map((p) => p.y);
+      const v = fit(Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys), 34, 1.7); v.y -= v.h * 0.14; return v;
+    }
+    const ps = (day.pts && day.pts.length ? day.pts : [DK_TOWNS[day.night || day.to || day.from]]).filter(Boolean).map((p) => dkrProject(p.lng, p.lat, p.alt || T.at(dkrPlane(p.lng, p.lat).x, dkrPlane(p.lng, p.lat).y)));
+    const xs = ps.map((p) => p.x), ys = ps.map((p) => p.y);
+    const v = fit(Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys), day.moving ? 16 : 22, 2.8);
+    if (!wide) v.y += v.h * 0.16;            // the ideas card sits over the lower part on phones: keep the pins above it
+    else v.x += v.w * 0.14;                  // the panel sits on the right on wide screens
+    return v;
+  }, [day, routePts, box.w, box.h]);
+  const [vb, setVb] = useState(target);
+  const animRef = useRef(null);
+  useEffect(() => {
+    const from = { ...vb }, to = target; const reduce = typeof matchMedia !== "undefined" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (reduce) { setVb(to); return; }
+    const t0 = performance.now(), dur = 720;
+    cancelAnimationFrame(animRef.current);
+    const step = (now) => { const t = Math.min(1, (now - t0) / dur), e = dkrEase(t);
+      setVb({ x: from.x + (to.x - from.x) * e, y: from.y + (to.y - from.y) * e, w: from.w + (to.w - from.w) * e, h: from.h + (to.h - from.h) * e });
+      if (t < 1) animRef.current = requestAnimationFrame(step); };
+    animRef.current = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(animRef.current);
+  }, [target]);
+  const upp = vb.w / Math.max(1, box.w);   // map units per screen pixel: markers scale by this to keep their size
+
+  // Drukpah's notes for the selected day
+  let note = null;
+  if (day) {
+    const townKey = day.night || day.to || day.from; const town = DK_TOWNS[townKey];
+    const planned = (day.acts || []).map((a) => String(a).toLowerCase());
+    const ideas = (DK_SEE[townKey] || []).filter((x) => !planned.some((a) => a.includes(x.t.toLowerCase().split(",")[0]))).slice(0, 3);
+    note = { town, ideas, passes: [], planned: (day.acts || []).length, profile: [] };
+  }
+  if (mode === "satellite") return <DkLibreMap plan={plan} selected={selected} onSelect={onSelect} onBack={() => setMode("relief")} />;
+
+  const label = (t, x, y, size, weight, anchor) => (
+    <text x={x} y={y} fontSize={size} fontWeight={weight || 600} textAnchor={anchor || "middle"} fill="#fff" stroke="rgba(0,0,0,.75)" strokeWidth={3} paintOrder="stroke" style={{ fontFamily: "-apple-system, Inter, system-ui, sans-serif" }}>{t}</text>
+  );
+  const todays = new Set(day ? (day.passes || []) : []);
+  return (
+    <div className="dk-map-sticky">
+      <div ref={boxRef} className="relative rounded-2xl overflow-hidden" style={{ position: "relative", border: `1px solid ${C.line}`, background: "linear-gradient(180deg, #e6ecf2 0%, #dfe7e0 60%, #d6dfd5 100%)", aspectRatio: wide ? "2 / 1" : "4 / 3" }} onClick={() => onSelect && onSelect(null)}>
+        <svg viewBox={`${vb.x} ${vb.y} ${vb.w} ${vb.h}`} preserveAspectRatio="xMidYMid slice" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", display: "block" }} aria-label="Relief map of Bhutan with the planned route">
+          {img && <image href={img.url} x={img.x} y={img.y} width={img.w} height={img.h} preserveAspectRatio="none" />}
+          <polyline points={roadAll} fill="none" stroke="#FFFFFF" strokeWidth={5} strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" opacity={0.85} />
+          <polyline points={roadAll} fill="none" stroke="#7A2E2E" strokeWidth={2.5} strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" opacity={roadDay ? 0.4 : 1} style={{ transition: "opacity .5s" }} />
+          {roadDay && <polyline points={roadDay} fill="none" stroke="#FFFFFF" strokeWidth={7} strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" opacity={0.9} />}
+          {roadDay && <polyline points={roadDay} fill="none" stroke="#7A2E2E" strokeWidth={4} strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />}
+          {/* passes on this route */}
+          {passesOnRoute.map((pk) => { const ps = DK_PASSES[pk]; if (!ps) return null; const hot = todays.has(pk); const p = dkrProject(ps.lng, ps.lat, ps.alt);
+            return (
+              <g key={pk} transform={`translate(${p.x} ${p.y}) scale(${upp})`} opacity={day && !hot ? 0.6 : 1} style={{ pointerEvents: "none" }}>
+                <path d="M-8 0 Q-4 -8 0 -3 Q4 -8 8 0 Z" fill={hot ? "#7A2E2E" : "#fff"} stroke={hot ? "#fff" : "rgba(0,0,0,.6)"} strokeWidth={1} />
+                {(hot || (!day && upp < 0.5)) && label(`${ps.n} · ${ps.alt.toLocaleString()} m`, 0, -11, 10.5)}
+              </g>
+            ); })}
+          {/* peaks with their heights */}
+          {DK_PEAKS.map((pk) => { const p = dkrProject(pk.lng, pk.lat, pk.alt);
+            return (
+              <g key={pk.n} transform={`translate(${p.x} ${p.y}) scale(${upp})`} style={{ pointerEvents: "none" }}>
+                <path d="M0 -10 L7 2 L-7 2 Z" fill="#fff" stroke="rgba(0,0,0,.6)" strokeWidth={1} />
+                {label(`${pk.n} · ${pk.alt.toLocaleString()} m`, 0, -14, 10.5)}
+              </g>
+            ); })}
+          {/* the stops */}
+          {stops.map((st) => { const t = DK_TOWNS[st.key]; const on = day && (day.night === st.key || day.to === st.key); const p = dkrProject(t.lng, t.lat, t.alt + 60); const r = on ? 13 : 10;
+            return (
+              <g key={st.key} transform={`translate(${p.x} ${p.y}) scale(${upp})`} role="button" aria-label={`Stop ${st.n}: ${t.n}`} style={{ cursor: "pointer" }}
+                onClick={(e) => { e.stopPropagation(); onSelect && onSelect(on ? null : st.day); }}>
+                {on && <circle r={r + 7} fill="rgba(122,46,46,.22)" />}
+                <circle r={r} fill={on ? "#7A2E2E" : "#0066CC"} stroke="#fff" strokeWidth={2} />
+                <text y={4} fontSize={11} fontWeight={700} textAnchor="middle" fill="#fff" style={{ fontFamily: "-apple-system, Inter, system-ui, sans-serif" }}>{st.n}</text>
+                {(on || wide || upp < 0.55) && label(t.n, 0, r + 13, 10.5, 600)}
+              </g>
+            ); })}
+        </svg>
+        {!img && <div className="absolute inset-0 flex items-center justify-center" style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, color: C.muted }}>Drawing the relief…</div>}
+        <div className="absolute left-2 top-2" style={{ position: "absolute", left: 8, top: 8, zIndex: 5, display: "inline-flex", borderRadius: 10, overflow: "hidden", background: "rgba(255,255,255,.92)", boxShadow: "0 1px 3px rgba(0,0,0,.25)" }} onClick={(e) => e.stopPropagation()}>
+          <span className="px-2.5 h-7 text-[11px] font-semibold" style={{ padding: "0 10px", height: 28, display: "inline-flex", alignItems: "center", fontSize: 11, fontWeight: 600, background: C.pine, color: "#fff" }}>Relief</span>
+          {!fallbackNote && <button type="button" onClick={() => setMode("satellite")} className="tap px-2.5 h-7 text-[11px] font-semibold" style={{ padding: "0 10px", height: 28, fontSize: 11, fontWeight: 600, background: "transparent", color: C.ink, border: 0 }}>Satellite</button>}
+        </div>
+        {note && wide && (
+          <div className="absolute right-2 top-2 dk-note-side" style={{ position: "absolute", right: 8, top: 8, width: 250, maxHeight: "calc(100% - 16px)", overflowY: "auto", zIndex: 5 }} onClick={(e) => e.stopPropagation()}>
+            <DkNoteBody note={note} day={day} onClose={() => onSelect && onSelect(null)} />
+          </div>
+        )}
+        {note && !wide && (
+          <div className="absolute left-2 right-2 bottom-2 dk-note-over" style={{ position: "absolute", left: 8, right: 8, bottom: 8, maxHeight: "48%", overflowY: "auto", zIndex: 6 }} onClick={(e) => e.stopPropagation()}>
+            <DkNoteBody note={note} day={day} onClose={() => onSelect && onSelect(null)} />
+          </div>
+        )}
+        {!selected && <div className="absolute left-2 bottom-2" style={{ position: "absolute", left: 8, bottom: 8, fontSize: 10.5, borderRadius: 6, padding: "4px 8px", pointerEvents: "none", background: "rgba(255,255,255,.9)", color: C.muted, zIndex: 5 }}>Tap a day or a stop to fly in</div>}
+        <div style={{ position: "absolute", right: 8, bottom: 6, fontSize: 9, color: "rgba(255,255,255,.85)", textShadow: "0 0 3px rgba(0,0,0,.8)", pointerEvents: "none" }}>Stylised relief · heights surveyed</div>
+      </div>
+      {fallbackNote && <div className="text-[11.5px] mt-1.5" style={{ color: C.muted }}>{fallbackNote}</div>}
+      <div className="flex flex-wrap gap-1.5 mt-2">
+        {stops.map((st) => { const on = day && (day.night === st.key || day.to === st.key);
+          return (
+            <button key={st.key} type="button" onClick={() => onSelect && onSelect(on ? null : st.day)} className="tap inline-flex items-center gap-1.5 rounded-full pl-1 pr-2.5 py-0.5 text-[12px]"
+              style={{ background: on ? C.pineSoft : C.card, border: `1px solid ${on ? C.pine : C.line}`, color: on ? C.pine : C.muted }}>
+              <span className="w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold" style={{ background: on ? C.pine : C.grey, color: on ? "#fff" : C.ink }}>{st.n}</span>{DK_TOWNS[st.key].n}
+            </button>
+          ); })}
+      </div>
+    </div>
+  );
+}
+
 function DkPlanMap({ plan, selected, onSelect }) {
   const st = useMapSettings();
   if (st === null) return <div className="rounded-2xl" style={{ aspectRatio: BT_MAP_AR, background: C.grey }} />;
   if (st.provider === "google" && st.gmaps) return <DkGoogleMap plan={plan} selected={selected} onSelect={onSelect} apiKey={st.gmaps} />;
-  if (st.provider === "relief") return <DkRouteMap plan={plan} selected={selected} onSelect={onSelect} />;
-  return <DkLibreMap plan={plan} selected={selected} onSelect={onSelect} />;
+  if (st.provider === "satellite" || st.provider === "libre") return <DkLibreMap plan={plan} selected={selected} onSelect={onSelect} />;
+  // BUILD 52: the relief model is the default — it needs nothing from the network and draws at once
+  return <DkReliefMap plan={plan} selected={selected} onSelect={onSelect} />;
 }
 
 function DkNoteBody({ note, day, onClose }) {
