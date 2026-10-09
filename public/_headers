@@ -7,3 +7,16 @@
   Cross-Origin-Opener-Policy: same-origin
   X-DNS-Prefetch-Control: off
   Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com https://maps.googleapis.com https://maps.gstatic.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdnjs.cloudflare.com; img-src 'self' data: blob: https://*.supabase.co https://server.arcgisonline.com https://*.tile.opentopomap.org https://maps.googleapis.com https://maps.gstatic.com https://*.googleapis.com https://*.ggpht.com; media-src 'self' data: blob: https://*.supabase.co; font-src 'self' data: https://fonts.gstatic.com; connect-src 'self' data: blob: https://*.supabase.co wss://*.supabase.co https://server.arcgisonline.com https://*.tile.opentopomap.org https://maps.googleapis.com https://cdnjs.cloudflare.com; worker-src 'self' blob:; child-src 'self' blob:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'; upgrade-insecure-requests
+
+# Never let the browser or the edge hold on to the files that decide which build is current.
+# Hashed /assets/* files are immutable and can be cached for a year; these four must always be re-checked.
+/sw.js
+  Cache-Control: no-cache, no-store, must-revalidate
+/index.html
+  Cache-Control: no-cache
+/
+  Cache-Control: no-cache
+/manifest.webmanifest
+  Cache-Control: no-cache
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable
