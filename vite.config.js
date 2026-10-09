@@ -9,10 +9,15 @@ export default defineConfig({
   plugins: [
     react(),
     VitePWA({
-      registerType: "autoUpdate",
-      injectRegister: "auto",
+      // BUILD 55: our own service worker, src/sw.js — the app offline, push notifications, and new versions
+      // that wait for "Update" in the app. The app registers it itself (useAppUpdate in App.jsx).
+      strategies: "injectManifest",
+      srcDir: "src",
+      filename: "sw.js",
+      registerType: "prompt",
+      injectRegister: false,
       // icons live as real files in /public — browsers validate these, not inline data
-      includeAssets: ["favicon-32.png", "apple-touch-icon.png", "preview.png"],
+      includeAssets: ["favicon-32.png", "apple-touch-icon.png", "preview.png", "badge-96.png"],
       manifest: {
         id: "/",
         name: "Bhutan Tourism Hub",
@@ -35,13 +40,9 @@ export default defineConfig({
           { src: "/icon-maskable-512.png", sizes: "512x512", type: "image/png", purpose: "maskable" }
         ]
       },
-      workbox: {
-        globPatterns: ["**/*.{js,css,html,jpg,png,svg,woff2}"],
-        // The app's offline fallback must not swallow real files: robots.txt, sitemap.xml, the demo pages, icons
-        navigateFallbackDenylist: [/^\/robots\.txt$/, /^\/sitemap\.xml$/, /\.(?:html|xml|txt|json|png|jpg|svg|ico|webmanifest)$/],
-        cleanupOutdatedCaches: true,
-        clientsClaim: true,
-        skipWaiting: true
+      injectManifest: {
+        // what is kept on the phone (the same set as before BUILD 55)
+        globPatterns: ["**/*.{js,css,html,jpg,png,svg,woff2}"]
       }
     })
   ]

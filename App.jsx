@@ -37,12 +37,14 @@ const profileToTalent = (p) => ({
   verified: p.license_status === "verified", licenseStatus: p.license_status || "none",
   licenseNumber: p.license_number || null, licenseExpiry: p.license_expiry || null, licensePhoto: !!p.license_path,
   grades: {}, tags: Array.isArray(p.tags) ? p.tags : [],
-  languages: Array.isArray(p.languages) ? p.languages : [],
+  // each language is { n: name, l: "Fluent" | "Basic" }; a plain word (older data) reads as Fluent (BUILD 55)
+  languages: Array.isArray(p.languages) ? p.languages.map((x) => (typeof x === "string" ? { n: x, l: "Fluent" } : x)).filter((x) => x && x.n) : [],
   phone: p.phone || "", email: p.email || "", pitch: p.pitch || "", vehicle: p.vehicle || null,
   availability: p.availability || "open", availableFrom: p.available_from || null, availableNote: p.availability_note || "",
   joinedAt: p.created_at ? new Date(p.created_at).getTime() : null,
   company: p.company_name || "", hotelTown: p.hotel_town || null, hotelTier: p.hotel_tier || null, starRating: p.star_rating || null,
   stayKind: p.stay_kind || null, hotelCheckin: p.hotel_checkin || null, hotelPolicy: p.hotel_policy || null,
+  photo: p.photo_url || null,   // BUILD 55
 });
 const talentById = (id) => TALENT.find((t) => t.id === id) || PROFILE_DIR[id] || null;
 const initialsOf = (name) => (String(name || "?").trim().split(/\s+/).filter(Boolean).map((w) => w[0]).slice(0, 2).join("") || "?").toUpperCase();
@@ -64,7 +66,7 @@ const CLOUD = Boolean(supabase);
   } catch (e) {}
 })();
 const DEMO_MODE = false;   // set true only for local demos without a database
-const BUILD = "BUILD 54 — 9 Oct";   // bump every deploy; shown at the top of the welcome screen
+const BUILD = "BUILD 55 — 9 Oct";   // bump every deploy; shown at the top of the welcome screen
 // which device someone is on — shown beside the build so a screenshot tells us both
 const DEVICE = (() => {
   try {
@@ -88,11 +90,11 @@ function makeReviewToken() {
 
 const isStandalone = () =>
   window.matchMedia?.("(display-mode: standalone)").matches || window.navigator.standalone === true;
-const isIOS = () => /iphone|ipad|ipod/i.test(navigator.userAgent);
+const isIOS = () => /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
 
 /* ---- Device notifications ----
-   Shows a system notification when new activity arrives while the app is open or
-   backgrounded. For notifications when the app is fully closed, see PUSH-SETUP.md. */
+   Shows a system notification when new activity arrives while the app is open or backgrounded.
+   When the app is fully closed, push notifications take over (BUILD 55, see "Push notifications" below). */
 async function askNotificationPermission() {
   if (!("Notification" in window)) return "unsupported";
   if (Notification.permission === "granted") return "granted";
@@ -110,7 +112,294 @@ function showDeviceNotification(title, body, tag) {
   } catch (e) {}
 }
 
-// wrap a Supabase write so failures are visible in the console instead of silent
+/* ---- Messages on screen (BUILD 55) ----
+   One small notice at the foot of the screen when something a person did could not be saved (or, now and
+   then, to confirm it was). Call toast(text) from anywhere; <Toaster /> sits once at the root of the app. */
+let _toast = null;
+function toast(text, tone) {
+  try { if (_toast) _toast({ id: Date.now() + Math.random(), text: String(text || ""), tone: tone || "error" }); } catch (e) {}
+}
+// The words for a failed save. Being offline is the usual cause, so say so when it is.
+function failText(what) {
+  const offline = typeof navigator !== "undefined" && navigator.onLine === false;
+  return offline ? `You're offline, so we couldn't ${what}. Try again once you're connected.` : `We couldn't ${what}. Please try again.`;
+}
+function Toaster() {
+  const [t, setT] = useState(null);
+  useEffect(() => { _toast = setT; return () => { if (_toast === setT) _toast = null; }; }, []);
+  useEffect(() => {
+    if (!t) return;
+    const id = setTimeout(() => setT(null), t.tone === "error" ? 5200 : 3000);
+    return () => clearTimeout(id);
+  }, [t]);
+  if (!t) return null;
+  const bad = t.tone === "error";
+  return createPortal((
+    <div key={t.id} role={bad ? "alert" : "status"} aria-live={bad ? "assertive" : "polite"} onClick={() => setT(null)} className="bth-toast"
+      style={{ position: "fixed", left: "50%", bottom: "calc(78px + env(safe-area-inset-bottom, 0px))", zIndex: 400, transform: "translateX(-50%)",
+               width: "max-content", maxWidth: "min(92vw, 420px)", padding: "11px 15px", borderRadius: 14, fontSize: 14, lineHeight: 1.35,
+               background: bad ? "#3B1717" : "#17291F", color: "#FFFFFF", boxShadow: "0 12px 32px -14px rgba(0,0,0,.5)", cursor: "pointer" }}>
+      {t.text}
+    </div>
+  ), document.body);
+}
+
+/* ---- Online or not (BUILD 55) ---- */
+function useOnline() {
+  const [online, setOnline] = useState(typeof navigator === "undefined" ? true : navigator.onLine !== false);
+  useEffect(() => {
+    const up = () => setOnline(true), down = () => setOnline(false);
+    window.addEventListener("online", up); window.addEventListener("offline", down);
+    return () => { window.removeEventListener("online", up); window.removeEventListener("offline", down); };
+  }, []);
+  return online;
+}
+const CloudOff = ({ size = 16, color = "currentColor" }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M2 2l20 20" /><path d="M5.8 5.8A7 7 0 0 0 4 10.5 4.5 4.5 0 0 0 6.5 19H17" /><path d="M21 15.5A4.5 4.5 0 0 0 17.5 9h-1.1A7 7 0 0 0 9.4 4.2" />
+  </svg>
+);
+// connecting: the phone says it is online, but nothing has come back from the server for a while (a weak signal)
+function OfflineBar({ children, connecting }) {
+  const online = useOnline();
+  if (online && !connecting) return null;
+  return (
+    <div role="status" className="rounded-xl px-3.5 py-2.5 mb-3 flex items-center gap-2.5" style={{ background: C.goldSoft }}>
+      <span className="shrink-0" style={{ color: C.goldText }}><CloudOff size={16} /></span>
+      <span className="text-[13px] leading-snug" style={{ color: C.goldText }}>
+        <b>{online ? "Still connecting." : "You're offline."}</b> {children || "You're seeing what's saved on this phone; saving needs a connection."}
+      </span>
+    </div>
+  );
+}
+
+/* ---- Opening without a connection (BUILD 55) ----
+   The signed-in member's own profile is remembered on this phone, so the app opens on it when the network
+   cannot be reached (notifications included). With no connection at all and a sign-in that has expired, it
+   opens read-only on the account this phone last used (also when renewing it takes more than a few seconds); the
+   sign-in renews by itself once the connection is back. Signing out forgets all of it. */
+const ME_KEY = "bth_me";
+function rememberMe(row) { try { if (row && row.id) localStorage.setItem(ME_KEY, JSON.stringify(row)); } catch (e) {} }
+function recallMe(id) {
+  if (!id) return null;
+  try { const r = JSON.parse(localStorage.getItem(ME_KEY) || "null"); return r && r.id === id ? r : null; } catch (e) { return null; }
+}
+// the account this browser still holds a sign-in for (possibly expired), read without the network
+const SIGN_IN_KEY = /^sb-.+-auth-token$/;
+function storedSignInId() {
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (!SIGN_IN_KEY.test(k || "")) continue;
+      const v = JSON.parse(localStorage.getItem(k) || "null");
+      const id = v && ((v.user && v.user.id) || (v.currentSession && v.currentSession.user && v.currentSession.user.id));
+      if (id) return id;
+    }
+  } catch (e) {}
+  return null;
+}
+function forgetStoredSignIn() {
+  try {
+    const keys = [];
+    for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (SIGN_IN_KEY.test(k || "")) keys.push(k); }
+    keys.forEach((k) => localStorage.removeItem(k));
+  } catch (e) {}
+}
+// what this phone kept for the person signing out: their profile, their notifications, the pushes it received
+function forgetLocalTraces(id) {
+  try { localStorage.removeItem(ME_KEY); if (id) localStorage.removeItem("bth_alerts_cache_" + id); } catch (e) {}
+  try { if (typeof caches !== "undefined") caches.open("bth-meta").then((c) => c.delete("/__bth/inbox")).catch(() => {}); } catch (e) {}
+}
+// a failure to reach the server, as opposed to an answer from it
+const isNetworkError = (e) => Boolean(e) && (e.name === "AuthRetryableFetchError" || e.status === 0 ||
+  /fetch|network|load failed|timed? ?out|offline/i.test(String(e.message || "")));
+
+/* ---- Updates (BUILD 55) ----
+   A new version downloads in the background and waits. The app shows one line, "A new version is ready",
+   and moves over only when Update is tapped. A version that was already waiting when the app starts is
+   applied straight away, before anyone begins working, so nobody stays on an old build for long — except in a
+   window opened by a notification, or while the app is open in another window: those get the line instead. */
+// windows of the app answer each other here, so a launch never reloads a window someone is working in
+const WINDOW_ID = Math.random().toString(36).slice(2);
+function otherWindowsOpen(ms = 400) {
+  return new Promise((resolve) => {
+    let ch = null;
+    try { ch = new BroadcastChannel("bth-windows"); } catch (e) { resolve(false); return; }
+    let seen = false;
+    ch.onmessage = (e) => { if (e.data && e.data.here === WINDOW_ID) seen = true; };
+    ch.postMessage({ ask: WINDOW_ID });
+    setTimeout(() => { try { ch.close(); } catch (e) {} resolve(seen); }, ms);
+  });
+}
+function useAppUpdate(quiet, hold) {
+  const [ready, setReady] = useState(false);
+  const regRef = useRef(null);
+  useEffect(() => {
+    if (typeof navigator === "undefined" || !("serviceWorker" in navigator)) return;
+    let alive = true, reloading = false;
+    // The first worker to take over a page (a first visit) changes nothing on it. Any later change of worker is a
+    // new version, and the page moves to it — except a review page, whose link is no longer in the address bar.
+    let hadOne = Boolean(navigator.serviceWorker.controller);
+    const onChange = () => {
+      if (alive) setReady(false);
+      if (!hadOne) { hadOne = true; return; }
+      if (quiet || reloading) return;
+      reloading = true; window.location.reload();
+    };
+    navigator.serviceWorker.addEventListener("controllerchange", onChange);
+    let peers = null;   // a review page doesn't answer: an update never reloads it anyway
+    if (!quiet) {
+      try {
+        peers = new BroadcastChannel("bth-windows");
+        peers.onmessage = (e) => { const d = e.data || {}; if (d.ask && d.ask !== WINDOW_ID) peers.postMessage({ here: d.ask }); };
+      } catch (e) { peers = null; }
+    }
+    const offer = (reg) => { if (alive && !quiet && reg.waiting && navigator.serviceWorker.controller) setReady(true); };
+    navigator.serviceWorker.register("/sw.js").then(async (reg) => {
+      if (!alive) return;
+      regRef.current = reg;
+      reg.addEventListener("updatefound", () => {
+        const next = reg.installing; if (!next) return;
+        next.addEventListener("statechange", () => { if (next.state === "installed") offer(reg); });
+      });
+      if (quiet || !reg.waiting || !navigator.serviceWorker.controller) return;
+      // at launch: apply it now — once per launch, and not under a notification just tapped or another open window
+      let applied = false;
+      try { applied = sessionStorage.getItem("bth_update_applied") === "1"; } catch (e) {}
+      if (!applied && !hold && !(await otherWindowsOpen())) {
+        if (!alive || !reg.waiting) return;
+        try { sessionStorage.setItem("bth_update_applied", "1"); } catch (e) {}
+        reg.waiting.postMessage({ type: "SKIP_WAITING" });
+        return;
+      }
+      offer(reg);
+    }).catch(() => {});
+    const check = () => { const r = regRef.current; if (r) r.update().catch(() => {}); };
+    const iv = setInterval(check, 15 * 60 * 1000);
+    const onVisible = () => { if (document.visibilityState === "visible") check(); };
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("online", check);
+    return () => {
+      alive = false; clearInterval(iv);
+      document.removeEventListener("visibilitychange", onVisible); window.removeEventListener("online", check);
+      navigator.serviceWorker.removeEventListener("controllerchange", onChange);
+      try { if (peers) peers.close(); } catch (e) {}
+    };
+  }, []);
+  const apply = () => {
+    const r = regRef.current;
+    if (r && r.waiting) r.waiting.postMessage({ type: "SKIP_WAITING" });
+    else window.location.reload();
+  };
+  return { ready, apply, dismiss: () => setReady(false) };
+}
+function UpdateNotice({ update }) {
+  if (!update || !update.ready) return null;
+  return createPortal((
+    <div role="status" aria-live="polite" className="bth-update"
+      style={{ position: "fixed", left: "50%", top: "calc(env(safe-area-inset-top, 0px) + 10px)", transform: "translateX(-50%)", zIndex: 410, width: "min(94vw, 440px)" }}>
+      <div className="rounded-2xl px-4 py-3 flex items-center gap-3" style={{ background: "#17291F", color: "#FFFFFF", boxShadow: "0 14px 36px -14px rgba(0,0,0,.55)" }}>
+        <div className="flex-1 min-w-0">
+          <div className="text-[14px] font-semibold leading-tight">A new version is ready</div>
+          <div className="text-[12px] mt-0.5 leading-snug" style={{ opacity: .75 }}>Takes a second. Finish anything you're typing first.</div>
+        </div>
+        <button type="button" onClick={update.dismiss} className="tap h-9 px-2.5 rounded-lg text-[13px] font-semibold" style={{ background: "transparent", color: "#FFFFFF", opacity: .8, border: 0 }}>Later</button>
+        <button type="button" onClick={update.apply} className="tap h-9 px-3.5 rounded-lg text-[14px] font-semibold" style={{ background: "#FFFFFF", color: "#17291F", border: 0 }}>Update</button>
+      </div>
+    </div>
+  ), document.body);
+}
+
+/* ---- Push notifications (BUILD 55) ----
+   With permission given, this device signs up with its browser's push service and the database keeps the
+   address (claim_push_subscription). The server (push-lead) then reaches the phone even when the app is
+   closed. Signing out takes this device off the list. On iPhone this works once the app is on the Home Screen. */
+const VAPID_PUBLIC_KEY = "BPMQ0hmX3HvMWkKjkcWJAa_O9uDuWMxQVXyl0mUNGuIz1toU6dl4jJ-sr8X0eiCeG8u27dI6CVwYEbiPCH4cbZ0";
+let PUSH_ON = false;   // when true, the server sends what the in-app alerts would otherwise announce
+const pushSupported = () => typeof window !== "undefined" && "serviceWorker" in navigator && "PushManager" in window && typeof Notification !== "undefined";
+function keyBytes(b64) {
+  const pad = "=".repeat((4 - (b64.length % 4)) % 4);
+  const raw = atob((b64 + pad).replace(/-/g, "+").replace(/_/g, "/"));
+  return Uint8Array.from(raw, (c) => c.charCodeAt(0));
+}
+const withTimeout = (p, ms) => Promise.race([p, new Promise((_, no) => setTimeout(() => no(new Error("timeout")), ms))]);
+// what alerts can do on this device right now
+function pushStateNow() {
+  if (!pushSupported()) return isIOS() && !isStandalone() ? "ios-install" : "unsupported";
+  if (Notification.permission === "denied") return "denied";
+  if (Notification.permission === "granted") return "on";
+  return "off";
+}
+async function ensurePush() {
+  if (!CLOUD || !pushSupported() || Notification.permission !== "granted") { PUSH_ON = false; return pushStateNow(); }
+  try {
+    const reg = await withTimeout(navigator.serviceWorker.ready, 8000);
+    let sub = await reg.pushManager.getSubscription();
+    const want = keyBytes(VAPID_PUBLIC_KEY);
+    const have = sub && sub.options && sub.options.applicationServerKey ? new Uint8Array(sub.options.applicationServerKey) : null;
+    if (sub && have && (have.length !== want.length || have.some((v, i) => v !== want[i]))) { await sub.unsubscribe(); sub = null; }   // made for another key
+    if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: want });
+    const j = sub.toJSON();
+    const { error } = await supabase.rpc("claim_push_subscription", { p_endpoint: j.endpoint, p_p256dh: j.keys.p256dh, p_auth: j.keys.auth });
+    if (error) { console.warn("claim_push_subscription:", error.message); PUSH_ON = false; return "error"; }
+    PUSH_ON = true;
+    return "on";
+  } catch (e) { console.warn("push sign-up:", e && e.message); PUSH_ON = false; return "error"; }
+}
+// Signing out takes this device off the list. The server's copy needs the sign-in; the browser's own subscription
+// is dropped either way, which stops deliveries to this phone even when there is no connection to tell anyone.
+async function releasePush(signedIn) {
+  PUSH_ON = false;
+  if (!CLOUD || !pushSupported()) return;
+  try {
+    const reg = await withTimeout(navigator.serviceWorker.getRegistration(), 3000);
+    const sub = reg ? await reg.pushManager.getSubscription() : null;
+    if (!sub) return;
+    if (signedIn) { try { await withTimeout(supabase.from("push_subscriptions").delete().eq("endpoint", sub.endpoint), 5000); } catch (e) {} }
+    await withTimeout(sub.unsubscribe(), 5000);
+  } catch (e) {}
+}
+
+/* ---- Where a notification leads (BUILD 55) ----
+   Pushes carry "/?open=messages" and the like; each role keeps those things under a different tab. */
+function tabForOpen(target, kind) {
+  const tab = ({
+    messages: "chats",
+    jobs: kind === "operator" ? "requests" : kind === "hotel" ? "bookings" : "jobs",
+    trips: kind === "operator" || kind === "hotel" ? "bookings" : "trips",
+    bookings: kind === "operator" || kind === "hotel" ? "bookings" : "trips",
+    profile: kind === "guide" || kind === "driver" ? "profile" : kind === "hotel" ? "hotel_profile" : null,
+  })[target] || null;
+  return tab && (NAV[kind] || []).some((n) => n.id === tab) ? tab : null;
+}
+const openTargetOf = (url) => { try { return new URL(url, window.location.origin).searchParams.get("open"); } catch (e) { return null; } };
+// The pushes kept on this phone belong to whoever was signed in when they came: when someone else signs in here,
+// they start with an empty list. (A phone with no owner recorded yet keeps what it has.)
+let inboxReady = Promise.resolve();
+function claimPushInbox(owner) {
+  inboxReady = (async () => {
+    try {
+      if (!owner || typeof caches === "undefined") return;
+      const prev = localStorage.getItem("bth_inbox_owner");
+      if (prev === owner) return;
+      if (prev) await (await caches.open("bth-meta")).delete("/__bth/inbox");
+      localStorage.setItem("bth_inbox_owner", owner);
+    } catch (e) {}
+  })();
+  return inboxReady;
+}
+// pushes that reached this phone while the app was closed, kept by the service worker for offline viewing
+async function readPushInbox() {
+  try { await inboxReady; } catch (e) {}
+  try {
+    if (typeof caches === "undefined") return [];
+    const c = await caches.open("bth-meta");
+    const r = await c.match("/__bth/inbox");
+    const list = r ? await r.json() : [];
+    return Array.isArray(list) ? list : [];
+  } catch (e) { return []; }
+}
+
 // Record admin actions for accountability. Never blocks the action itself.
 async function auditLog(actorId, action, targetId, detail) {
   if (!CLOUD) return;
@@ -122,9 +411,16 @@ async function auditLog(actorId, action, targetId, detail) {
   } catch (e) { console.error("auditLog failed:", e); }
 }
 
+// A write the person asked for: a failure is logged and shown on screen in plain words (BUILD 55).
+const WRITE_WORDS = {
+  "trip_members.insert": "finish setting up the trip", "trip_messages.system": "finish setting up the trip",
+  "trip_messages.insert": "send that message", "stories.insert": "post your story",
+  "follows.insert": "follow them", "follows.delete": "unfollow them", "profiles.availability": "update your availability",
+  "job_applicants.delete": "clear the applicants",
+};
 async function dbWrite(label, promise) {
   const { error } = await promise;
-  if (error) console.error(`${label} failed:`, error.message);
+  if (error) { console.error(`${label} failed:`, error.message); toast(failText(WRITE_WORDS[label] || "save that")); }
   return !error;
 }
 
@@ -138,6 +434,26 @@ async function shrinkImage(dataUri, maxW = 1280, quality = 0.82) {
     c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
     return c.toDataURL("image/jpeg", quality);
   } catch { return dataUri; }
+}
+
+// A profile photo: square, centre-cropped, at most 480 px, as a JPEG — light enough for mountain data (BUILD 55)
+function squarePhoto(dataUri, size = 480, quality = 0.85) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      try {
+        const w = img.naturalWidth, h = img.naturalHeight, side = Math.min(w, h);
+        if (!side) { reject(new Error("That photo couldn't be read. Try another one.")); return; }
+        const out = Math.min(size, side);
+        const c = document.createElement("canvas"); c.width = out; c.height = out;
+        const g = c.getContext("2d"); g.imageSmoothingQuality = "high";
+        g.drawImage(img, (w - side) / 2, (h - side) / 2, side, side, 0, 0, out, out);
+        c.toBlob((b) => (b ? resolve(b) : reject(new Error("That photo couldn't be prepared. Try another one."))), "image/jpeg", quality);
+      } catch (e) { reject(e); }
+    };
+    img.onerror = () => reject(new Error("That photo couldn't be read. Try a JPEG or PNG."));
+    img.src = dataUri;
+  });
 }
 
 async function uploadPostMedia(talentId, media) {
@@ -207,27 +523,7 @@ class ErrorBoundary extends React.Component {
   }
 }
 
-// Check for a newer build and swap to it — stops stale caches serving old code
-function useAutoUpdate() {
-  useEffect(() => {
-    if (!("serviceWorker" in navigator)) return;
-    let reloading = false;
-    navigator.serviceWorker.addEventListener("controllerchange", () => {
-      if (reloading) return;
-      reloading = true;
-      window.location.reload();
-    });
-    const check = () => navigator.serviceWorker.getRegistration().then((r) => r && r.update()).catch(() => {});
-    check();
-    const iv = setInterval(check, 60 * 1000);
-    const onVis = () => { if (document.visibilityState === "visible") check(); };
-    document.addEventListener("visibilitychange", onVis);
-    return () => { clearInterval(iv); document.removeEventListener("visibilitychange", onVis); };
-  }, []);
-}
-
 export default function App() {
-  useAutoUpdate();
   // A guest arriving on a review link never signs in — they see only the review form.
   const reviewToken = useMemo(() => {
     try {
@@ -236,6 +532,29 @@ export default function App() {
       if (t && window.history && window.history.replaceState) window.history.replaceState(null, "", window.location.pathname);
       return t;
     } catch (e) { return null; }
+  }, []);
+  // BUILD 55: a tapped notification arrives as "/?open=messages"; read it once and tidy the address bar
+  const openParam = useMemo(() => {
+    try {
+      const u = new URL(window.location.href);
+      const o = u.searchParams.get("open");
+      if (o) { u.searchParams.delete("open"); window.history.replaceState(null, "", u.pathname + u.search); }
+      return o;
+    } catch (e) { return null; }
+  }, []);
+  // BUILD 55: new versions wait for "Update" — and never reload a review page, whose link is no longer in the address
+  // bar, nor apply themselves under a notification someone has just tapped
+  const update = useAppUpdate(Boolean(reviewToken), Boolean(openParam));
+  // ...and while the app is open, the service worker says so: switch tab, refresh the alerts
+  useEffect(() => {
+    if (typeof navigator === "undefined" || !navigator.serviceWorker) return;
+    const onMessage = (e) => {
+      const d = e.data || {};
+      if (d.type === "bth-open") { const t = openTargetOf(d.url); if (t) window.dispatchEvent(new CustomEvent("bth-open", { detail: t })); }
+      if (d.type === "bth-push") window.dispatchEvent(new CustomEvent("bth-push", { detail: d.item }));
+    };
+    navigator.serviceWorker.addEventListener("message", onMessage);
+    return () => navigator.serviceWorker.removeEventListener("message", onMessage);
   }, []);
   const realUserRef = useRef(null);   // current signed-in id — set below, used by every action
   const [accountId, setAccountId] = useState(null);
@@ -252,6 +571,15 @@ export default function App() {
   useEffect(() => { const t = setTimeout(() => setSplashTimedOut(true), 12000); return () => clearTimeout(t); }, []);
   const [profileTick, setProfileTick] = useState(0);
   const [dirTick, setDirTick] = useState(0);
+  const [liveFor, setLiveFor] = useState(null);   // BUILD 55: whose data the server has answered with in this session
+  const [listsFor, setListsFor] = useState(null); // BUILD 55: …and whose member directory has loaded (the bell's lists are in)
+  // BUILD 55: someone who signed out while the server couldn't hear it. A renewal auth-js was already retrying can
+  // still come back with their session: that finishes the sign-out instead of signing them back in. Only their own
+  // sign-in (SIGNED_IN) clears it.
+  const leftRef = useRef(null);
+  const loggingOutRef = useRef(false);
+  // signing out of the remembered (offline) profile may change no other state: this makes sure the screen follows
+  const [, setSignedOut] = useState(0);
   const [dms, setDms] = useState([]);
   const [authBusy, setAuthBusy] = useState(false);   // true while the signup/reset wizard is running
   const [follows, setFollows] = useState([]);
@@ -320,9 +648,29 @@ export default function App() {
     const patch = { status, ...extra };
     if (status !== "new") patch.last_contacted = new Date().toISOString();
     const { error } = await supabase.from("enquiries").update(patch).eq("id", id);
-    if (error) console.error("setEnquiryStatus failed:", error.message);
+    if (error) { console.error("setEnquiryStatus failed:", error.message); toast(failText("update that enquiry")); }
     fetchEnquiries();
   };
+
+  // BUILD 55: back online, or back to the app after a while — fetch what changed meanwhile. Live updates do not
+  // replay what was missed while the connection dropped or the phone slept.
+  const refreshAllRef = useRef(null);
+  refreshAllRef.current = () => {
+    loadProfiles(); fetchTrips(); fetchJobs(); fetchPosts(); fetchInvites();
+    fetchDms(); fetchFollows(); fetchEngagement(); fetchEnquiries(); fetchStories(); fetchCreditRequests();
+  };
+  useEffect(() => {
+    let last = Date.now();
+    const catchUp = async () => {
+      last = Date.now();
+      try { if (CLOUD) await supabase.auth.getSession(); } catch (e) {}   // an expired sign-in renews here
+      if (realUserRef.current && refreshAllRef.current) refreshAllRef.current();
+    };
+    const onVisible = () => { if (document.visibilityState === "visible" && Date.now() - last > 5 * 60e3) catchUp(); };
+    window.addEventListener("online", catchUp);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => { window.removeEventListener("online", catchUp); document.removeEventListener("visibilitychange", onVisible); };
+  }, []);
 
   // a won enquiry becomes a real trip, carrying its details across
   const convertEnquiry = async (enq) => {
@@ -342,7 +690,7 @@ export default function App() {
     await dbWrite("trip_members.insert", supabase.from("trip_members").insert({
       trip_id: created.id, user_id: me, display_name: PROFILE_DIR[me]?.name || "Operator", role_in_trip: "operator",
     }));
-    await dbWrite("trip_messages.insert", supabase.from("trip_messages").insert({
+    await dbWrite("trip_messages.system", supabase.from("trip_messages").insert({
       trip_id: created.id, sender_id: null, kind: "system",
       body: `Trip created from an enquiry by ${enq.clientName}${enq.partySize ? ` · ${enq.partySize} guests` : ""}.`,
     }));
@@ -357,20 +705,39 @@ export default function App() {
     if (!CLOUD) return;
     // BUILD 49: the full directory (phone, email, licence details) is for signed-in members only.
     // A visitor who is not signed in gets the public columns through the profiles_public view.
-    let signedIn = false;
-    try { const { data: s } = await supabase.auth.getSession(); signedIn = Boolean(s && s.session); } catch { signedIn = false; }
+    let signedIn = false, who = null;
+    try { const { data: s } = await supabase.auth.getSession(); signedIn = Boolean(s && s.session); who = signedIn ? s.session.user.id : null; } catch { signedIn = false; }
     const { data, error } = await supabase.from(signedIn ? "profiles" : "profiles_public").select("*");
-    if (error) { console.error("loadProfiles failed:", error.message); return; }
-    if (data) { PROFILE_DIR = {}; data.forEach((p) => { PROFILE_DIR[p.id] = profileToTalent(p); }); setDirTick((t) => t + 1); }
+    if (error) { console.error("loadProfiles failed:", error.message); return false; }
+    if (data) {
+      PROFILE_DIR = {}; data.forEach((p) => { PROFILE_DIR[p.id] = profileToTalent(p); }); setDirTick((t) => t + 1);
+      if (who) { setLiveFor(who); setListsFor(who); }   // BUILD 55: the server has answered for this person
+    }
+    return Boolean(data);
   };
   // Bumping profileTick re-runs the session effect below, which reloads the directory once signed in.
   const reloadMe = () => { setProfileTick((t) => t + 1); };
   // BUILD 50: signing out also clears the in-memory directory and any stored one-time link tokens
   const logout = async () => {
-    try { if (session) await supabase.auth.signOut(); } catch (e) {}
-    PROFILE_DIR = {};
-    try { localStorage.removeItem("bth_invite"); localStorage.removeItem("bth_attest"); } catch (e) {}
-    setAccountId(null);
+    if (loggingOutRef.current) return;   // a second tap while the first is still going
+    loggingOutRef.current = true;
+    const leaving = realUserRef.current;
+    if (CLOUD && leaving) leftRef.current = leaving;   // from this moment no session of theirs comes back on its own
+    const slow = setTimeout(() => toast("Signing out… the connection is slow, this takes a moment.", "info"), 2000);
+    try {
+      try { await releasePush(Boolean(session)); } catch (e) {}   // BUILD 55: this phone stops getting their alerts, offline too
+      let out = false;
+      try { if (session) { const { error } = await supabase.auth.signOut(); out = !error; } } catch (e) {}
+      // BUILD 55: offline, the sign-out above cannot reach the server — this phone forgets the sign-in anyway (and a
+      // renewal already under way can't sign them back in: see leftRef and the session listener)
+      if (CLOUD && !out) { forgetStoredSignIn(); setSession(null); setAuthUnreachable(false); }
+      forgetLocalTraces(leaving);
+      PROFILE_DIR = {};
+      setLiveFor(null); setListsFor(null);
+      try { localStorage.removeItem("bth_invite"); localStorage.removeItem("bth_attest"); } catch (e) {}
+      setAccountId(null);
+      setSignedOut((n) => n + 1);
+    } finally { clearTimeout(slow); loggingOutRef.current = false; }
   };
 
 
@@ -433,7 +800,7 @@ export default function App() {
     if (!CLOUD) return;
     const { data, error } = await supabase.from("follows").select("*");
     if (error) console.error("fetchFollows failed:", error.message);
-    if (data) setFollows(data.map((f) => ({ follower: f.follower_id, following: f.following_id })));
+    if (data) setFollows(data.map((f) => ({ follower: f.follower_id, following: f.following_id, ts: f.created_at ? new Date(f.created_at).getTime() : 0 })));
   };
   useEffect(() => {
     if (!CLOUD) return;
@@ -536,27 +903,97 @@ export default function App() {
     { const { error: _e } = await supabase.from("direct_messages").update({ read: true }).eq("sender_id", withId).eq("recipient_id", me).eq("read", false); if (_e) console.error("direct_messages.markRead failed:", _e.message); }
   };
 
+  const [authUnreachable, setAuthUnreachable] = useState(false);   // BUILD 55: the sign-in couldn't be checked (no connection)
+  // BUILD 55: renewing an expired sign-in keeps retrying for up to a minute when the network is down or carries
+  // nothing. The app doesn't wait for it: with no connection it opens at once on the profile this phone remembers,
+  // otherwise after a few seconds; the renewal carries on underneath and takes over when it succeeds.
+  const [authSlow, setAuthSlow] = useState(() => CLOUD && typeof navigator !== "undefined" && navigator.onLine === false);
   useEffect(() => {
     if (!CLOUD) return;
+    // a session for someone who signed out unheard, turning up without their own sign-in (a renewal that was already
+    // under way): the phone forgets it at once — only if it is still theirs — and the server is told to end that
+    // exact session, by its own token, without touching whatever this phone holds by then
+    const isLeft = (sn) => Boolean(sn && sn.user && leftRef.current && sn.user.id === leftRef.current);
+    const finishSignOut = (sn) => {
+      if (storedSignInId() === sn.user.id) forgetStoredSignIn();
+      const token = sn.access_token;
+      if (token) setTimeout(() => { try { supabase.auth.admin.signOut(token, "local").catch(() => {}); } catch (e) {} }, 0);
+    };
     loadProfiles();
-    supabase.auth.getSession().then(({ data }) => { setSession(data.session || null); setSessionKnown(true); }).catch(() => setSessionKnown(true));
-    const { data: sub } = supabase.auth.onAuthStateChange((_e, sn) => setSession(sn));
-    return () => sub.subscription.unsubscribe();
+    const slow = setTimeout(() => setAuthSlow(true), 5000);
+    supabase.auth.getSession().then(({ data, error }) => {
+      if (isLeft(data.session)) { finishSignOut(data.session); setSessionKnown(true); return; }
+      setSession(data.session || null);
+      setAuthUnreachable(Boolean(!data.session && isNetworkError(error)));
+      setSessionKnown(true);
+    }).catch(() => setSessionKnown(true)).finally(() => clearTimeout(slow));
+    const { data: sub } = supabase.auth.onAuthStateChange((ev, sn) => {
+      const renewal = ev === "TOKEN_REFRESHED" || ev === "INITIAL_SESSION";
+      if (isLeft(sn) && renewal) { finishSignOut(sn); return; }
+      if (isLeft(sn)) leftRef.current = null;   // they signed in again themselves (or are resetting their password)
+      setSession(sn);
+      if (sn) setAuthUnreachable(false); else { setLiveFor(null); setListsFor(null); }
+    });
+    return () => { clearTimeout(slow); sub.subscription.unsubscribe(); };
   }, []);
 
+  // BUILD 55: the member's own row, put in the directory when the directory itself could not load
+  const seedMe = (row) => { if (row && row.id && !PROFILE_DIR[row.id]) { PROFILE_DIR[row.id] = profileToTalent(row); setDirTick((t) => t + 1); } };
   useEffect(() => {
     if (!CLOUD || !session) { setMyProfile(null); return; }
     let on = true;
     loadProfiles();   // BUILD 49: the full directory only opens once signed in, so refresh it here
     supabase.from("profiles").select("*").eq("id", session.user.id).maybeSingle()
-      .then(({ data }) => { if (on) setMyProfile(data || false); });
+      .then(({ data, error }) => {
+        if (!on) return;
+        if (error && !data) {   // BUILD 55: no connection — open on the profile this phone remembers
+          const kept = recallMe(session.user.id);
+          if (kept) { seedMe(kept); setMyProfile(kept); return; }
+        }
+        // BUILD 55: their own profile opens even if the directory hasn't loaded (no directory-wide refresh for one
+        // row: setMyProfile below renders anyway); and the server has answered for them
+        if (data) { rememberMe(data); if (!PROFILE_DIR[data.id]) PROFILE_DIR[data.id] = profileToTalent(data); setLiveFor(data.id); }
+        setMyProfile(data || false);
+      });
     return () => { on = false; };
   }, [session, profileTick]);
 
-  const realUser = CLOUD && !authBusy && session && myProfile && typeof myProfile === "object"
-    ? { id: session.user.id, kind: myProfile.role, talentId: session.user.id, name: myProfile.full_name,
-        initials: initialsOf(myProfile.full_name || "?"), licenseStatus: myProfile.license_status || "none",
-        isAdmin: myProfile.role === "admin" }
+  const online = useOnline();
+  // offline with an expired sign-in (or while a slow renewal is still trying): the account this phone last used,
+  // read-only until the connection is back
+  const offlineMe = CLOUD && !session && (sessionKnown ? (authUnreachable || !online) : authSlow) ? recallMe(storedSignInId()) : null;
+  // BUILD 55: the bell's list counts as live only once the server has answered for this person in this session
+  const dataLive = !CLOUD || (Boolean(session) && liveFor === session.user.id);
+  const listsLive = !CLOUD || (Boolean(session) && listsFor === session.user.id);
+  // BUILD 55: a signal that comes back without the phone noticing (no "online" event), or a directory that failed to
+  // load: keep trying, lightly — one try at a time, 20 s, 40 s, 80 s, then every 2 minutes. When the directory loads,
+  // the lists tied to it refetch by themselves (dirTick); the others are fetched here.
+  const fetchRestRef = useRef(null);   // read at call time, so it acts for whoever is signed in by then
+  fetchRestRef.current = () => { fetchPosts(); fetchInvites(); fetchStories(); fetchCreditRequests(); };
+  useEffect(() => {
+    if (!CLOUD || !session || !online || listsLive) return;
+    let alive = true, wait = 20000, t = null;
+    const tick = async () => {
+      const ok = await loadProfiles();
+      if (!alive) return;
+      if (ok) { if (fetchRestRef.current) fetchRestRef.current(); return; }
+      wait = Math.min(wait * 2, 120000);
+      t = setTimeout(tick, wait);
+    };
+    t = setTimeout(tick, wait);
+    return () => { alive = false; clearTimeout(t); };
+  }, [Boolean(session), online, listsLive]);
+  useEffect(() => { if (offlineMe) seedMe(offlineMe); }, [offlineMe && offlineMe.id]);
+  const meRow = (() => {
+    if (!CLOUD) return null;
+    if (!session) return offlineMe;
+    if (myProfile && typeof myProfile === "object") return myProfile.id === session.user.id ? myProfile : null;
+    return myProfile === null ? recallMe(session.user.id) : null;   // still loading: start from the remembered one
+  })();
+  const realUser = CLOUD && !authBusy && meRow
+    ? { id: meRow.id, kind: meRow.role, talentId: meRow.id, name: meRow.full_name,
+        initials: initialsOf(meRow.full_name || "?"), licenseStatus: meRow.license_status || "none",
+        isAdmin: meRow.role === "admin" }
     : null;
   const user = realUser || (DEMO_MODE ? ACCOUNTS.find((a) => a.id === accountId) : null) || null;
   realUserRef.current = user ? (user.talentId || user.id) : null;
@@ -586,11 +1023,12 @@ export default function App() {
   const [attestPreview, setAttestPreview] = useState(null);
   const forgetAttest = () => { try { localStorage.removeItem("bth_attest"); } catch (e) {} setAttestToken(null); setAttestPreview(null); };
   useEffect(() => {
-    if (!CLOUD || !attestToken) return;
+    if (!CLOUD || !attestToken || !online) return;
     supabase.rpc("preview_attestation", { p_token: attestToken }).then(({ data, error }) => {
+      if (error && isNetworkError(error)) return;   // BUILD 55: no answer — the link waits and is tried again once connected
       if (!error && data) setAttestPreview(data); else forgetAttest();
     });
-  }, [attestToken]);
+  }, [attestToken, online]);
   const rowToInvite = (r) => ({
     id: r.id, token: r.token, tripId: r.trip_id, operatorId: r.operator_id, role: r.role,
     name: r.invitee_name, phone: r.invitee_phone, talentId: r.talent_id, status: r.status,
@@ -628,23 +1066,34 @@ export default function App() {
       .subscribe();
     return () => { supabase.removeChannel(ch); };
   }, [inviteMe]);
-  // before they sign up: who invited them, and to what
+  // before they sign up: who invited them, and to what (asked again when the connection returns)
   useEffect(() => {
-    if (!CLOUD || !inviteToken || inviteMe) return;
+    if (!CLOUD || !inviteToken || inviteMe || !online) return;
     supabase.rpc("preview_crew_invite", { p_token: inviteToken }).then(({ data, error }) => {
       if (!error && data) setInvitePreview(data);
     });
-  }, [inviteToken, inviteMe]);
-  // once signed in as a guide or driver: the invitation becomes theirs
+  }, [inviteToken, inviteMe, online]);
+  // once signed in as a guide or driver: the invitation becomes theirs.
+  // BUILD 55: that needs the sign-in and a connection. Until both are there the link waits on this phone, and a
+  // request that gets no answer is tried again later — only the server's own answer uses the link up.
+  const claimingRef = useRef(null);
   useEffect(() => {
     if (!CLOUD || !inviteToken || !inviteMe) return;
     const forget = () => { try { localStorage.removeItem("bth_invite"); } catch (e) {} setInviteToken(null); setInvitePreview(null); };
     if (inviteKind !== "guide" && inviteKind !== "driver") { forget(); return; }
+    if (!session || !online || claimingRef.current === inviteToken) return;
+    claimingRef.current = inviteToken;
     supabase.rpc("claim_crew_invite", { p_token: inviteToken }).then(({ error }) => {
-      if (error) console.warn("claim_crew_invite:", error.message);
+      claimingRef.current = null;
+      if (error && isNetworkError(error)) return;
+      if (error) {
+        console.warn("claim_crew_invite:", error.message);
+        // the database explains itself ("This invitation is no longer active"); say that, not a code
+        toast(/invitation|sign in|profile/i.test(error.message || "") ? error.message : "We couldn't open that crew invitation.");
+      }
       forget(); fetchInvites();
-    });
-  }, [inviteToken, inviteMe, inviteKind]);
+    }).catch(() => { claimingRef.current = null; });
+  }, [inviteToken, inviteMe, inviteKind, Boolean(session), online]);
 
   const createInvite = async ({ trip, role, name, phone, talentId }) => {
     const me = realUserRef.current;
@@ -665,7 +1114,7 @@ export default function App() {
   const cancelInvite = async (id) => {
     if (!CLOUD) return;
     const { error } = await supabase.from("crew_invites").update({ status: "cancelled" }).eq("id", id);
-    if (error) console.error("cancelInvite failed:", error.message);
+    if (error) { console.error("cancelInvite failed:", error.message); toast(failText("cancel that invitation")); }
     fetchInvites();
   };
   const respondInvite = async (id, accept) => {
@@ -739,7 +1188,7 @@ export default function App() {
       supabase.from("post_likes").select("*"),
       supabase.from("post_comments").select("*").order("created_at", { ascending: true }),
     ]);
-    if (L) setLikes(L.map((r) => ({ post_id: r.post_id, liker_id: r.liker_id })));
+    if (L) setLikes(L.map((r) => ({ post_id: r.post_id, liker_id: r.liker_id, ts: r.created_at ? new Date(r.created_at).getTime() : 0 })));
     if (Cm) setComments(Cm.map((r) => ({ id: r.id, post_id: r.post_id, author_id: r.author_id, body: r.body, ts: new Date(r.created_at).getTime() })));
   };
 
@@ -1079,18 +1528,20 @@ export default function App() {
   };
 
   // The HTML splash (index.html) stays up until the first real screen is known: the review form, the sign-in
-  // screen (no session), or the app itself (session + profile loaded). A 12 s cap makes sure it never sticks.
-  const splashReady = Boolean(reviewToken) || splashTimedOut || (sessionKnown && (!session || myProfile !== null));
+  // screen (no session), or the app itself (session + profile loaded, or the profile this phone remembers while the
+  // sign-in can't be checked). A 12 s cap makes sure it never sticks.
+  const splashReady = Boolean(reviewToken) || splashTimedOut || Boolean(offlineMe) || (sessionKnown && (!session || myProfile !== null));
   useEffect(() => { if (splashReady && typeof window !== "undefined" && window.__bthSplashDone) window.__bthSplashDone(); }, [splashReady]);
 
   if (reviewToken) {
     return (
       <ErrorBoundary>
         <div className="min-h-screen w-full flex justify-center" style={{ background: C.bg }}>
-          <div className="w-full max-w-[430px] flex flex-col" style={{ minHeight: "100dvh", background: C.bg }}>
+          <div className="w-full max-w-[860px] flex flex-col" style={{ minHeight: "100dvh", background: C.bg }}>
             <GuestReview token={reviewToken} />
           </div>
         </div>
+        <Toaster />
       </ErrorBoundary>
     );
   }
@@ -1239,12 +1690,14 @@ export default function App() {
           <RoleComingSoon user={user} onLogout={logout} />
         ) : (
           <InvitesCtx.Provider value={{ invites, creditRequests }}>
-          <Shell key={user.id} user={user} posts={posts} jobs={jobs} trips={trips} listings={listings} enquiries={enquiries} dirTick={dirTick} attest={{ attestToken, attestPreview, forgetAttest }}
-            actions={{ addPost, approve, reject, deletePost, reloadDirectory: loadProfiles, setAvailability, toggleFollow, sendJob, setJobStatus, postChat, openChat, postListing, applyToListing, setApplicant, hireApplicant, saveEnquiry, setEnquiryStatus, convertEnquiry, reloadTrips: fetchTrips, binListing, destroyListing, binRequest, destroyRequest, saveTripDetails, createInvite, cancelInvite, respondInvite }} engagement={{ likes, comments, toggleLike, addComment, deleteComment, follows, toggleFollow, stories, addStory, deleteStory }} dm={{ dms, sendDm, markRead, sharePostTo }} onLogout={logout} />
+          <Shell key={user.id + ":" + user.kind} user={user} posts={posts} jobs={jobs} trips={trips} listings={listings} enquiries={enquiries} dirTick={dirTick} live={dataLive} settled={listsLive} signedIn={!CLOUD || Boolean(session)} attest={{ attestToken, attestPreview, forgetAttest }}
+            actions={{ addPost, approve, reject, deletePost, reloadDirectory: loadProfiles, setAvailability, toggleFollow, sendJob, setJobStatus, postChat, openChat, postListing, applyToListing, setApplicant, hireApplicant, saveEnquiry, setEnquiryStatus, convertEnquiry, reloadTrips: fetchTrips, binListing, destroyListing, binRequest, destroyRequest, saveTripDetails, createInvite, cancelInvite, respondInvite }} engagement={{ likes, comments, toggleLike, addComment, deleteComment, follows, toggleFollow, stories, addStory, deleteStory }} dm={{ dms, sendDm, markRead, sharePostTo }} onLogout={logout} initialOpen={openParam} />
           </InvitesCtx.Provider>
         )}
       </div>
     </div>
+    <UpdateNotice update={update} />
+    <Toaster />
     </ErrorBoundary>
   );
 }
@@ -1266,6 +1719,7 @@ function Login({ onPick, session, myProfile, onAuthed, onBusy, invitePreview, at
   return (
     <div className="flex-1 overflow-y-auto hidescroll fade" style={{ scrollbarWidth: "none" }}>
       <div className="min-h-full flex flex-col px-6 pt-6 pb-6">
+        <OfflineBar>Signing in or joining needs a connection.</OfflineBar>
         {/* brand */}
         <div className="flex items-center gap-3">
           <BrandMark size={44} />
@@ -1409,17 +1863,27 @@ function RoleComingSoon({ user, onLogout }) {
 }
 const DEFAULT_TAB = { guide: "post", driver: "post", operator: "bookings", admin: "review", hotel: "hotel_home" };
 
-function Shell({ user, posts, jobs, trips, listings, enquiries, actions, engagement, dm, dirTick, onLogout, attest }) {
+// live: the server has answered for this person in this session · settled: their member directory has loaded too
+// signedIn: a sign-in the server will accept (BUILD 55)
+function Shell({ user, posts, jobs, trips, listings, enquiries, actions, engagement, dm, dirTick, onLogout, attest, initialOpen, live = true, settled = true, signedIn = true }) {
   const { attestToken, attestPreview, forgetAttest } = attest || {};
   const { invites: crewInvites, creditRequests: openCreditRequests } = React.useContext(InvitesCtx);
-  const [tab, setTab] = useState(DEFAULT_TAB[user.kind]);
+  const [tab, setTab] = useState(() => tabForOpen(initialOpen, user.kind) || DEFAULT_TAB[user.kind]);
   const [overlay, setOverlay] = useState(null); // {type:'profile'|'request', talentId}
   const [dmWith, setDmWith] = useState(null);
   const [sharedPost, setSharedPost] = useState(null);
   const [searchTerm, setSearchTerm] = useState("");
   const [alertsOpen, setAlertsOpen] = useState(false);
   const lastAlertCount = useRef(0);
-  const [notifyOn, setNotifyOn] = useState(typeof Notification !== "undefined" && Notification.permission === "granted");
+  // BUILD 55: alerts reach this phone when the app is closed (push); the bell lists the server's reminders too,
+  // counts only what hasn't been seen, and still shows the last list when offline.
+  const [pushState, setPushState] = useState(() => pushStateNow());
+  const [nudges, setNudges] = useState([]);
+  const [freshIds, setFreshIds] = useState(() => new Set());
+  const seenKey = "bth_alerts_seen_" + (user.talentId || user.id);
+  const [seenIds, setSeenIds] = useState(() => { try { return new Set(JSON.parse(localStorage.getItem(seenKey) || "[]")); } catch (e) { return new Set(); } });
+  const online = useOnline();
+  const [tripFocus, setTripFocus] = useState(null);   // { id, sheet, n }: a trip a notification asked to open
   const [installSheet, setInstallSheet] = useState(false);
   const [firstRun, setFirstRun] = useState(() => {
     try { return CLOUD && !localStorage.getItem("bth_seen_intro_" + (user.talentId || user.id)); } catch (e) { return false; }
@@ -1445,6 +1909,69 @@ function Shell({ user, posts, jobs, trips, listings, enquiries, actions, engagem
   const hotelPending = user.kind === "hotel" ? hotelData.bookings.filter((b) => b.status === "requested" && b.checkOut >= new Date().toISOString().slice(0, 10)).length : 0;
   const eng = { ...engagement, me: actorId, isAdmin: user.kind === "admin", sharePostTo: dm?.sharePostTo };
 
+  // BUILD 55: the one way to move between tabs from outside the navigation — whatever is on top closes first,
+  // so a tap from the bell or a notification never lands behind an open profile
+  const goTab = (t) => { if (!t) return; setOverlay(null); setSharedPost(null); setAlertsOpen(false); setTab(t); };
+  const openTrip = (tripId, sheet) => {
+    const t = tabForOpen("trips", user.kind);
+    if (t && tripId) setTripFocus({ id: tripId, sheet: sheet || null, n: Date.now() });
+    goTab(t);
+  };
+
+  // push: claim this device on every launch, whenever the connection returns, and once the sign-in is confirmed
+  // (browsers rotate push keys; a shared phone may have changed hands)
+  useEffect(() => {
+    let on = true;
+    if (online && signedIn && pushStateNow() === "on") ensurePush().then((st) => { if (on) setPushState(st); });
+    return () => { on = false; };
+  }, [actorId, online, signedIn]);
+  // a notification tapped while the app is open
+  useEffect(() => {
+    const onOpen = (e) => goTab(tabForOpen(e.detail, user.kind));
+    window.addEventListener("bth-open", onOpen);
+    return () => window.removeEventListener("bth-open", onOpen);
+  }, [user.kind]);
+  // reminders the server writes (system_nudges, review_nudges) — the ones the app cannot work out by itself.
+  // Left out: what the bell already shows from live data, and "grade-crew" (there is no grading in the app yet).
+  const NUDGE_SKIP = { trip3: 1, trip1: 1, "lic-redo": 1, lic30: 1, licexp: 1, "job-new": 1, ended: 1, "grade-crew": 1 };
+  const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const loadNudges = async () => {
+    if (!CLOUD || !signedIn) return;   // without the sign-in the server would answer with nothing: keep what is shown
+    const since = new Date(Date.now() - 30 * 86400e3).toISOString();
+    const [S, R] = await Promise.all([
+      supabase.from("system_nudges").select("id,kind,ref,title,body,created_at").gte("created_at", since).order("created_at", { ascending: false }).limit(40),
+      user.kind === "operator"
+        ? supabase.from("review_nudges").select("id,kind,trip_id,title,body,created_at").gte("created_at", since).order("created_at", { ascending: false }).limit(20)
+        : Promise.resolve({ data: [], error: null }),
+    ]);
+    if (S.error || R.error) return;   // offline, or a hiccup: keep what is shown
+    const sys = (S.data || []).filter((r) => !NUDGE_SKIP[r.kind]);
+    // "a guest reviewed X" names the review, not the trip: look the trips up (the operator may read those reviews)
+    const reviewIds = sys.filter((r) => r.kind === "review-approve" && UUID.test(r.ref || "")).map((r) => r.ref);
+    const tripOfReview = {};
+    if (reviewIds.length) {
+      const { data: G } = await supabase.from("guest_reviews").select("id,trip_id").in("id", reviewIds);
+      (G || []).forEach((g) => { tripOfReview[g.id] = g.trip_id; });
+    }
+    const rows = [
+      ...sys.map((r) => ({ id: `sn-${r.id}`, kind: r.kind, title: r.title, body: r.body, created_at: r.created_at,
+        tripId: r.kind === "review-approve" ? tripOfReview[r.ref] || null : null, sheet: r.kind === "review-approve" ? "reviews" : null })),
+      ...(R.data || []).filter((r) => !NUDGE_SKIP[r.kind]).map((r) => ({ id: `rn-${r.id}`, kind: r.kind, title: r.title, body: r.body,
+        created_at: r.created_at, tripId: r.trip_id || null, sheet: "reviews" })),
+    ];
+    setNudges(rows.map((r) => ({
+      id: r.id, kind: "nudge", who: null, title: r.title, text: r.body, ts: new Date(r.created_at).getTime(),
+      open: /^(lic|doj)/.test(r.kind) ? "profile" : "trips", tripId: r.tripId || null, sheet: r.sheet })));
+  };
+  useEffect(() => {
+    loadNudges();
+    const onVisible = () => { if (document.visibilityState === "visible") loadNudges(); };
+    const onPush = () => loadNudges();
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("bth-push", onPush);
+    return () => { document.removeEventListener("visibilitychange", onVisible); window.removeEventListener("bth-push", onPush); };
+  }, [actorId, online, signedIn]);
+
   const alertItems = useMemo(() => {
     try {
     const out = [];
@@ -1459,7 +1986,7 @@ function Shell({ user, posts, jobs, trips, listings, enquiries, actions, engagem
     // likes and comments on my posts
     (engagement?.likes || []).forEach((l) => {
       const p = (posts || []).find((x) => x && x.id === l.post_id && x.talentId === actorId);
-      if (p && l.liker_id !== actorId) add({ id: `like-${l.post_id}-${l.liker_id}`, kind: "like", who: l.liker_id, text: p.text || "your post", ts: p.createdAt });
+      if (p && l.liker_id !== actorId) add({ id: `like-${l.post_id}-${l.liker_id}`, kind: "like", who: l.liker_id, text: p.text || "your post", ts: l.ts || p.createdAt });
     });
     (engagement?.comments || []).forEach((c) => {
       const p = (posts || []).find((x) => x && x.id === c.post_id && x.talentId === actorId);
@@ -1468,7 +1995,7 @@ function Shell({ user, posts, jobs, trips, listings, enquiries, actions, engagem
 
     // new followers
     (engagement?.follows || []).filter((f) => f.following === actorId).forEach((f) =>
-      add({ id: `fl-${f.follower}`, kind: "follow", who: f.follower, text: "", ts: Date.now() }));
+      add({ id: `fl-${f.follower}`, kind: "follow", who: f.follower, text: "", ts: f.ts || 0 }));
 
     // direct job requests to me
     (jobs || []).filter((j) => j && !j.deletedAt && j.toTalentId === actorId && j.status === "pending").forEach((j) =>
@@ -1592,25 +2119,106 @@ function Shell({ user, posts, jobs, trips, listings, enquiries, actions, engagem
         const endedRecently = Date.now() - new Date(tr.end + "T23:59") < 21 * DAY;
         if (ended && endedRecently) {
           add({ id: `ask-review-${tr.id}`, kind: "askReview", who: null,
-            text: tr.title, ts: new Date(tr.end + "T23:59").getTime(), tripId: tr.id });
+            text: tr.title, ts: new Date(tr.end + "T23:59").getTime(), tripId: tr.id, sheet: "reviews" });
         }
       });
     }
 
+    /* ---- Reminders from the server (BUILD 55) ---- */
+    (nudges || []).forEach(add);
+
     return out.sort((a, b) => (b.ts || 0) - (a.ts || 0)).slice(0, 50);
     } catch (e) { console.error('alertItems failed:', e); return []; }
-  }, [dm?.dms, engagement?.likes, engagement?.comments, engagement?.follows, jobs, listings, posts, trips, actorId, dirTick, user.licenseStatus, crewInvites, openCreditRequests, hotelData.bookings]);
+  }, [dm?.dms, engagement?.likes, engagement?.comments, engagement?.follows, jobs, listings, posts, trips, actorId, dirTick, user.licenseStatus, crewInvites, openCreditRequests, hotelData.bookings, nudges]);
+
+  // BUILD 55: what the bell shows. Once this session has loaded the person's data from the server: the live list,
+  // kept on this phone for later. Before that — offline, on a signal that carries nothing, or in the first moments
+  // after opening — the list last kept, plus the pushes that reached this phone since (the service worker keeps
+  // those). Names travel with the kept list, because the member directory may not be there.
+  const liveList = online && live;
+  const cacheKey = "bth_alerts_cache_" + actorId;
+  useEffect(() => {
+    // a list made without the server's data would replace a good one with an empty one; and the directory, the
+    // biggest list, loads last — by then the lists that feed the bell are in
+    if (!liveList || !settled) return;
+    const t = setTimeout(() => {
+      if (CLOUD && !recallMe(actorId)) return;   // signed out meanwhile: keep nothing of theirs
+      try {
+        localStorage.setItem(cacheKey, JSON.stringify({ at: Date.now(), items: alertItems.slice(0, 40).map((a) => {
+          const p = a.who ? talentById(a.who) : null;
+          return { id: a.id, kind: a.kind, who: a.who, text: a.text, ts: a.ts, urgent: a.urgent, tripId: a.tripId, title: a.title,
+                   open: a.open, sheet: a.sheet, name: p ? p.name : undefined, initials: p ? p.initials : undefined };
+        }) }));
+      } catch (e) {}
+    }, 2000);   // once the lists that load together have settled
+    return () => clearTimeout(t);
+  }, [alertItems, liveList, settled, cacheKey]);
+  // the phone says it's online, yet this session has had nothing back from the server for a while: say so
+  // (at once when the app is showing the remembered profile because the sign-in couldn't be checked)
+  const [stalled, setStalled] = useState(false);
+  useEffect(() => {
+    if (liveList || !online) { setStalled(false); return; }
+    const t = setTimeout(() => setStalled(true), signedIn ? 6000 : 0);
+    return () => clearTimeout(t);
+  }, [liveList, online, signedIn]);
+  const [inbox, setInbox] = useState([]);
+  useEffect(() => { claimPushInbox(actorId); }, [actorId]);
+  useEffect(() => {
+    if (liveList) return;
+    let on = true;
+    const merge = (cur, more) => [...more, ...cur.filter((y) => y && !more.some((z) => z && z.id === y.id))].slice(0, 30);
+    readPushInbox().then((l) => { if (on) setInbox((cur) => merge(cur, l)); });
+    // a push arriving now comes with the worker's message (its own copy may not be saved yet)
+    const onPush = (e) => { const x = e && e.detail; if (x && x.id) setInbox((cur) => merge(cur, [x])); };
+    window.addEventListener("bth-push", onPush);
+    return () => { on = false; window.removeEventListener("bth-push", onPush); };
+  }, [liveList]);
+  const cachedAlerts = useMemo(() => {
+    if (liveList) return null;
+    try { return JSON.parse(localStorage.getItem(cacheKey) || "null"); } catch (e) { return null; }
+  }, [liveList, cacheKey]);
+  const shownAlerts = useMemo(() => {
+    if (liveList) return alertItems;
+    const ids = new Set(), out = [];
+    const add = (a) => { if (a && a.id && !ids.has(a.id)) { ids.add(a.id); out.push(a); } };
+    alertItems.forEach(add);
+    // only pushes newer than the kept list: older ones are in it already (under their own names), or were dealt with
+    const since = (cachedAlerts && cachedAlerts.at) || 0;
+    inbox.filter((x) => x && (x.ts || 0) > since).forEach((x) =>
+      add({ id: x.id, kind: "push", who: null, title: x.title, text: x.body, ts: x.ts, open: openTargetOf(x.url) }));
+    ((cachedAlerts && cachedAlerts.items) || []).forEach(add);
+    return out.sort((a, b) => (b.ts || 0) - (a.ts || 0)).slice(0, 50);
+  }, [liveList, alertItems, inbox, cachedAlerts]);
+  // the badge: what hasn't been seen yet, plus anything that still needs doing (an urgent job listing, or a trip
+  // starting tomorrow, is news rather than a task: it counts until it has been seen)
+  const stillToDo = (a) => a.urgent && a.kind !== "listing" && a.kind !== "tripSoon";
+  const unreadAlerts = shownAlerts.filter((a) => stillToDo(a) || !seenIds.has(a.id)).length;
+  const openAlerts = () => {
+    const ids = shownAlerts.map((a) => a.id);
+    setFreshIds(new Set(ids.filter((id) => !seenIds.has(id))));
+    const keep = new Set(ids);
+    const next = [...ids, ...[...seenIds].filter((id) => !keep.has(id))].slice(0, 500);
+    setSeenIds(new Set(next));
+    try { localStorage.setItem(seenKey, JSON.stringify(next)); } catch (e) {}
+    setAlertsOpen(true);
+  };
 
   // notify the device when something new arrives
   useEffect(() => {
     const n = alertItems.length;
     if (n > lastAlertCount.current && lastAlertCount.current > 0) {
       const latest = alertItems[0];
-      const who = talentById(latest.who)?.name || "Someone";
-      const verbs = { message: "sent you a message", share: "shared a post", like: "liked your post",
-        comment: "commented on your post", follow: "started following you", job: "sent a job request",
-        listing: "posted a job you can apply for", applicant: "applied to your job", joined: "joined the hub" };
-      showDeviceNotification("Bhutan Tourism Hub", `${who} ${verbs[latest.kind] || "sent you an update"}`, latest.id);
+      // with push on, the server already announces these; announcing them here too would double up
+      const pushed = PUSH_ON && ["message", "share", "official", "job", "listing", "crewRequest", "crewJoined", "nudge",
+        "roomRequest", "roomConfirmed", "roomDeclined"].includes(latest.kind);
+      if (!pushed) {
+        const who = talentById(latest.who)?.name || "Someone";
+        const verbs = { message: "sent you a message", share: "shared a post", like: "liked your post",
+          comment: "commented on your post", follow: "started following you", job: "sent a job request",
+          listing: "posted a job you can apply for", applicant: "applied to your job", joined: "joined the hub" };
+        if (latest.kind === "nudge") showDeviceNotification(latest.title || "Bhutan Tourism Hub", latest.text || "", latest.id);
+        else showDeviceNotification("Bhutan Tourism Hub", `${who} ${verbs[latest.kind] || "sent you an update"}`, latest.id);
+      }
     }
     lastAlertCount.current = n;
   }, [alertItems.length]);
@@ -1635,25 +2243,28 @@ function Shell({ user, posts, jobs, trips, listings, enquiries, actions, engagem
       <SideRail user={user} nav={nav} tab={tab}
         setTab={(t) => { setOverlay(null); setSharedPost(null); setTab(t); }}
         badges={{ jobs: jobsBadge, review: pendingModCount, chats: unreadDm, bookings: user.kind === "hotel" ? hotelPending : enquiryBadge }}
-        alerts={alertItems.length} onOpenAlerts={() => setAlertsOpen(true)} onLogout={onLogout} />
+        alerts={unreadAlerts} onOpenAlerts={openAlerts} onLogout={onLogout} />
 
       <div className="main-col">
-      <TopBar user={user} onLogout={onLogout} alerts={alertItems.length} onOpenAlerts={() => setAlertsOpen(true)}
+      <TopBar user={user} onLogout={onLogout} alerts={unreadAlerts} onOpenAlerts={openAlerts}
         onSearch={(term) => { setOverlay(null); setTab(user.kind === "operator" ? "discover" : user.kind === "hotel" ? "bookings" : "post"); setSearchTerm(term); }} />
 
       <div className="scroll-area flex-1 min-h-0 overflow-y-auto hidescroll" style={{ scrollbarWidth: "none" }}>
         <div className="content-pad">
+        <OfflineBar connecting={stalled} />
         <VerifyBanner user={user} />
         {overlay ? (
-          overlay.type === "profile" ? (
-            <TalentProfile talent={talentById(overlay.talentId)} posts={posts} eng={eng} trips={trips} jobs={jobs}
+          !talentById(overlay.talentId) ? (
+            <ProfileMissing onBack={() => setOverlay(null)} />
+          ) : overlay.type === "profile" ? (
+            <TalentProfile key={overlay.talentId} talent={talentById(overlay.talentId)} posts={posts} eng={eng} trips={trips} jobs={jobs}
               onOpenProfile={openProfile}
               onMessage={(id) => { setOverlay(null); setTab("chats"); setDmWith(id); }}
               canRequest={user.kind === "operator"} self={user.talentId === overlay.talentId} contactOnly={user.kind === "admin"}
               onRequest={() => setOverlay({ type: "request", talentId: overlay.talentId })}
               onBack={() => setOverlay(null)} />
           ) : (
-            <RequestForm talent={talentById(overlay.talentId)} operator={user.name}
+            <RequestForm key={overlay.talentId} talent={talentById(overlay.talentId)} operator={user.name}
               onBack={() => setOverlay({ type: "profile", talentId: overlay.talentId })}
               onSend={async (job) => { const r = await actions.sendJob(job); if (r && r.ok === false) return r; setOverlay(null); setTab("requests"); return r; }} />
           )
@@ -1661,10 +2272,11 @@ function Shell({ user, posts, jobs, trips, listings, enquiries, actions, engagem
           <div key={tab} className="fade">
             {tab === "post" && <PostTab user={user} posts={posts} onAdd={actions.addPost} eng={eng} onOpenProfile={openProfile} />}
             {tab === "jobs" && <JobsHub user={user} jobs={jobs} listings={listings} actions={actions} trips={trips} />}
-            {tab === "trips" && <TripsTab user={user} trips={trips} actions={actions} />}
+            {tab === "trips" && <TripsTab user={user} trips={trips} actions={actions} focus={tripFocus} onFocused={() => setTripFocus(null)} />}
             {tab === "chats" && <ChatsTab user={user} me={actorId} dm={dm} trips={trips} actions={actions} posts={posts} dirTick={dirTick} onOpenPost={setSharedPost} openWith={dmWith} onOpened={() => setDmWith(null)} onOpenProfile={openProfile} />}
-            {tab === "profile" && <TalentProfile talent={talentById(user.talentId)} posts={posts} eng={eng} trips={trips} jobs={jobs} self onSetAvailability={actions.setAvailability} onProfileSaved={actions.reloadDirectory} onOpenProfile={openProfile} onBack={null} />}
-            {tab === "bookings" && user.kind !== "hotel" && <BookingsTab user={user} enquiries={enquiries} trips={trips} actions={actions} onOpenProfile={openProfile} />}
+            {tab === "profile" && !talentById(user.talentId) && <ProfileMissing self />}
+            {tab === "profile" && talentById(user.talentId) && <TalentProfile talent={talentById(user.talentId)} posts={posts} eng={eng} trips={trips} jobs={jobs} self onSetAvailability={actions.setAvailability} onProfileSaved={actions.reloadDirectory} onOpenProfile={openProfile} onBack={null} />}
+            {tab === "bookings" && user.kind !== "hotel" && <BookingsTab user={user} enquiries={enquiries} trips={trips} actions={actions} onOpenProfile={openProfile} focus={tripFocus} onFocused={() => setTripFocus(null)} />}
             {tab === "hotel_home" && <HotelHome user={user} data={hotelData} setTab={setTab} posts={posts} />}
             {tab === "bookings" && user.kind === "hotel" && <HotelBookings user={user} data={hotelData} />}
             {tab === "rooms" && <HotelRooms user={user} data={hotelData} />}
@@ -1702,17 +2314,23 @@ function Shell({ user, posts, jobs, trips, listings, enquiries, actions, engagem
       )}
 
       {alertsOpen && (
-        <AlertsSheet items={alertItems} onClose={() => setAlertsOpen(false)}
-          notifyOn={notifyOn}
-          onEnableNotify={async () => { const r = await askNotificationPermission(); setNotifyOn(r === "granted"); }}
+        <AlertsSheet items={shownAlerts} onClose={() => setAlertsOpen(false)}
+          pushState={pushState} offline={!online} kept={!liveList} cachedAt={cachedAlerts && cachedAlerts.at} fresh={freshIds}
+          onEnableNotify={async () => {
+            const r = await askNotificationPermission();
+            if (r === "granted") { setPushState("working"); setPushState(await ensurePush()); }
+            else setPushState(pushStateNow());
+          }}
           installed={installed}
           onInstall={() => { setAlertsOpen(false); setInstallSheet(true); }}
-          onOpenProfile={(id) => { setAlertsOpen(false); openProfile(id); }}
-          onOpenMessages={() => { setAlertsOpen(false); setTab("chats"); }}
-          onOpenJobs={() => { setAlertsOpen(false); setTab(user.kind === "operator" ? "requests" : user.kind === "hotel" ? "bookings" : "jobs"); }}
-          onOpenTrips={() => { setAlertsOpen(false); setTab(user.kind === "operator" || user.kind === "hotel" ? "bookings" : "trips"); }}
-          onOpenSelf={() => { setAlertsOpen(false); setTab(user.kind === "operator" || user.kind === "admin" ? "discover" : user.kind === "hotel" ? "hotel_profile" : "profile"); }}
-          onOpenUsers={() => { setAlertsOpen(false); setTab("users"); }} />
+          onOpenProfile={(id) => { setAlertsOpen(false); setSharedPost(null); openProfile(id); }}
+          onOpenMessages={() => goTab("chats")}
+          onOpenJobs={() => goTab(user.kind === "operator" ? "requests" : user.kind === "hotel" ? "bookings" : "jobs")}
+          onOpenTrips={() => goTab(user.kind === "operator" || user.kind === "hotel" ? "bookings" : "trips")}
+          onOpenTrip={openTrip}
+          onOpenTarget={(target) => goTab(tabForOpen(target, user.kind))}
+          onOpenSelf={() => goTab(user.kind === "operator" || user.kind === "admin" ? "discover" : user.kind === "hotel" ? "hotel_profile" : "profile")}
+          onOpenUsers={() => goTab("users")} />
       )}
 
       <BottomNav nav={nav} tab={tab}
@@ -1720,6 +2338,24 @@ function Shell({ user, posts, jobs, trips, listings, enquiries, actions, engagem
         badges={{ jobs: jobsBadge, review: pendingModCount, chats: unreadDm, bookings: user.kind === "hotel" ? hotelPending : enquiryBadge }} />
       </div>
     </>
+  );
+}
+
+// BUILD 55: shown where a profile should be but the directory doesn't have it (still loading, offline, removed)
+function ProfileMissing({ onBack, self }) {
+  const online = useOnline();
+  if (self && online) {
+    return <div className="flex items-center justify-center gap-2 py-16 text-[14px]" style={{ color: C.muted }}><Loader2 size={18} className="animate-spin" /> Loading your profile…</div>;
+  }
+  return (
+    <div className="px-5 py-6 fade">
+      <Empty Icon={User} title={online ? "Profile not available" : "You're offline"}
+        body={online ? "It may still be loading, or it was removed. Try again in a moment." : "This profile opens once you're connected."} />
+      {onBack && (
+        <button type="button" onClick={onBack} className="tap w-full h-11 rounded-xl text-[14px] font-semibold mt-3"
+          style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }}>Back</button>
+      )}
+    </div>
   );
 }
 
@@ -1804,13 +2440,23 @@ function BottomNav({ nav, tab, setTab, badges }) {
 }
 
 /* ============================== Shared bits =============================== */
-function Avatar({ initials, size = 40 }) {
+// A person's photo filling its frame. With no photo, or one that can't load (offline), what it wraps shows instead.
+function PhotoOr({ src, alt, children }) {
+  const [failed, setFailed] = useState(null);   // the address that didn't load; a new address gets a fresh try
+  if (!src || failed === src) return children;
+  return <img src={src} alt={alt || ""} loading="lazy" decoding="async" draggable={false} onError={() => setFailed(src)}
+    style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />;
+}
+function Avatar({ initials, size = 40, src }) {
   return (
-    <div className="rounded-full flex items-center justify-center shrink-0" style={{ width: size, height: size, background: `linear-gradient(180deg, #2C4F3B, ${C.brandDeep})`, boxShadow: "inset 0 .5px 0 rgba(255,255,255,.18), 0 1px 2px rgba(0,0,0,.14)" }}>
-      <span className="font-semibold" style={{ color: C.goldSoft, fontSize: size * 0.38, letterSpacing: "-.01em" }}>{initials}</span>
+    <div className="rounded-full flex items-center justify-center shrink-0 overflow-hidden" style={{ width: size, height: size, background: `linear-gradient(180deg, #2C4F3B, ${C.brandDeep})`, boxShadow: "inset 0 .5px 0 rgba(255,255,255,.18), 0 1px 2px rgba(0,0,0,.14)" }}>
+      <PhotoOr src={src}>
+        <span className="font-semibold" style={{ color: C.goldSoft, fontSize: size * 0.38, letterSpacing: "-.01em" }}>{initials}</span>
+      </PhotoOr>
     </div>
   );
 }
+const photoOf = (id) => (id && talentById(id)?.photo) || null;
 function relTime(ts) {
   if (!ts || isNaN(ts)) return "";
   const s = Math.floor((Date.now() - ts) / 1000);
@@ -1918,7 +2564,7 @@ function PostTab({ user, posts, onAdd, eng, onOpenProfile }) {
               <div key={p.id} className="rounded-2xl p-4" style={{ background: C.card, border: `1px solid ${C.line}` }}>
                 <div className="flex items-center gap-3">
                   <button onClick={() => onOpenProfile(p.talentId)} className="tap flex items-center gap-3 flex-1 min-w-0 text-left">
-                  <Avatar initials={author?.initials || "?"} size={40} />
+                  <Avatar initials={author?.initials || "?"} src={author?.photo} size={40} />
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-1.5">
                       <span className="text-[15px] font-semibold" style={{ color: C.ink }}>{mine ? "You" : (displayName(author) || "Member")}</span>
@@ -2022,7 +2668,7 @@ function Composer({ talent, onAdd }) {
   return (
     <div className="rounded-2xl p-4" style={{ background: C.card, border: `1px solid ${C.line}` }}>
       <div className="flex items-center gap-3 mb-3">
-        <Avatar initials={talent.initials} size={36} />
+        <Avatar initials={talent.initials} src={talent.photo} size={36} />
         <div><div className="text-[14px] font-semibold" style={{ color: C.ink }}>{displayName(talent) || talent.name}</div>
           <div className="text-[12px]" style={{ color: C.muted }}>{talent.role === "hotel" ? "Show operators what's on" : "Share a trip highlight"}</div></div>
       </div>
@@ -2297,7 +2943,7 @@ function TalentCard({ t, onOpen }) {
   return (
     <button onClick={onOpen} className="tap w-full text-left rounded-2xl p-4" style={{ background: C.card, border: `1px solid ${C.line}` }}>
       <div className="flex items-center gap-3.5">
-        <Avatar initials={t.initials} size={48} />
+        <Avatar initials={t.initials} src={t.photo} size={48} />
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-1.5">
             <span className="text-[15px] font-semibold truncate" style={{ color: C.ink }}>{t.name}</span>
@@ -2338,7 +2984,7 @@ function SentRequests({ operator, operatorId, jobs, actions, onOpen }) {
               <div key={j.id} className="rounded-2xl p-4" style={{ background: C.card, border: `1px solid ${C.line}` }}>
                 <div className="flex items-start justify-between gap-3">
                   <button onClick={() => onOpen(j.toTalentId)} className="flex items-center gap-2.5 text-left">
-                    <Avatar initials={t.initials} size={38} />
+                    <Avatar initials={t.initials} src={t?.photo} size={38} />
                     <div>
                       <div className="text-[15px] font-semibold" style={{ color: C.ink }}>{t.name}</div>
                       <div className="text-[12px]" style={{ color: C.muted }}>{roleLabel(t.role)} · {t.base}</div>
@@ -2398,7 +3044,7 @@ function Feed({ posts, eng, admin, onDelete, onOpenProfile, following, user, tri
               <div key={p.id} className="rounded-2xl p-4" style={{ background: C.card, border: `1px solid ${C.line}` }}>
                 <div className="flex items-center gap-3">
                   <button onClick={() => onOpenProfile(p.talentId)} className="tap flex items-center gap-3 flex-1 min-w-0 text-left">
-                  <Avatar initials={t?.initials || "?"} size={40} />
+                  <Avatar initials={t?.initials || "?"} src={t?.photo} size={40} />
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-1.5"><span className="text-[15px] font-semibold" style={{ color: C.ink }}>{displayName(t) || "Member"}</span>{t?.verified && <BadgeCheck size={15} color={C.pine} />}</div>
                     <div className="flex items-center gap-1 text-[12px]" style={{ color: C.muted }}><MapPin size={11} /> {t?.base || ""} · {relTime(p.createdAt)}</div>
@@ -2450,7 +3096,11 @@ function StayRequests({ user, data }) {
     Promise.all(pend.map((b) => supabase.rpc("room_queue_position", { p_booking: b.id }).then(({ data }) => [b.id, data && data[0]]))).then((rows) => { if (on) { const m = {}; rows.forEach(([id, r]) => { if (r) m[id] = r; }); setQ(m); } });
     return () => { on = false; };
   }, [list.map((b) => b.id + b.status).join("|")]);
-  const cancel = async (b) => { await supabase.from("room_bookings").update({ status: "cancelled" }).eq("id", b.id); data.reload && data.reload(); };
+  const cancel = async (b) => {
+    const { error } = await supabase.from("room_bookings").update({ status: "cancelled" }).eq("id", b.id);
+    if (error) { console.error("room_bookings.cancel failed:", error.message); toast(failText("withdraw that request")); return; }
+    data.reload && data.reload();
+  };
   if (!list.length) return null;
   const waiting = list.filter((b) => b.status === "requested").length;
   return (
@@ -2528,7 +3178,7 @@ function ModCard({ post, onApprove, onReject, eng }) {
   return (
     <div className="rounded-2xl p-4" style={{ background: C.card, border: `1px solid ${C.line}` }}>
       <div className="flex items-center gap-3">
-        <Avatar initials={t.initials} size={40} />
+        <Avatar initials={t.initials} src={t.photo} size={40} />
         <div className="flex-1"><div className="text-[15px] font-semibold" style={{ color: C.ink }}>{t.name}</div>
           <div className="text-[12px]" style={{ color: C.muted }}>{roleLabel(t.role)} · {relTime(post.createdAt)}</div></div>
         {!pending && <StatusBadge status={post.status} reason={post.reason} />}
@@ -2597,9 +3247,11 @@ function TalentProfile({ talent, posts, canRequest, self, contactOnly, eng, onRe
         <div className="px-5">
           <div className="-mt-9 mb-3 flex items-end gap-3">
             <button onClick={() => myStories.length && setViewStories(true)} className="relative" style={{ cursor: myStories.length ? "pointer" : "default" }}>
-              <div className="rounded-2xl flex items-center justify-center" style={{ width: 72, height: 72, background: C.pine, border: `3px solid ${C.bg}`,
+              <div className="rounded-2xl flex items-center justify-center overflow-hidden" style={{ width: 72, height: 72, background: C.pine, border: `3px solid ${C.bg}`,
                 boxShadow: myStories.length ? `0 0 0 3px ${C.gold}` : "none" }}>
-                <span className="text-[22px] font-semibold" style={{ color: C.goldSoft }}>{t.initials}</span>
+                <PhotoOr src={t.photo} alt={t.name}>
+                  <span className="text-[22px] font-semibold" style={{ color: C.goldSoft }}>{t.initials}</span>
+                </PhotoOr>
               </div>
               {myStories.length > 0 && (
                 <span className="absolute -bottom-1 -right-1 rounded-full px-1.5 py-0.5 text-[10px] font-bold" style={{ background: C.gold, color: "#fff" }}>{myStories.length}</span>
@@ -2748,7 +3400,9 @@ function TalentProfile({ talent, posts, canRequest, self, contactOnly, eng, onRe
                 </a>
               )}
               {!t.phone && !t.email && (
-                <div className="px-4 py-4 text-[13px]" style={{ color: C.muted }}>No contact details added yet.</div>
+                <div className="px-4 py-4 text-[13px]" style={{ color: C.muted }}>
+                  {self ? "No contact details yet — add your phone with Edit profile, above." : "No contact details added yet."}
+                </div>
               )}
             </div>
           </div>
@@ -2838,7 +3492,7 @@ function RequestForm({ talent, operator, onBack, onSend }) {
 
       <div className="px-5 py-4">
         <div className="rounded-2xl p-3.5 flex items-center gap-3 mb-5" style={{ background: C.card, border: `1px solid ${C.line}` }}>
-          <Avatar initials={talent.initials} size={42} />
+          <Avatar initials={talent.initials} src={talent.photo} size={42} />
           <div><div className="text-[15px] font-semibold" style={{ color: C.ink }}>{talent.name}</div><div className="text-[13px]" style={{ color: C.muted }}>{roleLabel(talent.role)} · {talent.base}</div></div>
         </div>
 
@@ -2896,13 +3550,20 @@ function CrewAvatars({ members, size = 26 }) {
   );
 }
 
-function TripsTab({ user, trips, actions }) {
-  const [openId, setOpenId] = useState(null);
+function TripsTab({ user, trips, actions, focus, onFocused }) {
+  const [openId, setOpenId] = useState(() => (focus && focus.id) || null);
+  const [sheetReq, setSheetReq] = useState(() => (focus && focus.sheet ? { sheet: focus.sheet, n: focus.n } : null));
+  useEffect(() => {   // BUILD 55: a notification about a trip opens it; the request is used once
+    if (!focus || !focus.id) return;
+    setOpenId(focus.id); setSheetReq(focus.sheet ? { sheet: focus.sheet, n: focus.n } : null);
+    onFocused && onFocused();
+  }, [focus && focus.n]);
   const [view, setView] = useState("upcoming");
   const meId = user.talentId || user.id;
   const mine = (trips || []).filter((tr) => tr && ((tr.members || []).some((m) => m && m.id === meId) || tr.operatorId === meId));
   const open = mine.find((tr) => tr.id === openId);
-  if (open) return <TripHub user={user} meId={meId} trip={open} actions={actions} onBack={() => setOpenId(null)} />;
+  // one TripHub per trip: a notification that switches trips starts the next one fresh (nothing typed carries over)
+  if (open) return <TripHub key={open.id} user={user} meId={meId} trip={open} actions={actions} openSheet={sheetReq} onBack={() => { setOpenId(null); setSheetReq(null); }} />;
 
   const isPast = (tr) => tripStateNow(tr) === "completed";
   const upcoming = mine.filter((tr) => !isPast(tr)).sort((a, b) => new Date(a.start) - new Date(b.start));
@@ -2958,15 +3619,18 @@ function TripCard({ trip, onOpen, past }) {
   );
 }
 
-function TripHub({ user, meId, trip, actions, onBack }) {
+function TripHub({ user, meId, trip, actions, onBack, openSheet }) {
   const state = tripStateNow(trip);
-  const [chatOpen, setChatOpen] = useState(false);
-  const [inviting, setInviting] = useState(false);
-  const [askingOperator, setAskingOperator] = useState(false);
   const tripDone = state === "active" || state === "completed";
   const canInvite = tripDone && (user.kind === "operator" || user.kind === "admin");
   const isTalent = user.kind === "guide" || user.kind === "driver";
+  const [chatOpen, setChatOpen] = useState(false);
+  const [inviting, setInviting] = useState(false);
+  const [askingOperator, setAskingOperator] = useState(false);
   const [section, setSection] = useState(null);   // tasks | hotels | guests | crew | itinerary | details
+  const reviews = useTripReviews(trip, canInvite);   // BUILD 55: what guests sent, for the operator to publish
+  // BUILD 55: a notification about this trip's reviews opens them straight away
+  useEffect(() => { if (openSheet && openSheet.sheet === "reviews" && canInvite) setInviting(true); }, [openSheet && openSheet.n]);
   if (chatOpen) return <TripChatView user={user} meId={meId} trip={trip} actions={actions} onBack={() => setChatOpen(false)} />;
   if (section && !isTalent) {
     const titles = { tasks: "Operator tasks", hotels: "Hotels", guests: "Guests", crew: "Crew", itinerary: "Itinerary", details: "Trip details" };
@@ -2988,7 +3652,7 @@ function TripHub({ user, meId, trip, actions, onBack }) {
               {(trip.members || []).length === 0 && <div className="px-4 py-3 text-[13px]" style={{ color: C.muted }}>No crew on this trip yet.</div>}
               {(trip.members || []).map((m) => (
                 <div key={m.id} className="flex items-center gap-3 px-4 py-3">
-                  <Avatar initials={m.initials} size={36} />
+                  <Avatar initials={m.initials} src={photoOf(m.id)} size={36} />
                   <div className="flex-1"><div className="text-[14px] font-semibold" style={{ color: C.ink }}>{m.name}</div>
                     <div className="text-[12px] capitalize" style={{ color: C.muted }}>{String(m.roleInTrip || "crew").replace("_", " ")}</div></div>
                 </div>
@@ -3051,22 +3715,31 @@ function TripHub({ user, meId, trip, actions, onBack }) {
           </div>
         )}
 
-        {canInvite && (
-          <button onClick={() => setInviting(true)}
-            className="tap w-full rounded-2xl p-4 mb-4 flex items-center gap-3 text-left"
-            style={{ background: C.pineSoft, border: `1px solid ${C.pine}33` }}>
-            <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0" style={{ background: C.pine }}>
-              <Star size={18} color={C.goldSoft} fill={C.goldSoft} />
-            </div>
-            <div className="flex-1">
-              <div className="text-[14px] font-semibold" style={{ color: C.pine }}>Ask a guest for a review</div>
-              <div className="text-[13px] mt-0.5" style={{ color: C.pine, opacity: .8 }}>
-                Creates a one-time link. Best shared face to face on the last day.
+        {canInvite && (() => {
+          const all = reviews.rows || [];
+          const waiting = all.filter((r) => r.status === "pending").length;
+          const live = all.filter((r) => r.status === "published").length;
+          const tone = waiting ? C.maroon : C.pine;
+          return (
+            <button type="button" onClick={() => setInviting(true)}
+              className="tap w-full rounded-2xl p-4 mb-4 flex items-center gap-3 text-left"
+              style={{ background: waiting ? C.maroonSoft : C.pineSoft, border: `1px solid ${tone}33` }}>
+              <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0" style={{ background: tone }}>
+                <Star size={18} color={C.goldSoft} fill={C.goldSoft} />
               </div>
-            </div>
-            <ChevronLeft size={17} color={C.pine} style={{ transform: "rotate(180deg)" }} />
-          </button>
-        )}
+              <div className="flex-1 min-w-0">
+                <div className="text-[14px] font-semibold" style={{ color: tone }}>Guest reviews</div>
+                <div className="text-[13px] mt-0.5 leading-snug" style={{ color: tone, opacity: .85 }}>
+                  {waiting ? `${waiting} waiting for you to publish` : live ? `${live} published · ask more guests` : "Ask your guests. One link covers the whole crew."}
+                </div>
+              </div>
+              {waiting > 0 && (
+                <span className="shrink-0 min-w-[22px] h-[22px] px-1.5 rounded-full text-[12px] font-bold flex items-center justify-center" style={{ background: C.maroon, color: "#FFFFFF" }}>{waiting}</span>
+              )}
+              <ChevronLeft size={17} color={tone} style={{ transform: "rotate(180deg)" }} />
+            </button>
+          );
+        })()}
 
         {isTalent && tripDone && (
           <button onClick={() => setAskingOperator(true)}
@@ -3085,14 +3758,15 @@ function TripHub({ user, meId, trip, actions, onBack }) {
           </button>
         )}
 
-        {inviting && <ReviewInvite user={user} trip={trip} onClose={() => setInviting(false)} />}
+        {inviting && <ReviewInvite user={user} trip={trip} reviews={reviews} onClose={() => setInviting(false)}
+          onOpenCrew={isTalent ? null : () => { setInviting(false); setSection("crew"); }} />}
         {askingOperator && <OperatorInvite user={user} trip={trip} onClose={() => setAskingOperator(false)} />}
 
         {isTalent && <SectionLabel>Crew</SectionLabel>}
         {isTalent && <div className="rounded-2xl divide-y mb-5" style={{ background: C.card, border: `1px solid ${C.line}`, borderColor: C.line }}>
           {(trip.members || []).map((m) => (
             <div key={m.id} className="flex items-center gap-3 px-4 py-3">
-              <Avatar initials={m.initials} size={36} />
+              <Avatar initials={m.initials} src={photoOf(m.id)} size={36} />
               <div className="flex-1"><div className="text-[14px] font-semibold" style={{ color: C.ink }}>{m.name}</div>
                 <div className="text-[12px] capitalize" style={{ color: C.muted }}>{String(m.roleInTrip || "crew").replace("_", " ")}</div></div>
               {m.id === meId && <span className="text-[11px] font-semibold rounded-full px-2 py-0.5" style={{ background: C.goldSoft, color: C.goldText }}>You</span>}
@@ -3453,7 +4127,7 @@ function ManageApplicants({ listing, actions, onViewProfile, onBack }) {
             {(listing.applicants || []).map((a) => (
               <div key={a.talentId} className="rounded-2xl p-4" style={{ background: C.card, border: `1px solid ${C.line}` }}>
                 <div className="flex items-center gap-3">
-                  <Avatar initials={a.initials} size={44} />
+                  <Avatar initials={a.initials} src={photoOf(a.talentId)} size={44} />
                   <div className="flex-1 min-w-0"><div className="text-[15px] font-semibold" style={{ color: C.ink }}>{a.name}</div>
                     <div className="inline-flex items-center gap-1 mt-0.5"><Star size={12} color={C.gold} fill={C.gold} /><span className="text-[13px] font-semibold" style={{ color: C.goldText }}>{typeof a.rating === "number" ? a.rating.toFixed(1) : "New"}</span></div></div>
                   {a.status !== "applied" && <AppStatusBadge status={a.status} />}
@@ -3931,7 +4605,7 @@ function PostEngagement({ post, eng }) {
         <div className="mt-3 space-y-2.5 fade">
           {list.map((c) => (
             <div key={c.id} className="flex items-start gap-2.5">
-              <Avatar initials={actorInitials(c.author_id)} size={28} />
+              <Avatar initials={actorInitials(c.author_id)} src={photoOf(c.author_id)} size={28} />
               <div className="flex-1 rounded-xl px-3 py-2" style={{ background: C.bg }}>
                 <div className="flex items-baseline gap-2">
                   <span className="text-[13px] font-semibold" style={{ color: C.ink }}>{actorName(c.author_id)}</span>
@@ -4134,7 +4808,7 @@ function WallPost({ post: p, author, eng, onShareStory, onClose }) {
     <div style={{ background: C.card }}>
       {/* author */}
       <div className="px-4 py-3 flex items-center gap-3">
-        <Avatar initials={author?.initials || "?"} size={36} />
+        <Avatar initials={author?.initials || "?"} src={author?.photo} size={36} />
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-1.5">
             <span className="text-[14px] font-semibold" style={{ color: C.ink }}>{displayName(author) || "Member"}</span>
@@ -4339,7 +5013,7 @@ function AdminUsers({ onChanged, currentAdminId }) {
             return (
               <div key={u.id} className="rounded-2xl p-4" style={{ background: C.card, border: `1px solid ${C.line}` }}>
                 <div className="flex items-center gap-3">
-                  <Avatar initials={initialsOf(u.full_name)} size={42} />
+                  <Avatar initials={initialsOf(u.full_name)} src={u.photo_url} size={42} />
                   <div className="flex-1 min-w-0">
                     <div className="text-[15px] font-semibold" style={{ color: C.ink }}>{u.full_name || "Unnamed"}</div>
                     <div className="text-[13px]" style={{ color: C.muted }}>{roleLabel(u.role)}{u.base ? ` · ${u.base}` : ""}</div>
@@ -4994,7 +5668,7 @@ function ChatsTab({ user, me, dm, trips, actions, posts, dirTick, onOpenPost, op
     return Object.values(byPerson).sort((a, b) => (b.ts || 0) - (a.ts || 0));
   }, [msgs, me]);
 
-  if (withId) return <DmThread me={me} otherId={withId} dm={dm} posts={posts} onOpenPost={onOpenPost} onBack={() => setWithId(null)} onOpenProfile={onOpenProfile} />;
+  if (withId) return <DmThread key={withId} me={me} otherId={withId} dm={dm} posts={posts} onOpenPost={onOpenPost} onBack={() => setWithId(null)} onOpenProfile={onOpenProfile} />;
   if (find) return <PickContact me={me} dirTick={dirTick} onPick={(id) => { setFind(false); setWithId(id); }} onBack={() => setFind(false)} />;
 
   return (
@@ -5020,7 +5694,7 @@ function ChatsTab({ user, me, dm, trips, actions, posts, dirTick, onOpenPost, op
             return (
               <button key={t.other} onClick={() => setWithId(t.other)} className="tap w-full text-left px-4 py-3 flex items-center gap-3"
                 style={{ background: C.card, borderTop: idx ? `1px solid ${C.lineSoft}` : "none" }}>
-                <Avatar initials={p?.initials || "?"} size={40} />
+                <Avatar initials={p?.initials || "?"} src={p?.photo} size={40} />
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-1.5">
                     <span className="text-[15px] font-semibold" style={{ color: C.ink }}>{p?.name || "Member"}</span>
@@ -5073,7 +5747,7 @@ function TripChatView({ user, meId, trip, actions, onBack }) {
           <div className="rounded-xl divide-y mb-3" style={{ background: C.card, border: `1px solid ${C.line}`, borderColor: C.line }}>
             {(trip.members || []).map((m) => (
               <div key={m.id} className="flex items-center gap-3 px-3.5 py-2.5">
-                <Avatar initials={m.initials} size={32} />
+                <Avatar initials={m.initials} src={photoOf(m.id)} size={32} />
                 <div className="flex-1"><div className="text-[14px] font-semibold" style={{ color: C.ink }}>{m.name}</div>
                   <div className="text-[12px] capitalize" style={{ color: C.muted }}>{String(m.roleInTrip || "crew").replace("_", " ")}</div></div>
                 {m.id === meId && <span className="text-[11px] font-semibold rounded-full px-2 py-0.5" style={{ background: C.goldSoft, color: C.goldText }}>You</span>}
@@ -5152,7 +5826,7 @@ function PickContact({ me, dirTick, onPick, onBack }) {
           <div className="space-y-2.5">
             {list.map((p) => (
               <button key={p.id} onClick={() => onPick(p.id)} className="tap w-full text-left rounded-2xl p-3.5 flex items-center gap-3" style={{ background: C.card, border: `1px solid ${C.line}` }}>
-                <Avatar initials={p.initials} size={42} />
+                <Avatar initials={p.initials} src={p.photo} size={42} />
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-1.5">
                     <span className="text-[15px] font-semibold" style={{ color: C.ink }}>{p.name}</span>
@@ -5257,7 +5931,7 @@ function DmThread({ me, otherId, dm, posts, onOpenPost, onBack, onOpenProfile })
       <div className="shrink-0 h-14 px-3 flex items-center gap-3" style={{ borderBottom: `1px solid ${C.lineSoft}`, background: C.card }}>
         <button onClick={onBack} className="tap w-9 h-9 rounded-full flex items-center justify-center" style={{ border: `1px solid ${C.line}` }}><ChevronLeft size={19} color={C.ink} /></button>
         <button onClick={() => onOpenProfile && onOpenProfile(otherId)} className="tap flex items-center gap-2.5 flex-1 min-w-0 text-left">
-          <Avatar initials={p?.initials || "?"} size={36} />
+          <Avatar initials={p?.initials || "?"} src={p?.photo} size={36} />
           <div className="min-w-0">
             <div className="flex items-center gap-1.5">
               <span className="text-[15px] font-semibold" style={{ color: C.ink }}>{p?.name || "Member"}</span>
@@ -5271,7 +5945,7 @@ function DmThread({ me, otherId, dm, posts, onOpenPost, onBack, onOpenProfile })
       <div ref={scrollRef} className="flex-1 overflow-y-auto hidescroll px-4 py-4 space-y-1.5" style={{ background: C.bg, scrollbarWidth: "none" }}>
         {thread.length === 0 && (
           <div className="text-center py-10">
-            <Avatar initials={p?.initials || "?"} size={56} />
+            <Avatar initials={p?.initials || "?"} src={p?.photo} size={56} />
             <p className="text-[14px] font-semibold mt-3" style={{ color: C.ink }}>{p?.name}</p>
             <p className="text-[13px] mt-1" style={{ color: C.muted }}>Say hello — messages are private between you two.</p>
           </div>
@@ -5443,7 +6117,7 @@ function SharePostSheet({ post, eng, onExternal, onClose, onSent }) {
 
   const Row = ({ p }) => (
     <button onClick={() => toggle(p.id)} className="tap w-full text-left px-1 py-2 flex items-center gap-3">
-      <Avatar initials={p.initials} size={40} />
+      <Avatar initials={p.initials} src={p.photo} size={40} />
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-1.5">
           <span className="text-[15px] font-semibold" style={{ color: C.ink }}>{p.name}</span>
@@ -5536,7 +6210,7 @@ function FollowListSheet({ mode, talent, eng, onClose, onOpenProfile }) {
             return (
               <div key={p.id} className="flex items-center gap-3 py-2.5">
                 <button onClick={() => onOpenProfile(p.id)} className="tap flex items-center gap-3 flex-1 min-w-0 text-left">
-                  <Avatar initials={p.initials} size={42} />
+                  <Avatar initials={p.initials} src={p.photo} size={42} />
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-1.5">
                       <span className="text-[15px] font-semibold" style={{ color: C.ink }}>{p.name}</span>
@@ -5704,7 +6378,7 @@ function StoryViewer({ stories, author, canDelete, onDelete, onClose }) {
         </div>
 
         <div className="px-4 py-3 flex items-center gap-2.5">
-          <Avatar initials={author?.initials || "?"} size={32} />
+          <Avatar initials={author?.initials || "?"} src={author?.photo} size={32} />
           <div className="flex-1 min-w-0">
             <div className="text-[14px] font-semibold text-white">{displayName(author) || "Member"}</div>
             <div className="text-[11px]" style={{ color: "rgba(255,255,255,.6)" }}>{relTime(st.ts)} · {hoursLeft}h left</div>
@@ -5836,7 +6510,7 @@ function Stat({ n, label, onClick }) {
 }
 
 /* ============================== Notifications ============================= */
-function AlertsSheet({ items, onClose, onOpenProfile, onOpenMessages, onOpenJobs, onOpenTrips, onOpenSelf, notifyOn, onEnableNotify, installed, onInstall, onOpenUsers}) {
+function AlertsSheet({ items, onClose, onOpenProfile, onOpenMessages, onOpenJobs, onOpenTrips, onOpenTrip, onOpenTarget, onOpenSelf, pushState, offline, kept, cachedAt, fresh, onEnableNotify, installed, onInstall, onOpenUsers }) {
   const meta = {
     message:   { Icon: MessageCircle, bg: C.pineSoft,   fg: C.pine,     verb: "sent you a message" },
     share:     { Icon: Share2,        bg: C.pineSoft,   fg: C.pine,     verb: "shared a post with you" },
@@ -5864,7 +6538,18 @@ function AlertsSheet({ items, onClose, onOpenProfile, onOpenMessages, onOpenJobs
     crewJoined:      { Icon: Check,       bg: C.pineSoft,   fg: C.pine,     verb: "joined your crew" },
     creditRequest:   { Icon: Users,       bg: C.goldSoft,   fg: C.goldText, verb: "asked for more AI drafts" },
     official:        { Icon: ShieldCheck, bg: C.pineSoft,   fg: C.pine,    verb: "Message from Bhutan Tourism Hub" },
+    nudge:           { Icon: Bell,        bg: C.goldSoft,   fg: C.goldText, verb: "Reminder", self: true },
+    push:            { Icon: Bell,        bg: C.pineSoft,   fg: C.pine,     verb: "Notification", self: true },
   };
+  // what alerts can do on this device, in plain words (BUILD 55)
+  const note = {
+    "ios-install": { Icon: Smartphone, act: onInstall, text: <><b>Add to Home Screen first</b> — on iPhone and iPad, alerts work once the app is installed. Tap to see how.</> },
+    off:           { Icon: Bell, act: onEnableNotify, text: <><b>Turn on alerts</b> — hear about messages, job requests and trip reminders even when the app is closed.</> },
+    error:         { Icon: Bell, act: onEnableNotify, text: <><b>Alerts didn't switch on.</b> Tap to try again.</> },
+    working:       { Icon: Loader2, act: null, text: <>Switching on alerts…</> },
+    denied:        { Icon: Bell, act: null, quiet: true, text: <>Alerts are blocked for this site. Allow notifications for it in your browser's settings, then reopen the app.</> },
+    unsupported:   { Icon: Bell, act: null, quiet: true, text: <>This browser can't show alerts while the app is closed. Chrome on Android, or the Home Screen app on iPhone, can.</> },
+  }[pushState] || null;
 
   const today = items.filter((a) => Date.now() - a.ts < 86400e3);
   const earlier = items.filter((a) => Date.now() - a.ts >= 86400e3);
@@ -5878,21 +6563,26 @@ function AlertsSheet({ items, onClose, onOpenProfile, onOpenMessages, onOpenJobs
             <div className="text-[17px] font-semibold" style={{ color: C.ink }}>Notifications</div>
             <span className="text-[13px]" style={{ color: C.muted }}>{items.length}</span>
           </div>
-          {!notifyOn && (isIOS() && !installed ? (
-            <button onClick={onInstall} className="tap w-full rounded-xl px-3.5 py-2.5 mt-3 flex items-center gap-2.5 text-left" style={{ background: C.goldSoft }}>
-              <Smartphone size={16} color={C.gold} className="shrink-0" />
-              <span className="text-[13px] leading-snug" style={{ color: C.goldText }}>
-                <b>Add to Home Screen first</b> — on iPhone, alerts only work once the app is installed. Tap to see how.
-              </span>
+          {note && (note.act ? (
+            <button type="button" onClick={note.act} className="tap w-full rounded-xl px-3.5 py-2.5 mt-3 flex items-center gap-2.5 text-left" style={{ background: C.goldSoft, border: 0 }}>
+              <note.Icon size={16} color={C.gold} className="shrink-0" />
+              <span className="text-[13px] leading-snug" style={{ color: C.goldText }}>{note.text}</span>
             </button>
           ) : (
-            <button onClick={onEnableNotify} className="tap w-full rounded-xl px-3.5 py-2.5 mt-3 flex items-center gap-2.5 text-left" style={{ background: C.goldSoft }}>
-              <Bell size={16} color={C.gold} className="shrink-0" />
-              <span className="text-[13px] leading-snug" style={{ color: C.goldText }}>
-                <b>Turn on alerts</b> — get notified about jobs and messages even when the app isn't open.
-              </span>
-            </button>
+            <div role="status" className="w-full rounded-xl px-3.5 py-2.5 mt-3 flex items-center gap-2.5" style={{ background: note.quiet ? C.bg : C.goldSoft }}>
+              <note.Icon size={16} color={note.quiet ? C.muted : C.gold} className={`shrink-0${pushState === "working" ? " animate-spin" : ""}`} />
+              <span className="text-[13px] leading-snug" style={{ color: note.quiet ? C.muted : C.goldText }}>{note.text}</span>
+            </div>
           ))}
+          {pushState === "on" && (
+            <div className="mt-2 text-[12px] flex items-center gap-1.5" style={{ color: C.muted }}><Check size={13} color={C.pine} /> Alerts are on for this device</div>
+          )}
+          {(offline || kept) && (
+            <div className="mt-2 text-[12px] flex items-center gap-1.5" style={{ color: C.goldText }}>
+              {offline ? <CloudOff size={13} /> : <Loader2 size={13} className="animate-spin" />}
+              {offline ? "Offline" : "Catching up"} — showing your notifications{cachedAt ? ` from ${relTime(cachedAt)}` : ""}.
+            </div>
+          )}
         </div>
 
         <div className="flex-1 overflow-y-auto hidescroll px-4 pb-5" style={{ scrollbarWidth: "none" }}>
@@ -5900,7 +6590,7 @@ function AlertsSheet({ items, onClose, onOpenProfile, onOpenMessages, onOpenJobs
             <div className="text-center py-12">
               <div className="w-12 h-12 rounded-2xl flex items-center justify-center mx-auto mb-3" style={{ background: C.goldSoft }}><Bell size={22} color={C.gold} /></div>
               <p className="text-[14px] font-semibold" style={{ color: C.ink }}>You're all caught up</p>
-              <p className="text-[13px] mt-1" style={{ color: C.muted }}>Messages, likes, follows and job requests appear here.</p>
+              <p className="text-[13px] mt-1" style={{ color: C.muted }}>Messages, job requests, trip reminders and reviews appear here.</p>
             </div>
           ) : (
             <>
@@ -5911,6 +6601,8 @@ function AlertsSheet({ items, onClose, onOpenProfile, onOpenMessages, onOpenJobs
                     const m = meta[a.kind] || meta.message;
                     const p = m.self ? null : talentById(a.who);
                     const go = () => {
+                      if (a.tripId && onOpenTrip) return onOpenTrip(a.tripId, a.sheet);
+                      if (a.open && onOpenTarget) return onOpenTarget(a.open);
                       if (a.kind === "message" || a.kind === "share" || a.kind === "official") return onOpenMessages();
                       if (a.kind === "job" || a.kind === "listing" || a.kind === "applicant" || a.kind === "jobAccepted" || a.kind === "jobDeclined") return onOpenJobs();
                       if (a.kind === "roomRequest" || a.kind === "roomConfirmed" || a.kind === "roomDeclined") return onOpenTrips && onOpenTrips();
@@ -5918,6 +6610,7 @@ function AlertsSheet({ items, onClose, onOpenProfile, onOpenMessages, onOpenJobs
                       if (a.kind === "creditRequest") return onOpenUsers && onOpenUsers();
                       if (m.self) return onOpenSelf && onOpenSelf();
                       if (p) return onOpenProfile(a.who);
+                      toast(offline ? "You're offline. This opens once you're connected." : kept ? "Still connecting. Try again in a moment." : "This person's profile isn't available any more.", "info");
                     };
                     return (
                       <button key={a.id} onClick={go} className="tap w-full text-left flex items-start gap-3 py-3" style={{ borderBottom: `1px solid ${C.lineSoft}` }}>
@@ -5928,7 +6621,7 @@ function AlertsSheet({ items, onClose, onOpenProfile, onOpenMessages, onOpenJobs
                             </div>
                           ) : (
                             <>
-                              <Avatar initials={p?.initials || "?"} size={42} />
+                              <Avatar initials={p?.initials || a.initials || "?"} src={p?.photo} size={42} />
                               <span className="absolute -bottom-1 -right-1 w-5 h-5 rounded-full flex items-center justify-center" style={{ background: m.bg, border: `2px solid ${C.card}` }}>
                                 <m.Icon size={10} color={m.fg} />
                               </span>
@@ -5938,14 +6631,17 @@ function AlertsSheet({ items, onClose, onOpenProfile, onOpenMessages, onOpenJobs
                         <div className="flex-1 min-w-0">
                           <div className="text-[14px] leading-snug" style={{ color: C.ink }}>
                             {m.self ? (
-                              <b style={{ color: m.fg }}>{m.verb}</b>
+                              <b style={{ color: m.fg }}>{a.title || m.verb}</b>
                             ) : (
-                              <><b>{p?.name || "Someone"}</b> <span style={{ color: C.muted }}>{m.verb}</span></>
+                              <><b>{p?.name || a.name || "Someone"}</b> <span style={{ color: C.muted }}>{m.verb}</span></>
                             )}
                             {a.urgent && <span className="ml-1.5 text-[10px] font-bold rounded-full px-1.5 py-0.5" style={{ background: C.maroonSoft, color: C.maroon }}>ACTION NEEDED</span>}
                           </div>
-                          {a.text && a.kind !== "follow" && <div className="text-[13px] truncate mt-0.5" style={{ color: C.muted }}>{a.text}</div>}
-                          <div className="text-[11px] mt-0.5" style={{ color: C.muted }}>{relTime(a.ts)}</div>
+                          {a.text && a.kind !== "follow" && <div className={`text-[13px] mt-0.5 ${a.kind === "nudge" || a.kind === "push" ? "line-clamp-2" : "truncate"}`} style={{ color: C.muted }}>{a.text}</div>}
+                          <div className="text-[11px] mt-0.5 flex items-center gap-1.5" style={{ color: C.muted }}>
+                            {fresh && fresh.has(a.id) && <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: C.maroon }} aria-label="New" />}
+                            {relTime(a.ts)}
+                          </div>
                         </div>
                       </button>
                     );
@@ -5989,7 +6685,7 @@ function InstallSheet({ installEvent, onClose }) {
 
         <div className="space-y-2.5 mb-4">
           <InstallReason Icon={Bell} title="Job alerts reach you"
-            body={ios ? "On iPhone, notifications only work once the app is installed — a browser tab gets none."
+            body={ios ? "On iPhone and iPad, notifications only work once the app is installed — a browser tab gets none."
                       : "Get notified about new jobs and messages without opening the app."} />
           <InstallReason Icon={NavIcon} title="Works with poor signal"
             body="Opens instantly and keeps working on the road, where data is weak." />
@@ -5999,9 +6695,9 @@ function InstallSheet({ installEvent, onClose }) {
 
         {ios ? (
           <div className="rounded-xl p-4" style={{ background: C.bg, border: `1px solid ${C.line}` }}>
-            <div className="text-[13px] font-semibold mb-2" style={{ color: C.ink }}>On iPhone (Safari)</div>
+            <div className="text-[13px] font-semibold mb-2" style={{ color: C.ink }}>On iPhone or iPad (Safari)</div>
             <ol className="space-y-2">
-              {[["1", <>Tap the <b>Share</b> button <Share size={13} className="inline" /> at the bottom of Safari</>],
+              {[["1", <>Tap the <b>Share</b> button <Share size={13} className="inline" /> in Safari's toolbar</>],
                 ["2", <>Scroll down and tap <b>Add to Home Screen</b></>],
                 ["3", <>Tap <b>Add</b> — then open it from your home screen</>]].map(([n, t]) => (
                 <li key={n} className="flex gap-2.5 items-start">
@@ -6577,119 +7273,220 @@ function CropEditor({ slides, initialRatio, onDone, onClose }) {
 
 /* ========================================================================== */
 /*  GUEST REVIEW — opened from a one-time link. No account, no sign-in.       */
+/*  BUILD 55: one link covers the trip's crew. Each guide and driver has their */
+/*  own section, side by side, with their photo, and each review is separate: */
+/*  the guest rates whom they choose and leaves out anyone they would rather   */
+/*  not review. Guests never sign up; the link is what proves they travelled. */
 /* ========================================================================== */
-/* Pieces of the guest review page, kept at module scope on purpose: a component declared inside
-   GuestReview would be a new component on every render, unmounting the form (and closing the
-   keyboard) on every keystroke. BUILD 50. */
+/* Pieces of the page live at module scope on purpose: a component declared inside GuestReview would be a
+   new component on every render, unmounting the form (and closing the keyboard) on every keystroke. */
 const ReviewPage = ({ children }) => (
-  <div className="flex-1 overflow-y-auto hidescroll px-6 py-8" style={{ scrollbarWidth: "none" }}>
-    <div className="flex items-center gap-2.5 mb-7">
-      <BrandMark size={40} />
-      <div>
-        <div className="text-[16px] font-semibold leading-none" style={{ color: C.ink }}>Bhutan Tourism Hub</div>
-        <div className="text-[10px] font-semibold tracking-[.14em] uppercase mt-1" style={{ color: C.goldText }}>Verified guest review</div>
+  <div className="flex-1 overflow-y-auto hidescroll px-4 sm:px-6 py-7" style={{ scrollbarWidth: "none" }}>
+    <style>{`
+      .bth-crew-grid{ display: grid; gap: 10px; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
+      @media (min-width: 640px){ .bth-crew-grid{ gap: 14px; } }
+      .bth-crew-grid.n1{ grid-template-columns: minmax(0, 1fr); max-width: 420px; margin: 0 auto; }
+      @media (min-width: 720px){ .bth-crew-grid.n3{ grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+      @media (max-width: 330px){ .bth-crew-grid{ grid-template-columns: minmax(0, 1fr); } }
+      .bth-review input, .bth-review textarea{ font-size: 16px; }   /* 16px: iPhones do not zoom in on focus */
+      /* five stars share the card's width, so two cards side by side fit any phone; each is a full-height tap */
+      .bth-stars{ display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); max-width: 200px; margin: 0 auto; }
+      .bth-star{ display: flex; align-items: center; justify-content: center; padding: 7px 1px; background: transparent; border: 0; line-height: 0; }
+      .bth-star svg{ width: 100%; max-width: 32px; height: auto; transition: transform .12s; }
+      .bth-star[aria-checked="true"] svg{ transform: scale(1.08); }
+      .bth-review textarea:focus, .bth-review input:focus{ outline: none; border-color: ${C.pine} !important; box-shadow: 0 0 0 3px ${C.pine}1f; }
+    `}</style>
+    <div className="bth-review">
+      <div className="flex items-center gap-2.5 mb-6">
+        <BrandMark size={40} />
+        <div>
+          <div className="text-[16px] font-semibold leading-none" style={{ color: C.ink }}>Bhutan Tourism Hub</div>
+          <div className="text-[10px] font-semibold tracking-[.14em] uppercase mt-1" style={{ color: C.goldText }}>Verified guest review</div>
+        </div>
       </div>
+      {children}
     </div>
-    {children}
   </div>
 );
 
-const Message = ({ Icon, title, body: b, tone }) => (
+const Message = ({ Icon, title, body: b, tone, action }) => (
   <ReviewPage>
-    <div className="rounded-2xl p-6 text-center" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+    <div className="rounded-2xl p-6 text-center max-w-[460px] mx-auto" style={{ background: C.card, border: `1px solid ${C.line}` }}>
       <div className="w-14 h-14 rounded-2xl flex items-center justify-center mx-auto mb-3"
         style={{ background: tone === "good" ? C.pineSoft : C.goldSoft }}>
         <Icon size={26} color={tone === "good" ? C.pine : C.gold} />
       </div>
       <div className="text-[17px] font-semibold" style={{ color: C.ink }}>{title}</div>
       <p className="text-[14px] leading-relaxed mt-2" style={{ color: C.muted }}>{b}</p>
+      {action && (
+        <button type="button" onClick={action.onClick} className="tap mt-4 h-11 px-5 rounded-xl text-[14px] font-semibold"
+          style={{ background: C.pine, color: "#FFFFFF" }}>{action.label}</button>
+      )}
     </div>
   </ReviewPage>
 );
 
-const BigStars = ({ value, onChange }) => (
-  <div className="flex justify-center gap-2">
+const REVIEW_WORDS = [null, "Poor", "Fair", "Good", "Great", "Excellent"];
+const roleWord = (r) => {
+  const s = String(r || "").toLowerCase();
+  if (s.includes("guide")) return "Guide";
+  if (s.includes("driver")) return "Driver";
+  return s ? s.charAt(0).toUpperCase() + s.slice(1).replace(/_/g, " ") : "Crew";
+};
+
+const RateStars = ({ value, onChange, label }) => (
+  <div className="bth-stars" role="radiogroup" aria-label={`Rate ${label}`}>
     {[1, 2, 3, 4, 5].map((n) => (
-      <button key={n} onClick={() => onChange(n)} className="tap" aria-label={`${n} out of 5`}>
-        <Star size={44} strokeWidth={1.4}
-          color={n <= value ? C.gold : C.line}
-          fill={n <= value ? C.gold : "transparent"}
-          style={{ transition: "transform .12s", transform: n === value ? "scale(1.08)" : "none" }} />
+      <button key={n} type="button" onClick={() => onChange(n === value ? 0 : n)} className="tap bth-star" role="radio" aria-checked={n === value}
+        aria-label={`${label}: ${n} out of 5`}>
+        <Star size={32} strokeWidth={1.5} color={n <= value ? C.gold : C.line} fill={n <= value ? C.gold : "transparent"} />
       </button>
     ))}
   </div>
 );
 
-const SmallStars = ({ label, hint, value, onChange }) => (
-  <div className="flex items-center gap-3 py-2.5">
-    <div className="flex-1 min-w-0">
-      <div className="text-[14px] font-medium" style={{ color: C.ink }}>{label}</div>
-      <div className="text-[12px]" style={{ color: C.muted }}>{hint}</div>
-    </div>
-    <div className="flex gap-1 shrink-0">
+const DetailStars = ({ label, hint, value, onChange }) => (
+  <div className="py-1.5">
+    <div className="text-[12.5px] font-medium leading-tight" style={{ color: C.ink }}>{label}</div>
+    <div className="text-[11px] leading-tight mb-1" style={{ color: C.muted }}>{hint}</div>
+    <div className="flex gap-0.5">
       {[1, 2, 3, 4, 5].map((n) => (
-        <button key={n} onClick={() => onChange(n)} className="tap" aria-label={`${label} ${n} of 5`}>
-          <Star size={20} strokeWidth={1.6}
-            color={n <= value ? C.gold : C.line} fill={n <= value ? C.gold : "transparent"} />
+        <button key={n} type="button" onClick={() => onChange(n === value ? 0 : n)} className="tap" aria-label={`${label} ${n} of 5`}
+          style={{ padding: 1, background: "transparent", border: 0, lineHeight: 0 }}>
+          <Star size={18} strokeWidth={1.6} color={n <= value ? C.gold : C.line} fill={n <= value ? C.gold : "transparent"} />
         </button>
       ))}
     </div>
   </div>
 );
 
+const CrewPhoto = ({ person, size }) => <Avatar initials={initialsOf(person.name)} src={person.photo} size={size} />;
+
+const ReviewCard = ({ person, draft, onChange }) => {
+  const first = String(person.name || "").split(" ")[0] || "them";
+  const driver = /driver/i.test(person.role || "");
+  const set = (k, v) => onChange({ ...draft, [k]: v });
+  const head = (
+    <div className="flex flex-col items-center text-center">
+      <CrewPhoto person={person} size={76} />
+      <div className="text-[15px] font-semibold leading-tight mt-2.5" style={{ color: C.ink }}>{person.name}</div>
+      <div className="text-[10.5px] font-semibold tracking-[.12em] uppercase mt-1" style={{ color: C.goldText }}>
+        {roleWord(person.role)}{person.base ? ` · ${person.base}` : ""}
+      </div>
+    </div>
+  );
+  if (person.done) {
+    return (
+      <section aria-label={person.name} className="rounded-2xl p-3 sm:p-3.5" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+        {head}
+        <div className="mt-3 text-[12.5px] font-semibold text-center inline-flex w-full items-center justify-center gap-1.5" style={{ color: C.pine }}>
+          <CheckCheck size={14} /> Reviewed — thank you
+        </div>
+      </section>
+    );
+  }
+  const rating = draft.rating || 0;
+  return (
+    <section aria-label={`Your review of ${person.name}`} className="rounded-2xl p-3 sm:p-3.5"
+      style={{ background: C.card, border: `1.5px solid ${rating ? C.pine : C.line}`, transition: "border-color .2s" }}>
+      {head}
+      <div className="mt-2"><RateStars value={rating} onChange={(n) => set("rating", n)} label={first} /></div>
+      <div className="text-[12.5px] font-semibold mt-1 text-center" style={{ color: rating ? C.gold : C.muted, minHeight: 18 }}>
+        {rating ? REVIEW_WORDS[rating] : "Tap a star"}
+      </div>
+      {rating > 0 && (
+        <div className="fade mt-2.5">
+          <textarea value={draft.body || ""} onChange={(e) => set("body", e.target.value)} rows={4} maxLength={600}
+            ref={(el) => { if (el) { el.style.height = "auto"; el.style.height = Math.min(el.scrollHeight + 2, 280) + "px"; } }}   // grows with the words
+            aria-label={`What stood out about ${first}?`} placeholder={`What stood out about ${first}?`}
+            className="w-full px-2.5 py-2 rounded-xl leading-snug resize-none"
+            style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
+          <button type="button" onClick={() => set("open", !draft.open)} aria-expanded={Boolean(draft.open)}
+            className="tap w-full flex items-center justify-between mt-1.5 py-1.5 text-[12.5px] font-medium"
+            style={{ color: C.muted, background: "transparent", border: 0 }}>
+            <span>Details · optional</span>
+            <ChevronLeft size={15} color={C.muted} style={{ transform: draft.open ? "rotate(90deg)" : "rotate(-90deg)", transition: "transform .2s" }} />
+          </button>
+          {draft.open && (
+            <div className="fade rounded-xl px-2.5 py-1" style={{ background: C.bg }}>
+              <DetailStars label="Knowledge" hint={driver ? "Roads, places, timing" : "Culture, history, nature"} value={draft.knowledge || 0} onChange={(n) => set("knowledge", n)} />
+              <DetailStars label="Care" hint={driver ? "Safe, smooth driving" : "Looking after your group"} value={draft.care || 0} onChange={(n) => set("care", n)} />
+              <DetailStars label="Communication" hint="Clear and easy to follow" value={draft.comms || 0} onChange={(n) => set("comms", n)} />
+            </div>
+          )}
+        </div>
+      )}
+    </section>
+  );
+};
+
+// "your guide and driver", "your guides and driver", "your guide"
+function crewPhrase(crew) {
+  const g = crew.filter((p) => /guide/i.test(p.role || "")).length, d = crew.filter((p) => /driver/i.test(p.role || "")).length;
+  const parts = [];
+  if (g) parts.push(g > 1 ? "guides" : "guide");
+  if (d) parts.push(d > 1 ? "drivers" : "driver");
+  if (!parts.length || g + d < crew.length) return crew.length > 1 ? "crew" : "guide";
+  return parts.join(" and ");
+}
+const joinNames = (names) => names.length <= 1 ? (names[0] || "") : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
 
 function GuestReview({ token }) {
-  const [state, setState] = useState("loading");   // loading | form | done | invalid | used | expired
-  const [info, setInfo] = useState(null);          // the token row
-  const [talent, setTalent] = useState(null);
-  const [rating, setRating] = useState(0);
-  const [knowledge, setKnowledge] = useState(0);
-  const [care, setCare] = useState(0);
-  const [comms, setComms] = useState(0);
-  const [body, setBody] = useState("");
+  const [state, setState] = useState("loading");   // loading | form | done | invalid | used | expired | offline
+  const [info, setInfo] = useState(null);          // what the link is for (trip, guest's name)
+  const [crew, setCrew] = useState([]);            // the people this guest may review
+  const [drafts, setDrafts] = useState({});        // person id → { rating, body, knowledge, care, comms, open }
   const [country, setCountry] = useState("");
-  const [showDetail, setShowDetail] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
+  const [sentTo, setSentTo] = useState([]);
+  const alive = useRef(true);
+  useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
 
-  useEffect(() => {
-    let on = true;
-    (async () => {
-      if (!CLOUD) { setState("invalid"); return; }
-      // BUILD 49: one database function answers what this link is for. It never returns the
-      // guest's email or phone, and the token table itself is no longer readable from here.
-      const { data, error } = await supabase.rpc("review_token_peek", { p_token: token });
-      if (!on) return;
-      if (error || !data || !data.state) { setState("invalid"); return; }
-      if (data.state !== "ok") { setState(data.state); return; }   // "used" | "expired" | "invalid"
-      setInfo(data.token);
-      if (data.talent) setTalent(profileToTalent(data.talent));
-      setState("form");
-    })();
-    return () => { on = false; };
-  }, [token]);
+  const load = async () => {
+    if (!CLOUD) { setState("invalid"); return; }
+    setState("loading");
+    // One database function says what this link is for. It never returns the guest's email or phone.
+    const { data, error } = await supabase.rpc("review_token_peek", { p_token: token });
+    if (!alive.current) return;
+    if (error) { setState(navigator.onLine === false || /fetch|network|load failed/i.test(error.message || "") ? "offline" : "invalid"); return; }
+    if (!data || !data.state) { setState("invalid"); return; }
+    if (data.state !== "ok") { setState(data.state); return; }   // "used" | "expired" | "invalid"
+    const people = (Array.isArray(data.crew) && data.crew.length ? data.crew : data.talent ? [data.talent] : [])
+      .map((p) => ({ id: String(p.id), name: p.full_name || "Your crew", role: p.role || "", base: p.base || "", photo: p.photo_url || null, done: Boolean(p.done) }));
+    if (people.length === 0) { setState("invalid"); return; }
+    setInfo(data.token || {});
+    setCrew(people);
+    setState(people.every((p) => p.done) ? "used" : "form");
+  };
+  useEffect(() => { load(); }, [token]);
+
+  const open = crew.filter((p) => !p.done);
+  const rated = open.filter((p) => (drafts[p.id] || {}).rating > 0);
 
   const submit = async () => {
-    if (!rating) { setErr("Please choose an overall rating."); return; }
+    if (rated.length === 0) { setErr("Tap the stars under someone's photo to rate them."); return; }
     setBusy(true); setErr(null);
-    // BUILD 49: the review is saved and the link spent in one database step (the token row is
-    // locked while it runs), so a second tap or a second device gets "used" and writes nothing.
-    const { data, error } = await supabase.rpc("submit_guest_review", {
-      p_token: token,
-      p_rating: rating,
-      p_knowledge: knowledge || null,
-      p_care: care || null,
-      p_communication: comms || null,
-      p_body: body.trim() || null,
-      p_country: country.trim() || null,
+    const reviews = rated.map((p) => {
+      const d = drafts[p.id] || {};
+      return { talent_id: p.id, rating: d.rating, knowledge: d.knowledge || null, care: d.care || null, communication: d.comms || null, body: String(d.body || "").trim() || null };
     });
+    // All of this guest's reviews are saved together, then the link is spent (one database step).
+    const { data, error } = await supabase.rpc("submit_guest_reviews", { p_token: token, p_reviews: reviews, p_country: country.trim() || null });
+    if (!alive.current) return;
     setBusy(false);
-    if (error || !data || !data.ok) {
-      if (data && data.state === "used") { setState("used"); return; }
-      if (data && data.state === "expired") { setState("expired"); return; }
-      setErr("We couldn't save your review. The link may already have been used.");
+    if (error) {
+      setErr(navigator.onLine === false
+        ? "You're offline. Your reviews are still here; send them once you're connected."
+        : "We couldn't send your reviews. Please try again in a moment.");
       return;
     }
+    if (!data || !data.ok) {
+      if (data && (data.state === "used" || data.state === "expired")) { setState(data.state); return; }
+      setErr(data && data.state === "empty" ? "Tap the stars under someone's photo to rate them." : "We couldn't send your reviews. Please try again in a moment.");
+      return;
+    }
+    setSentTo(rated.map((p) => String(p.name).split(" ")[0]));
     setState("done");
   };
 
@@ -6698,323 +7495,397 @@ function GuestReview({ token }) {
       <Loader2 size={18} className="animate-spin" /> Opening your review…
     </div></ReviewPage>
   );
-
+  if (state === "offline") return <Message Icon={ShieldAlert} title="You're offline"
+    body="This page needs a connection to open your review. Connect to Wi-Fi or mobile data, then try again."
+    action={{ label: "Try again", onClick: load }} />;
   if (state === "invalid") return <Message Icon={ShieldAlert} title="This link isn't valid"
-    body="Please check the link in your email, or ask your tour operator to send a new one." />;
-
-  if (state === "used") return <Message Icon={CheckCheck} title="This review is already submitted"
-    body="Thank you — each link can only be used once. If you meant to write another review, ask your operator for a new link." tone="good" />;
-
+    body="Please check the link you were sent, or ask your tour operator for a new one." />;
+  if (state === "used") return <Message Icon={CheckCheck} title="Already sent — thank you"
+    body="Each review link works once. If you'd like to add something, ask your tour operator for a new link." tone="good" />;
   if (state === "expired") return <Message Icon={Clock} title="This link has expired"
-    body="Review links stay open for 14 days. Ask your tour operator to send a new one and we'll be glad to hear from you." />;
+    body="Review links stay open for 14 days. Ask your tour operator to send a new one — we'd be glad to hear from you." />;
+  if (state === "done") {
+    const guestFirst = info && info.guest_name ? String(info.guest_name).split(" ")[0] : "";
+    return <Message Icon={Check} title={guestFirst ? `Thank you, ${guestFirst}` : "Thank you"} tone="good"
+      body={`Your ${sentTo.length > 1 ? "reviews" : "review"} of ${joinNames(sentTo)} ${sentTo.length > 1 ? "go" : "goes"} to your tour operator to confirm, then ${sentTo.length > 1 ? "appear on their profiles" : "appears on their profile"} as part of their professional record.`} />;
+  }
 
-  if (state === "done") return <Message Icon={Check} title="Thank you"
-    body={`Your review of ${talent?.name || "your guide"} is published. It becomes part of their professional record and helps other travellers choose well.`} tone="good" />;
-
-  const wordFor = [null, "Poor", "Fair", "Good", "Great", "Excellent"][rating] || "";
-
+  const guestFirst = info && info.guest_name ? String(info.guest_name).split(" ")[0] : "";
+  const who = crewPhrase(crew);
+  const plural = /s\b|and/.test(who);
+  const sendLabel = rated.length > 1 ? `Send ${rated.length} reviews` : rated.length === 1 ? `Send my review of ${String(rated[0].name).split(" ")[0]}` : "Send my review";
   return (
     <ReviewPage>
-      {/* who you are reviewing */}
-      <div className="text-center mb-6">
-        <div className="flex justify-center mb-3"><Avatar initials={talent?.initials || "?"} size={64} /></div>
-        <div className="text-[22px] font-semibold tracking-[-0.01em]" style={{ color: C.ink }}>{talent?.name || "Your guide"}</div>
-        <div className="text-[14px] mt-0.5" style={{ color: C.muted }}>
-          {talent ? roleLabel(talent.role) : ""}{talent?.base ? ` · ${talent.base}` : ""}
+      <div className="text-center mb-5">
+        <div className="text-[22px] font-semibold tracking-[-0.01em] leading-tight" style={{ color: C.ink }}>
+          {guestFirst ? `${guestFirst}, how` : "How"} {plural ? "were" : "was"} your {who}?
         </div>
-        {info?.trip_label && (
-          <div className="inline-block mt-2.5 text-[13px] rounded-full px-3 py-1"
-            style={{ background: C.card, border: `1px solid ${C.line}`, color: C.muted }}>
+        <p className="text-[14px] mt-1.5 leading-snug max-w-[440px] mx-auto" style={{ color: C.muted }}>
+          {open.length > 1 ? "Rate each of them on their own. Leave out anyone you'd rather not review." : "Tap a star to begin."}
+        </p>
+        {info && info.trip_label && (
+          <div className="inline-block mt-2.5 text-[13px] rounded-full px-3 py-1" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.muted }}>
             {info.trip_label}
           </div>
         )}
       </div>
 
-      {/* step 1 — the only thing required */}
-      <div className="rounded-2xl p-5 text-center" style={{ background: C.card, border: `1px solid ${C.line}` }}>
-        <div className="text-[17px] font-semibold mb-1" style={{ color: C.ink }}>
-          {info?.guest_name ? `${String(info.guest_name).split(" ")[0]}, how` : "How"} was your trip?
-        </div>
-        <p className="text-[13px] mb-4" style={{ color: C.muted }}>Tap a star to begin</p>
-        <BigStars value={rating} onChange={setRating} />
-        <div className="text-[14px] font-semibold mt-3" style={{ color: rating ? C.gold : "transparent" }}>
-          {wordFor || "\u00a0"}
-        </div>
+      <div className={`bth-crew-grid n${Math.min(crew.length, 3)}`}>
+        {crew.map((p) => (
+          <ReviewCard key={p.id} person={p} draft={drafts[p.id] || {}}
+            onChange={(d) => { setErr(null); setDrafts((x) => ({ ...x, [p.id]: d })); }} />
+        ))}
       </div>
 
-      {/* everything else appears only after they've rated */}
-      {rating > 0 && (
-        <div className="fade mt-5">
-          <div className="text-[15px] font-semibold mb-1" style={{ color: C.ink }}>Tell them why</div>
-          <p className="text-[13px] mb-2" style={{ color: C.muted }}>
-            A sentence or two is plenty. What did they do well? What will you remember?
-          </p>
-          <textarea value={body} onChange={(e) => setBody(e.target.value)} rows={5} maxLength={600}
-            placeholder="e.g. Karma knew every trail on the way to Tiger's Nest and made sure my mother could take it at her own pace."
-            className="w-full px-3.5 py-3 rounded-xl text-[15px] leading-relaxed resize-none"
-            style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }} />
-          <div className="flex justify-end mt-1 mb-4">
-            <span className="text-[11px]" style={{ color: C.muted }}>{body.length}/600</span>
-          </div>
-
-          {/* optional detail — collapsed by default so the form stays short */}
-          <button onClick={() => setShowDetail((v) => !v)}
-            className="tap w-full flex items-center justify-between rounded-xl px-4 py-3 mb-1"
-            style={{ background: C.card, border: `1px solid ${C.line}` }}>
-            <span className="text-[14px] font-medium" style={{ color: C.ink }}>Rate a few details (optional)</span>
-            <ChevronLeft size={17} color={C.muted} style={{ transform: showDetail ? "rotate(90deg)" : "rotate(-90deg)", transition: "transform .2s" }} />
-          </button>
-          {showDetail && (
-            <div className="rounded-xl px-4 py-1 mb-4 fade" style={{ background: C.card, border: `1px solid ${C.line}` }}>
-              <SmallStars label="Knowledge" hint="Culture, history, nature" value={knowledge} onChange={setKnowledge} />
-              <div style={{ height: 1, background: C.lineSoft }} />
-              <SmallStars label="Care" hint="Looking after your group" value={care} onChange={setCare} />
-              <div style={{ height: 1, background: C.lineSoft }} />
-              <SmallStars label="Communication" hint="Clear and easy to follow" value={comms} onChange={setComms} />
+      <div className="mt-5 max-w-[520px] mx-auto">
+        {rated.length > 0 && (
+          <div className="fade">
+            <div className="text-[14px] font-medium mb-1.5" style={{ color: C.ink }}>
+              Where are you visiting from? <span style={{ color: C.muted }}>optional</span>
             </div>
-          )}
-
-          <div className="text-[14px] font-medium mb-1.5 mt-4" style={{ color: C.ink }}>
-            Where are you visiting from? <span style={{ color: C.muted }}>optional</span>
+            <input value={country} onChange={(e) => setCountry(e.target.value)} maxLength={40} placeholder="e.g. Australia"
+              className="w-full h-12 px-3.5 rounded-xl mb-4" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }} />
           </div>
-          <input value={country} onChange={(e) => setCountry(e.target.value)} maxLength={40}
-            placeholder="e.g. Australia"
-            className="w-full h-12 px-3.5 rounded-xl text-[15px] mb-5"
-            style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }} />
-
-          {err && <p className="text-[13px] mb-3" style={{ color: C.maroon }}>{err}</p>}
-
-          <button onClick={submit} disabled={busy}
-            className="tap w-full rounded-2xl flex items-center justify-center gap-2 text-[16px] font-semibold"
-            style={{ height: 54, background: C.pine, color: "#fff", boxShadow: `0 8px 20px ${C.pine}33` }}>
-            {busy ? <Loader2 size={18} className="animate-spin" /> : "Send my review"}
-          </button>
-
-          <p className="text-[12px] text-center leading-snug mt-3.5" style={{ color: C.muted }}>
-            Your review is published on {talent?.name ? String(talent.name).split(" ")[0] + "'s" : "their"} profile
-            and stays part of their professional record. Please be honest — that is what makes it worth something.
-          </p>
-        </div>
-      )}
+        )}
+        {err && <p role="alert" className="text-[13px] mb-3 text-center" style={{ color: C.maroon }}>{err}</p>}
+        <button type="button" onClick={submit} disabled={busy || rated.length === 0}
+          className="tap w-full rounded-2xl flex items-center justify-center gap-2 text-[16px] font-semibold"
+          style={{ height: 54, background: rated.length ? C.pine : "#C7CEC7", color: "#FFFFFF", boxShadow: rated.length ? `0 8px 20px ${C.pine}33` : "none" }}>
+          {busy ? <Loader2 size={18} className="animate-spin" /> : sendLabel}
+        </button>
+        <p className="text-[12px] text-center leading-snug mt-3.5" style={{ color: C.muted }}>
+          Each review goes to your tour operator to confirm, then appears on that person's profile as part of their
+          professional record. Please be honest — that is what makes it worth something.
+        </p>
+      </div>
     </ReviewPage>
   );
 }
 
 /* ========================================================================== */
-/*  INVITE A GUEST TO REVIEW                                                  */
-/*  Only operators and admins can issue an invite — a guide inviting their     */
-/*  own reviews would make the whole rating system worthless. Enforced in the  */
-/*  database too (issuer_is_not_subject + a role check on the insert policy).  */
+/*  GUEST REVIEWS FOR A TRIP — the operator's side (BUILD 55)                 */
+/*  · Waiting for you: what guests sent, to publish on the person's profile   */
+/*    or to hide.                                                             */
+/*  · Ask a guest: one link per guest covers the whole crew; each person is   */
+/*    reviewed separately on it.                                              */
+/*  · Links for this trip: who has answered, with a one-tap reminder.         */
+/*  Only the operator running the trip, or an admin, can do these — and the   */
+/*  database enforces it too. Guests never sign up: the link proves they were */
+/*  on the trip.                                                              */
 /* ========================================================================== */
-function ReviewInvite({ user, trip, onClose }) {
+function useTripReviews(trip, enabled) {
+  const [rows, setRows] = useState(null);
+  const tripId = trip && trip.id;
+  const load = async () => {
+    if (!CLOUD || !enabled || !tripId) { setRows([]); return; }
+    const { data, error } = await supabase.from("guest_reviews")
+      .select("id,talent_id,guest_name,guest_country,rating,knowledge,care,communication,body,status,created_at")
+      .eq("trip_id", tripId).order("created_at", { ascending: false });
+    if (error) { console.warn("trip reviews:", error.message); setRows((r) => r || []); return; }
+    setRows(data || []);
+  };
+  useEffect(() => {
+    load();
+    if (!CLOUD || !enabled || !tripId) return;
+    const ch = supabase.channel("trip-reviews-" + tripId)
+      .on("postgres_changes", { event: "*", schema: "public", table: "guest_reviews", filter: `trip_id=eq.${tripId}` }, load)
+      .subscribe();
+    return () => { supabase.removeChannel(ch); };
+  }, [tripId, enabled]);
+  return { rows, reload: load };
+}
+
+function ReviewInvite({ user, trip, reviews, onClose, onOpenCrew }) {
   const [guestName, setGuestName] = useState("");
   const [guestEmail, setGuestEmail] = useState("");
   const [guestPhone, setGuestPhone] = useState("");
   const [issued, setIssued] = useState([]);
-  const [made, setMade] = useState(null);
+  const [made, setMade] = useState(null);           // { link, phone, email } of the link just created
   const [busy, setBusy] = useState(false);
+  const [deciding, setDeciding] = useState(null);
   const [err, setErr] = useState(null);
   const [copied, setCopied] = useState(false);
 
   const meId = user.talentId || user.id;
-  const isAdmin = user.kind === "admin";
-  const MAX_PER_TRIP = 12;
-
-  // who is being reviewed — never the person issuing the invite
+  const MAX_PER_TRIP = 12;   // the database holds the same limit (cap_review_tokens)
+  // who a guest reviews: the trip's crew, never the person issuing the link
   const crew = (trip.members || []).filter((m) => m.roleInTrip !== "operator" && m.id !== meId);
-  const [subject, setSubject] = useState(crew[0]?.id || "");
+  const personOf = (id) => {
+    const m = (trip.members || []).find((x) => x.id === id), t = talentById(id);
+    return { id, name: (t && t.name) || (m && m.name) || "Crew", role: (m && m.roleInTrip) || (t && t.role) || "", photo: (t && t.photo) || null,
+             initials: (t && t.initials) || initialsOf((m && m.name) || "?") };
+  };
+  const people = crew.map((m) => personOf(m.id));
+  const names = joinNames(people.map((p) => String(p.name).split(" ")[0]));
+  const who = crewPhrase(people);
+  const linkFor = (token) => `${window.location.origin}/?review=${token}`;
 
   const load = async () => {
     if (!CLOUD) return;
-    const { data, error } = await supabase
-      .from("review_tokens").select("*").eq("trip_id", trip.id).order("created_at", { ascending: false });
-    if (error) { console.error("review_tokens load failed:", error.message); return; }
+    const { data, error } = await supabase.from("review_tokens")
+      .select("token,guest_name,guest_email,guest_phone,used_at,expires_at,created_at")
+      .eq("trip_id", trip.id).order("created_at", { ascending: false });
+    if (error) { console.warn("review_tokens load:", error.message); return; }
     setIssued(data || []);
   };
   useEffect(() => { load(); }, [trip.id]);
 
   const create = async () => {
-    if (!subject) { setErr("Choose which crew member the review is for."); return; }
+    if (people.length === 0) { setErr("Add the guide and driver to the trip first."); return; }
     if (!/\S+@\S+\.\S+/.test(guestEmail)) { setErr("Enter the guest's email — it records who the review came from."); return; }
     if (issued.length >= MAX_PER_TRIP) { setErr(`Up to ${MAX_PER_TRIP} guests per trip.`); return; }
-
     setBusy(true); setErr(null);
     const token = makeReviewToken();
+    // one link for the whole crew: no talent_id. The database stamps who issued it and checks they may.
     const { error } = await supabase.from("review_tokens").insert({
-      token,
-      talent_id: subject,
-      trip_id: trip.id,
-      trip_label: trip.title,
-      guest_name: guestName.trim() || null,
-      guest_email: guestEmail.trim(),
-      issued_by: meId,
-      issuer_role: isAdmin ? "admin" : "operator",
+      token, trip_id: trip.id, trip_label: trip.title,
+      guest_name: guestName.trim() || null, guest_email: guestEmail.trim(), guest_phone: guestPhone.trim() || null,
+      issued_by: meId, issuer_role: user.kind === "admin" ? "admin" : "operator",
     });
     setBusy(false);
     if (error) {
       console.error("review_tokens.insert failed:", error.message);
-      setErr(/row-level security/i.test(error.message)
-        ? "Only tour operators and admins can request reviews."
-        : "Couldn't create the link. Please try again.");
+      setErr(/row-level security/i.test(error.message) ? "Only the trip's tour operator, or an admin, can ask for reviews."
+        : /too many/i.test(error.message) ? `Up to ${MAX_PER_TRIP} guests per trip.` : failText("create the link"));
       return;
     }
-    setMade(`${window.location.origin}/?review=${token}`);
-    setGuestName(""); setGuestEmail("");
+    setMade({ link: linkFor(token), phone: guestPhone.trim(), email: guestEmail.trim() });
+    setGuestName(""); setGuestEmail(""); setGuestPhone("");
     load();
+  };
+
+  const decide = async (id, status) => {
+    setDeciding(id);
+    const { error } = await supabase.from("guest_reviews").update({ status }).eq("id", id);
+    setDeciding(null);
+    if (error) { console.error("guest_reviews.update failed:", error.message); toast(failText(status === "published" ? "publish that review" : "hide that review")); return; }
+    toast(status === "published" ? "Published — it's on their profile now." : "Hidden. It won't appear anywhere.", "ok");
+    reviews && reviews.reload();
   };
 
   // Kept short on purpose: WhatsApp truncates long pre-filled messages on some phones,
   // and the link must sit on its own line so it is detected and previewed correctly.
-  const guestMessage = () =>
+  const askText = (link) =>
 `Thank you for travelling with us in Bhutan.
 
-Would you leave a short review for ${subjectName}? It becomes part of their verified record on Bhutan Tourism Hub, and it genuinely helps them.
+Would you leave a short review of your ${who}, ${names}? It becomes part of their verified record on Bhutan Tourism Hub, and it genuinely helps them.
 
 It takes about a minute:
 
-${made}`;
+${link}`;
+  const remindText = (link) =>
+`A gentle reminder from your trip in Bhutan: if you have a minute, we'd love your review of your ${who}, ${names}.
 
-  const copy = async () => {
-    try { await navigator.clipboard.writeText(made); setCopied(true); setTimeout(() => setCopied(false), 2200); }
-    catch (e) { setErr("Couldn't copy — press and hold the link instead."); }
+${link}`;
+  const copy = async (link) => {
+    try { await navigator.clipboard.writeText(link); setCopied(true); setTimeout(() => setCopied(false), 2200); return true; }
+    catch (e) { setErr("Couldn't copy — press and hold the link instead."); return false; }
+  };
+  const whatsApp = (phone, text) => {
+    const digits = String(phone || "").replace(/[^\d]/g, "");
+    window.open(digits.length >= 8 ? `https://wa.me/${digits}?text=${encodeURIComponent(text)}` : `https://wa.me/?text=${encodeURIComponent(text)}`, "_blank", "noopener");
+  };
+  const share = async (text, link) => {
+    try { if (navigator.share) await navigator.share({ title: "Review your trip", text }); else if (await copy(link)) toast("Link copied.", "ok"); } catch (e) {}
+  };
+  const email = (to, subject, text) => {
+    window.location.href = `mailto:${to || ""}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(text)}`;
+  };
+  // a guest who hasn't answered yet: the same link again, with a kind word
+  const remind = (t) => {
+    const link = linkFor(t.token);
+    if (t.guest_phone) return whatsApp(t.guest_phone, remindText(link));
+    if (t.guest_email) return email(t.guest_email, `A quick review of your ${who}?`, remindText(link));
+    return share(remindText(link), link);
   };
 
-  const sendWhatsApp = () => {
-    const digits = String(guestPhone || "").replace(/[^\d]/g, "");
-    const text = encodeURIComponent(guestMessage());
-    // with a number: opens that person's chat directly. without: WhatsApp asks who to send to.
-    const url = digits.length >= 8
-      ? `https://wa.me/${digits}?text=${text}`
-      : `https://wa.me/?text=${text}`;
-    window.open(url, "_blank", "noopener");
-  };
-
-  const share = async () => {
-    try {
-      if (navigator.share) await navigator.share({ title: "Review your trip", text: guestMessage() });
-      else copy();
-    } catch (e) {}
-  };
-
-  const sendEmail = () => {
-    const subject = encodeURIComponent(`A quick review for ${subjectName}?`);
-    window.location.href = `mailto:${guestEmail || ""}?subject=${subject}&body=${encodeURIComponent(guestMessage())}`;
-  };
-
-  const subjectName = (trip.members || []).find((m) => m.id === subject)?.name || "the guide";
+  const rows = (reviews && reviews.rows) || [];
+  const pending = rows.filter((r) => r.status === "pending");
+  const published = rows.filter((r) => r.status === "published");
+  const field = { background: C.bg, border: `1px solid ${C.line}`, color: C.ink };
+  const label = "text-[12px] font-semibold tracking-[.12em] uppercase mb-2";
+  const full = issued.length >= MAX_PER_TRIP;
 
   return createPortal((
     <div className="fixed inset-0 flex items-end" style={{ background: "rgba(8,10,8,.55)", zIndex: 230 }} onClick={onClose}>
-      <div className="w-full rounded-t-3xl flex flex-col safe-bottom" style={{ background: C.card, maxHeight: "90dvh" }} onClick={(e) => e.stopPropagation()}>
+      <div className="w-full rounded-t-3xl flex flex-col safe-bottom" style={{ background: C.card, maxHeight: "92dvh" }} onClick={(e) => e.stopPropagation()}>
         <div className="p-5 pb-3 shrink-0">
           <div className="w-10 h-1 rounded-full mx-auto mb-4" style={{ background: C.line }} />
-          <div className="text-[17px] font-semibold" style={{ color: C.ink }}>Ask a guest for a review</div>
-          <p className="text-[13px] mt-1" style={{ color: C.muted }}>{trip.title} · {fmtDate(trip.start)} – {fmtDate(trip.end)}</p>
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <div className="text-[17px] font-semibold" style={{ color: C.ink }}>Guest reviews</div>
+              <p className="text-[13px] mt-1 truncate" style={{ color: C.muted }}>{trip.title} · {fmtDate(trip.start)} – {fmtDate(trip.end)}</p>
+            </div>
+            <button type="button" onClick={onClose} aria-label="Close" className="tap shrink-0 w-8 h-8 rounded-full flex items-center justify-center" style={{ background: C.grey, border: 0 }}>
+              <X size={15} color={C.ink} />
+            </button>
+          </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto hidescroll px-5 pb-5" style={{ scrollbarWidth: "none" }}>
-          {crew.length === 0 ? (
-            <Empty Icon={Users} title="No crew to review"
-              body="Reviews are for the guides and drivers on this trip. You cannot request a review of yourself." />
-          ) : (
-            <>
-              <div className="text-[13px] font-medium mb-1.5" style={{ color: C.ink }}>Review is for</div>
-              <div className="flex flex-wrap gap-2 mb-4">
-                {crew.map((m) => (
-                  <Chip key={m.id} on={subject === m.id} onClick={() => setSubject(m.id)}>{m.name}</Chip>
-                ))}
-              </div>
-
-              <div className="text-[13px] font-medium mb-1.5" style={{ color: C.ink }}>Guest name</div>
-              <input value={guestName} onChange={(e) => setGuestName(e.target.value)} maxLength={60}
-                placeholder="e.g. Sarah Whitfield"
-                className="w-full h-11 px-3.5 rounded-xl text-[14px] mb-3" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
-
-              <div className="text-[13px] font-medium mb-1.5" style={{ color: C.ink }}>Guest email</div>
-              <input value={guestEmail} onChange={(e) => setGuestEmail(e.target.value)} inputMode="email" autoCapitalize="none"
-                placeholder="guest@email.com"
-                className="w-full h-11 px-3.5 rounded-xl text-[14px] mb-1.5" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
-              <p className="text-[12px] mb-4" style={{ color: C.muted }}>
-                Kept private, never shown on the review. It exists so a disputed review can be traced.
-              </p>
-
-              <div className="text-[13px] font-medium mb-1.5" style={{ color: C.ink }}>Guest WhatsApp number <span style={{ color: C.muted }}>· optional</span></div>
-              <input value={guestPhone} onChange={(e) => setGuestPhone(e.target.value)} inputMode="tel"
-                placeholder="+61 4XX XXX XXX — with country code"
-                className="w-full h-11 px-3.5 rounded-xl text-[14px] mb-1.5" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
-              <p className="text-[12px] mb-4" style={{ color: C.muted }}>
-                Add it and WhatsApp opens straight to their chat. Leave it blank and you'll choose the contact in WhatsApp.
-              </p>
-
-              {err && <p className="text-[13px] mb-2.5" style={{ color: C.maroon }}>{err}</p>}
-
-              {made ? (
-                <div className="rounded-2xl p-4 mb-4" style={{ background: C.pineSoft }}>
-                  <div className="text-[14px] font-semibold mb-1" style={{ color: C.pine }}>Link ready</div>
-                  <p className="text-[12px] mb-2.5" style={{ color: C.pine, opacity: .85 }}>
-                    Works once, expires in 14 days. Best shared with the guest in person on the last day.
-                  </p>
-                  <div className="rounded-lg px-3 py-2 mb-2.5 break-all text-[12px] font-mono" style={{ background: C.card, color: C.ink }}>{made}</div>
-                  <button onClick={sendWhatsApp}
-                    className="tap w-full h-12 rounded-xl text-[15px] font-semibold inline-flex items-center justify-center gap-2 mb-2"
-                    style={{ background: "#25D366", color: "#fff" }}>
-                    <MessageCircle size={17} /> Send on WhatsApp
-                  </button>
-                  <div className="flex gap-2">
-                    <button onClick={sendEmail} className="tap flex-1 h-10 rounded-lg text-[13px] font-semibold inline-flex items-center justify-center gap-1.5"
-                      style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }}><Mail size={14} /> Email</button>
-                    <button onClick={share} className="tap flex-1 h-10 rounded-lg text-[13px] font-semibold inline-flex items-center justify-center gap-1.5"
-                      style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }}><Share2 size={14} /> Share</button>
-                    <button onClick={copy} className="tap flex-1 h-10 rounded-lg text-[13px] font-semibold"
-                      style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }}>{copied ? "Copied" : "Copy"}</button>
-                  </div>
-                  <button onClick={() => setMade(null)} className="tap w-full h-9 rounded-lg text-[13px] font-medium mt-2" style={{ color: C.pine }}>
-                    Create another for the next guest
-                  </button>
-                </div>
-              ) : (
-                <button onClick={create} disabled={busy || issued.length >= MAX_PER_TRIP}
-                  className="tap w-full h-12 rounded-xl text-[15px] font-semibold inline-flex items-center justify-center gap-2 mb-4"
-                  style={{ background: issued.length >= MAX_PER_TRIP ? "#C7CEC7" : C.pine, color: "#fff" }}>
-                  {busy ? <Loader2 size={18} className="animate-spin" /> : <><Plus size={17} strokeWidth={3} /> Create link for {String(subjectName).split(" ")[0]}</>}
-                </button>
-              )}
-            </>
-          )}
-
-          {issued.length > 0 && (
-            <>
-              <div className="text-[12px] font-semibold tracking-[.12em] uppercase mb-2" style={{ color: C.goldText }}>
-                Requests for this trip · {issued.length}/{MAX_PER_TRIP}
-              </div>
-              <div className="rounded-2xl overflow-hidden" style={{ border: `1px solid ${C.line}` }}>
-                {issued.map((t, i) => {
-                  const used = Boolean(t.used_at);
-                  const expired = !used && new Date(t.expires_at) < new Date();
+        <div className="flex-1 overflow-y-auto hidescroll px-5 pb-6" style={{ scrollbarWidth: "none" }}>
+          {/* ---- waiting for you ---- */}
+          {pending.length > 0 && (
+            <div className="mb-6">
+              <div className={label} style={{ color: C.maroon }}>Waiting for you · {pending.length}</div>
+              <div className="space-y-2.5">
+                {pending.map((r) => {
+                  const p = personOf(r.talent_id);
                   return (
-                    <div key={t.token} className="px-3.5 py-2.5 flex items-center gap-2.5"
-                      style={{ background: C.card, borderTop: i ? `1px solid ${C.lineSoft}` : "none" }}>
-                      <span className="w-7 h-7 rounded-full flex items-center justify-center shrink-0"
-                        style={{ background: used ? C.pineSoft : expired ? C.maroonSoft : C.goldSoft }}>
-                        {used ? <Check size={13} color={C.pine} /> : expired ? <X size={13} color={C.maroon} /> : <Clock size={13} color={C.gold} />}
-                      </span>
-                      <span className="flex-1 text-[13px] truncate" style={{ color: C.ink }}>{t.guest_name || t.guest_email || "Guest"}</span>
-                      <span className="text-[12px] shrink-0" style={{ color: C.muted }}>
-                        {used ? "Reviewed" : expired ? "Expired" : "Waiting"}
-                      </span>
+                    <div key={r.id} className="rounded-2xl p-3.5" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+                      <div className="flex items-center gap-3">
+                        <Avatar initials={p.initials} src={p.photo} size={40} />
+                        <div className="flex-1 min-w-0">
+                          <div className="text-[14px] font-semibold truncate" style={{ color: C.ink }}>{p.name} <span className="font-normal" style={{ color: C.muted }}>· {roleWord(p.role)}</span></div>
+                          <div className="text-[12px] truncate" style={{ color: C.muted }}>
+                            From {r.guest_name || "a guest"}{r.guest_country ? `, ${r.guest_country}` : ""} · {relTime(new Date(r.created_at).getTime())}
+                          </div>
+                        </div>
+                        <Stars score={r.rating} />
+                      </div>
+                      {r.body && <p className="text-[14px] leading-snug mt-2.5" style={{ color: C.ink }}>“{r.body}”</p>}
+                      <div className="flex gap-2 mt-3">
+                        <button type="button" disabled={deciding === r.id} onClick={() => decide(r.id, "hidden")}
+                          className="tap flex-1 h-10 rounded-xl text-[13px] font-semibold" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.muted }}>Hide</button>
+                        <button type="button" disabled={deciding === r.id} onClick={() => decide(r.id, "published")}
+                          className="tap flex-[1.6] h-10 rounded-xl text-[14px] font-semibold inline-flex items-center justify-center gap-1.5" style={{ background: C.pine, color: "#FFFFFF", border: 0 }}>
+                          {deciding === r.id ? <Loader2 size={15} className="animate-spin" /> : <><Check size={15} /> Publish</>}
+                        </button>
+                      </div>
                     </div>
                   );
                 })}
               </div>
+              <p className="text-[12px] leading-snug mt-2.5" style={{ color: C.muted }}>
+                Publishing puts the review on their profile and into their rating. Hide anything that didn't come from a real guest of this trip.
+              </p>
+            </div>
+          )}
+
+          {/* ---- ask a guest ---- */}
+          <div className={label} style={{ color: C.goldText }}>Ask a guest</div>
+          {people.length === 0 ? (
+            <>
+              <Empty Icon={Users} title="No crew to review yet"
+                body="Reviews are for the guides and drivers on this trip. Add them to the crew, then ask your guests." />
+              {onOpenCrew && (
+                <button type="button" onClick={onOpenCrew} className="tap w-full h-11 rounded-xl text-[14px] font-semibold mt-3 mb-5 inline-flex items-center justify-center gap-2"
+                  style={{ background: C.pine, color: "#FFFFFF", border: 0 }}><UserPlus size={16} /> Add crew</button>
+              )}
+            </>
+          ) : (
+            <>
+              <div className="rounded-2xl p-3 mb-4 flex items-center gap-3" style={{ background: C.bg }}>
+                <div className="flex -space-x-2 shrink-0">
+                  {people.slice(0, 4).map((p) => <div key={p.id} className="rounded-full" style={{ boxShadow: `0 0 0 2px ${C.bg}` }}><Avatar initials={p.initials} src={p.photo} size={34} /></div>)}
+                </div>
+                <p className="text-[13px] leading-snug" style={{ color: C.ink }}>
+                  One link lets the guest review {people.length > 1 ? "each of " : ""}<b>{people.map((p) => `${String(p.name).split(" ")[0]} (${roleWord(p.role).toLowerCase()})`).join(", ")}</b>{people.length > 1 ? ", separately" : ""}.
+                </p>
+              </div>
+
+              {made ? (
+                <div className="rounded-2xl p-4 mb-5" style={{ background: C.pineSoft }}>
+                  <div className="text-[14px] font-semibold mb-1" style={{ color: C.pine }}>Link ready</div>
+                  <p className="text-[12px] mb-2.5" style={{ color: C.pine, opacity: .85 }}>Works once, for 14 days. Best shared with the guest in person on the last day.</p>
+                  <div className="rounded-lg px-3 py-2 mb-2.5 break-all text-[12px] font-mono" style={{ background: C.card, color: C.ink }}>{made.link}</div>
+                  <button type="button" onClick={() => whatsApp(made.phone, askText(made.link))}
+                    className="tap w-full h-12 rounded-xl text-[15px] font-semibold inline-flex items-center justify-center gap-2 mb-2" style={{ background: "#25D366", color: "#FFFFFF", border: 0 }}>
+                    <MessageCircle size={17} /> Send on WhatsApp
+                  </button>
+                  <div className="flex gap-2">
+                    <button type="button" onClick={() => email(made.email, `A quick review of your ${who}?`, askText(made.link))} className="tap flex-1 h-10 rounded-lg text-[13px] font-semibold inline-flex items-center justify-center gap-1.5"
+                      style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }}><Mail size={14} /> Email</button>
+                    <button type="button" onClick={() => share(askText(made.link), made.link)} className="tap flex-1 h-10 rounded-lg text-[13px] font-semibold inline-flex items-center justify-center gap-1.5"
+                      style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }}><Share2 size={14} /> Share</button>
+                    <button type="button" onClick={() => copy(made.link)} className="tap flex-1 h-10 rounded-lg text-[13px] font-semibold"
+                      style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }}>{copied ? "Copied" : "Copy"}</button>
+                  </div>
+                  {!full && (
+                    <button type="button" onClick={() => { setMade(null); setCopied(false); }} className="tap w-full h-9 rounded-lg text-[13px] font-medium mt-2" style={{ color: C.pine, background: "transparent", border: 0 }}>
+                      Create one for the next guest
+                    </button>
+                  )}
+                </div>
+              ) : full ? (
+                <p className="text-[13px] rounded-xl px-3.5 py-3 mb-5" style={{ background: C.bg, color: C.muted }}>
+                  This trip has its {MAX_PER_TRIP} review links. Remind the guests below who haven't answered yet.
+                </p>
+              ) : (
+                <>
+                  <div className="text-[13px] font-medium mb-1.5" style={{ color: C.ink }}>Guest name</div>
+                  <input value={guestName} onChange={(e) => setGuestName(e.target.value)} maxLength={60} placeholder="e.g. Sarah Whitfield"
+                    className="w-full h-11 px-3.5 rounded-xl text-[14px] mb-3" style={field} />
+                  <div className="text-[13px] font-medium mb-1.5" style={{ color: C.ink }}>Guest email</div>
+                  <input value={guestEmail} onChange={(e) => setGuestEmail(e.target.value)} type="email" inputMode="email" autoCapitalize="none" placeholder="guest@email.com"
+                    className="w-full h-11 px-3.5 rounded-xl text-[14px] mb-1.5" style={field} />
+                  <p className="text-[12px] mb-3" style={{ color: C.muted }}>Kept private, never shown on a review. It lets a disputed review be traced.</p>
+                  <div className="text-[13px] font-medium mb-1.5" style={{ color: C.ink }}>Guest WhatsApp <span style={{ color: C.muted }}>· optional</span></div>
+                  <input value={guestPhone} onChange={(e) => setGuestPhone(e.target.value)} type="tel" inputMode="tel" placeholder="+61 4XX XXX XXX — with country code"
+                    className="w-full h-11 px-3.5 rounded-xl text-[14px] mb-1.5" style={field} />
+                  <p className="text-[12px] mb-4" style={{ color: C.muted }}>With a number, WhatsApp opens straight to their chat.</p>
+                  {err && <p role="alert" className="text-[13px] mb-2.5" style={{ color: C.maroon }}>{err}</p>}
+                  <button type="button" disabled={busy} onClick={create}
+                    className="tap w-full h-12 rounded-xl text-[15px] font-semibold inline-flex items-center justify-center gap-2 mb-5"
+                    style={{ background: C.pine, color: "#FFFFFF", border: 0 }}>
+                    {busy ? <Loader2 size={18} className="animate-spin" /> : <><Plus size={17} strokeWidth={3} /> Create review link</>}
+                  </button>
+                </>
+              )}
             </>
           )}
 
-          <div className="rounded-xl p-3.5 flex gap-2.5 mt-4" style={{ background: C.bg, border: `1px solid ${C.line}` }}>
+          {/* ---- links for this trip ---- */}
+          {issued.length > 0 && (
+            <div className="mb-5">
+              <div className={label} style={{ color: C.goldText }}>Links for this trip · {issued.length}/{MAX_PER_TRIP}</div>
+              <div className="rounded-2xl overflow-hidden" style={{ border: `1px solid ${C.line}` }}>
+                {issued.map((t, i) => {
+                  const used = Boolean(t.used_at), expired = !used && new Date(t.expires_at) < new Date();
+                  return (
+                    <div key={t.token} className="px-3.5 py-2.5 flex items-center gap-2.5" style={{ background: C.card, borderTop: i ? `1px solid ${C.lineSoft}` : "none" }}>
+                      <span className="w-7 h-7 rounded-full flex items-center justify-center shrink-0" style={{ background: used ? C.pineSoft : expired ? C.maroonSoft : C.goldSoft }}>
+                        {used ? <Check size={13} color={C.pine} /> : expired ? <X size={13} color={C.maroon} /> : <Clock size={13} color={C.gold} />}
+                      </span>
+                      <span className="flex-1 min-w-0 text-[13px] truncate" style={{ color: C.ink }}>{t.guest_name || t.guest_email || "Guest"}</span>
+                      {used || expired ? (
+                        <span className="text-[12px] shrink-0" style={{ color: C.muted }}>{used ? "Reviewed" : "Expired"}</span>
+                      ) : (
+                        <button type="button" onClick={() => remind(t)} className="tap shrink-0 h-8 px-3 rounded-lg text-[12px] font-semibold inline-flex items-center gap-1"
+                          style={{ background: C.goldSoft, color: C.goldText, border: 0 }} aria-label={`Remind ${t.guest_name || "this guest"}`}>
+                          <RefreshCw size={12} /> Remind
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* ---- published ---- */}
+          {published.length > 0 && (
+            <div className="mb-5">
+              <div className={label} style={{ color: C.goldText }}>Published · {published.length}</div>
+              <div className="rounded-2xl overflow-hidden" style={{ border: `1px solid ${C.line}` }}>
+                {published.map((r, i) => {
+                  const p = personOf(r.talent_id);
+                  return (
+                    <div key={r.id} className="px-3.5 py-2.5 flex items-center gap-2.5" style={{ background: C.card, borderTop: i ? `1px solid ${C.lineSoft}` : "none" }}>
+                      <Avatar initials={p.initials} src={p.photo} size={28} />
+                      <span className="flex-1 min-w-0 text-[13px] truncate" style={{ color: C.ink }}>{p.name} <span style={{ color: C.muted }}>· from {r.guest_name || "a guest"}</span></span>
+                      <Stars score={r.rating} />
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          <div className="rounded-xl p-3.5 flex gap-2.5" style={{ background: C.bg, border: `1px solid ${C.line}` }}>
             <ShieldCheck size={16} color={C.gold} className="shrink-0 mt-0.5" />
             <p className="text-[12px] leading-snug" style={{ color: C.muted }}>
-              Guides and drivers cannot request reviews of themselves — only the operator running the trip,
-              or an admin, can. Every request is recorded against the trip, so a rating can always be traced
-              back to real work.
+              Guests don't sign up: the link is what shows they were on this trip, and it works once. Guides and drivers can't
+              review themselves, and every review waits here for you before it appears on a profile.
             </p>
           </div>
         </div>
@@ -7033,7 +7904,7 @@ function GuestReviews({ talentId, isAdmin, isSelf, onAskOperator, onCount }) {
   const load = async () => {
     if (!CLOUD) { setRows([]); return; }
     const { data, error } = await supabase
-      .from("guest_reviews").select("*")
+      .from("guest_reviews").select("id,guest_name,guest_country,rating,knowledge,care,communication,body,trip_label,created_at")
       .eq("talent_id", talentId).eq("status", "published")
       .order("created_at", { ascending: false });
     if (error) { console.error("guest_reviews load failed:", error.message); setRows([]); return; }
@@ -7046,7 +7917,8 @@ function GuestReviews({ talentId, isAdmin, isSelf, onAskOperator, onCount }) {
     setBusyId(id);
     const { error } = await supabase.from("guest_reviews").update({ status: "hidden" }).eq("id", id);
     setBusyId(null);
-    if (error) { console.error("hide review failed:", error.message); return; }
+    if (error) { console.error("hide review failed:", error.message); toast(failText("hide that review")); return; }
+    toast("Hidden. It won't appear anywhere.", "ok");
     load();
   };
 
@@ -7154,10 +8026,8 @@ function GuestReviews({ talentId, isAdmin, isSelf, onAskOperator, onCount }) {
                 </span>
               )}
               <span className="inline-flex items-center gap-1 text-[11px] font-semibold rounded-full px-2 py-1"
-                style={{ background: r.issuer_role === "admin" ? C.goldSoft : C.pineSoft,
-                         color: r.issuer_role === "admin" ? C.goldText : C.pine }}>
-                <ShieldCheck size={10} />
-                {r.issuer_role === "admin" ? "Verified by Bhutan Tourism Hub" : "Invited by the tour operator"}
+                style={{ background: C.pineSoft, color: C.pine }}>
+                <ShieldCheck size={10} /> Guest of this trip
               </span>
               <span className="text-[11px]" style={{ color: C.muted }}>{relTime(new Date(r.created_at).getTime())}</span>
             </div>
@@ -7166,8 +8036,8 @@ function GuestReviews({ talentId, isAdmin, isSelf, onAskOperator, onCount }) {
       </div>
 
       <p className="text-[12px] text-center mt-4 leading-snug" style={{ color: C.muted }}>
-        Each review comes from a one-time link tied to a specific trip. We show who sent the invite so
-        you can judge it for yourself.
+        Each review comes from a one-time link sent to a guest of that trip. Guests can only review the
+        guides and drivers they travelled with.
       </p>
     </div>
   );
@@ -7376,7 +8246,7 @@ function AdminMessage({ adminId, user, onClose, onSent }) {
         <div className="p-5 pb-3 shrink-0">
           <div className="w-10 h-1 rounded-full mx-auto mb-4" style={{ background: C.line }} />
           <div className="flex items-center gap-3">
-            <Avatar initials={initialsOf(user.full_name)} size={42} />
+            <Avatar initials={initialsOf(user.full_name)} src={user.photo_url} size={42} />
             <div className="flex-1 min-w-0">
               <div className="text-[16px] font-semibold" style={{ color: C.ink }}>{user.full_name || "Unnamed"}</div>
               <div className="text-[13px]" style={{ color: C.muted }}>{roleLabel(user.role)}{user.base ? ` · ${user.base}` : ""}</div>
@@ -7948,7 +8818,7 @@ function ItineraryBuilder({ trip, canEdit, onChanged, embedded }) {
       trip_id: trip.id, day_no: nextDay, title: t,
     });
     setBusy(false);
-    if (error) { console.error("itinerary insert failed:", error.message); return; }
+    if (error) { console.error("itinerary insert failed:", error.message); toast(failText("add that day")); return; }
     setTitle(""); setAdding(false);
     onChanged && onChanged();
   };
@@ -7960,7 +8830,7 @@ function ItineraryBuilder({ trip, canEdit, onChanged, embedded }) {
     const { error } = await supabase.from("trip_itinerary")
       .update({ title: t }).eq("trip_id", trip.id).eq("day_no", dayNo);
     setBusy(false);
-    if (error) { console.error("itinerary update failed:", error.message); return; }
+    if (error) { console.error("itinerary update failed:", error.message); toast(failText("save that day")); return; }
     setEditId(null);
     onChanged && onChanged();
   };
@@ -7971,7 +8841,7 @@ function ItineraryBuilder({ trip, canEdit, onChanged, embedded }) {
     const { error } = await supabase.from("trip_itinerary")
       .update({ title: t }).eq("trip_id", trip.id).eq("day_no", it.day);
     setBusy(false);
-    if (error) { console.error("itinerary update failed:", error.message); return; }
+    if (error) { console.error("itinerary update failed:", error.message); toast(failText("add that idea")); return; }
     setDays((ds) => ds.map((d) => (d.day === it.day ? { ...d, title: t } : d)));   // shown at once; the trip refresh follows
     onChanged && onChanged();
   };
@@ -7981,7 +8851,7 @@ function ItineraryBuilder({ trip, canEdit, onChanged, embedded }) {
     const { error } = await supabase.from("trip_itinerary")
       .delete().eq("trip_id", trip.id).eq("day_no", dayNo);
     setBusy(false);
-    if (error) { console.error("itinerary delete failed:", error.message); return; }
+    if (error) { console.error("itinerary delete failed:", error.message); toast(failText("remove that day")); return; }
     onChanged && onChanged();
   };
 
@@ -8139,10 +9009,16 @@ function ItineraryBuilder({ trip, canEdit, onChanged, embedded }) {
 /*  An operator shouldn't have to remember which tab a booking lives in.      */
 /*  It moves through stages; the page follows it.                             */
 /* ========================================================================== */
-function BookingsTab({ user, enquiries, trips, actions, onOpenProfile }) {
+function BookingsTab({ user, enquiries, trips, actions, onOpenProfile, focus, onFocused }) {
   const [stage, setStage] = useState("enquiries");
   const [editing, setEditing] = useState(null);
-  const [openTripId, setOpenTripId] = useState(null);
+  const [openTripId, setOpenTripId] = useState(() => (focus && focus.id) || null);
+  const [sheetReq, setSheetReq] = useState(() => (focus && focus.sheet ? { sheet: focus.sheet, n: focus.n } : null));
+  useEffect(() => {   // BUILD 55: a notification about a trip opens it; the request is used once
+    if (!focus || !focus.id) return;
+    setEditing(null); setOpenTripId(focus.id); setSheetReq(focus.sheet ? { sheet: focus.sheet, n: focus.n } : null);
+    onFocused && onFocused();
+  }, [focus && focus.n]);
   const [note, setNote] = useState(null);
 
   const meId = user.talentId || user.id;
@@ -8168,7 +9044,8 @@ function BookingsTab({ user, enquiries, trips, actions, onOpenProfile }) {
   }
   const openTrip = myTrips.find((tr) => tr.id === openTripId);
   if (openTrip) {
-    return <TripHub user={user} meId={meId} trip={openTrip} actions={actions} onBack={() => setOpenTripId(null)} />;
+    // one TripHub per trip: a notification that switches trips starts the next one fresh (nothing typed carries over)
+    return <TripHub key={openTrip.id} user={user} meId={meId} trip={openTrip} actions={actions} openSheet={sheetReq} onBack={() => { setOpenTripId(null); setSheetReq(null); }} />;
   }
 
   const STAGES = [
@@ -11297,14 +12174,22 @@ function ProfileEditor({ talent, onClose, onSaved }) {
   const [f, setF] = useState({
     licNumber: t.licenseNumber || "", licExpiry: t.licenseExpiry || "", base: t.base || "",
     years: t.years || 0, pitch: t.pitch || "", phone: t.phone || "",
-    tags: t.tags || [], langs: t.languages || [], vehicle: t.vehicle || "",
+    tags: t.tags || [], langs: (t.languages || []).map((x) => (typeof x === "string" ? { n: x, l: "Fluent" } : x)).filter((x) => x && x.n), vehicle: t.vehicle || "",
   });
   const [photo, setPhoto] = useState(null);
+  const [face, setFace] = useState(null);   // BUILD 55: a new profile photo, chosen but not saved yet
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
   const fileRef = useRef(null);
+  const faceRef = useRef(null);
   const set = (k, v) => setF((x) => ({ ...x, [k]: v }));
   const toggle = (k, v) => setF((x) => ({ ...x, [k]: x[k].includes(v) ? x[k].filter((y) => y !== v) : [...x[k], v] }));
+  // as in onboarding: tap once for Fluent, again for Basic, a third time to remove
+  const cycleLang = (n) => setF((x) => {
+    const cur = x.langs.find((y) => y.n === n);
+    const langs = !cur ? [...x.langs, { n, l: "Fluent" }] : cur.l === "Fluent" ? x.langs.map((y) => (y.n === n ? { ...y, l: "Basic" } : y)) : x.langs.filter((y) => y.n !== n);
+    return { ...x, langs };
+  });
   const specs = isDriver ? ONB_DRIVES : ONB_SPECS;
   const readiness = crewReadiness({ ...t, licenseNumber: f.licNumber.trim(), licensePhoto: !!(t.licensePhoto || photo),
                                     tags: f.tags, languages: f.langs, vehicle: f.vehicle }, t.role);
@@ -11319,10 +12204,27 @@ function ProfileEditor({ talent, onClose, onSaved }) {
     const r = new FileReader(); r.onload = () => setPhoto(r.result); r.readAsDataURL(file);
   };
 
+  const pickFace = (e) => {
+    const file = e.target.files && e.target.files[0]; e.target.value = "";
+    if (!file || !file.type.startsWith("image/")) { setErr("Please choose a photo of yourself."); return; }
+    setErr(null);
+    const r = new FileReader(); r.onload = () => setFace(r.result); r.readAsDataURL(file);
+  };
+
   const save = async () => {
     if (!CLOUD || !t.id) return;
     setBusy(true); setErr(null);
+    let photoPath = null;
     try {
+      let photoUrl = null;
+      if (face) {
+        const blob = await squarePhoto(face);
+        const path = `avatar/${t.id}/${Date.now()}.jpg`;
+        const up = await supabase.storage.from("post-media").upload(path, blob, { contentType: "image/jpeg" });
+        if (up.error) throw new Error(navigator.onLine === false ? failText("upload your photo") : "Your photo didn't upload — " + up.error.message);
+        photoPath = path;
+        photoUrl = supabase.storage.from("post-media").getPublicUrl(path).data.publicUrl;
+      }
       let licensePath = null;
       if (photo) {
         const small = await shrinkImage(photo, 1600, 0.85);
@@ -11338,6 +12240,7 @@ function ProfileEditor({ talent, onClose, onSaved }) {
         base: f.base.trim() || null, years: f.years || 0, pitch: f.pitch.trim() || null, phone: f.phone.trim() || null,
         tags: f.tags, languages: f.langs, vehicle: isDriver ? (f.vehicle || null) : null,
       };
+      if (photoUrl) patch.photo_url = photoUrl;
       // a new photo, or a changed number on a verified licence, goes back to our team to check
       if (licensePath) { patch.license_path = licensePath; patch.license_status = "submitted"; }
       else if (number !== (t.licenseNumber || null) && t.licenseStatus === "verified") patch.license_status = "submitted";
@@ -11347,11 +12250,18 @@ function ProfileEditor({ talent, onClose, onSaved }) {
         const { license_status, ...rest } = patch;
         res = await supabase.from("profiles").update(rest).eq("id", t.id);
       }
-      if (res.error) throw new Error(res.error.message);
+      if (res.error) throw new Error(navigator.onLine === false ? failText("save your profile") : res.error.message);
+      photoPath = null;   // saved: the new photo is theirs now, whatever happens next
+      // the photo it replaces is removed (only ever one of their own, under avatar/<their id>/)
+      const old = String(t.photo || "").split("/object/public/post-media/")[1];
+      if (photoUrl && old && old.startsWith(`avatar/${t.id}/`)) supabase.storage.from("post-media").remove([old]).catch(() => {});
       setBusy(false);
       onSaved && onSaved();
       onClose();
-    } catch (e) { setBusy(false); setErr(e.message || "Couldn't save. Please try again."); }
+    } catch (e) {
+      if (photoPath) supabase.storage.from("post-media").remove([photoPath]).catch(() => {});   // not kept: nothing points to it
+      setBusy(false); setErr(e.message || "Couldn't save. Please try again.");
+    }
   };
 
   const field = { background: C.bg, border: `1px solid ${C.line}`, color: C.ink };
@@ -11371,6 +12281,25 @@ function ProfileEditor({ talent, onClose, onSaved }) {
               {readiness.ready ? "Ready to accept trips" : "Needed before you can accept a trip"}
             </div>
             <ReadinessList readiness={readiness} />
+          </div>
+
+          <div className="text-[11px] font-semibold tracking-[.14em] uppercase mb-2" style={{ color: C.goldText }}>Profile photo</div>
+          <input ref={faceRef} type="file" accept="image/*" onChange={pickFace} className="hidden" />
+          <div className="flex items-center gap-3.5 mb-5">
+            <button type="button" onClick={() => faceRef.current && faceRef.current.click()} aria-label="Choose a profile photo"
+              className="tap rounded-full shrink-0" style={{ padding: 0, border: 0, background: "transparent" }}>
+              <Avatar initials={t.initials || initialsOf(t.name)} src={face || t.photo} size={72} />
+            </button>
+            <div className="flex-1 min-w-0">
+              <button type="button" onClick={() => faceRef.current && faceRef.current.click()}
+                className="tap h-10 px-4 rounded-xl text-[14px] font-semibold inline-flex items-center gap-2"
+                style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }}>
+                <Camera size={16} /> {face || t.photo ? "Change photo" : "Add a photo of yourself"}
+              </button>
+              <p className="text-[12px] mt-1.5 leading-snug" style={{ color: C.muted }}>
+                A clear photo of your face. Operators see it when they book, and guests when they review you.
+              </p>
+            </div>
           </div>
 
           <div className="text-[11px] font-semibold tracking-[.14em] uppercase mb-2" style={{ color: C.goldText }}>Licence</div>
@@ -11409,9 +12338,19 @@ function ProfileEditor({ talent, onClose, onSaved }) {
             {specs.map((s) => <Chip key={s} on={f.tags.includes(s)} onClick={() => toggle("tags", s)}>{s}</Chip>)}
           </div>
 
-          <div className="text-[11px] font-semibold tracking-[.14em] uppercase mb-2" style={{ color: C.goldText }}>Languages</div>
+          <div className="text-[11px] font-semibold tracking-[.14em] uppercase mb-1" style={{ color: C.goldText }}>Languages</div>
+          <div className="text-[12px] mb-2" style={{ color: C.muted }}>Tap once for Fluent, twice for Basic</div>
           <div className="flex flex-wrap gap-2 mb-5">
-            {ONB_LANGS.map((l) => <Chip key={l} on={f.langs.includes(l)} onClick={() => toggle("langs", l)}>{l}</Chip>)}
+            {ONB_LANGS.map((n) => {
+              const cur = f.langs.find((x) => x.n === n);
+              return (
+                <button key={n} type="button" onClick={() => cycleLang(n)} aria-pressed={Boolean(cur)}
+                  className="tap rounded-full pl-3 pr-2.5 py-1.5 text-[13px] font-medium inline-flex items-center gap-1.5"
+                  style={{ background: cur ? C.pine : C.card, border: `1px solid ${cur ? C.pine : C.line}`, color: cur ? "#fff" : C.ink }}>
+                  {n}{cur && <span className="text-[10px] px-1.5 py-0.5 rounded-full" style={{ background: C.gold, color: "#fff" }}>{cur.l}</span>}
+                </button>
+              );
+            })}
           </div>
 
           {isDriver && (
@@ -11567,7 +12506,7 @@ function AddCrewSheet({ trip, actions, onClose }) {
                     const r = crewReadiness(p, role);
                     return (
                       <div key={p.id} className="flex items-center gap-3 px-3.5 py-3" style={{ borderTop: k ? `1px solid ${C.lineSoft}` : "none", background: C.card }}>
-                        <Avatar initials={p.initials} size={36} />
+                        <Avatar initials={p.initials} src={p.photo} size={36} />
                         <div className="flex-1 min-w-0">
                           <div className="text-[14px] font-semibold truncate inline-flex items-center gap-1" style={{ color: C.ink }}>
                             {p.name}{p.verified && <BadgeCheck size={14} color={C.pine} />}
@@ -11659,7 +12598,7 @@ function CrewInvites({ trip, actions }) {
                          : CREW_STATUS[i.status] || [i.status, C.muted];
             return (
               <div key={i.id} className="px-3.5 py-3 flex items-center gap-3" style={{ borderTop: k ? `1px solid ${C.lineSoft}` : "none", background: C.card }}>
-                <Avatar initials={initialsOf(i.name)} size={34} />
+                <Avatar initials={initialsOf(i.name)} src={p ? p.photo : null} size={34} />
                 <div className="flex-1 min-w-0">
                   <div className="text-[14px] font-semibold truncate" style={{ color: C.ink }}>{i.name} <span className="font-normal capitalize" style={{ color: C.muted }}>· {i.role}</span></div>
                   <div className="text-[12px]" style={{ color: label[1] }}>{label[0]}</div>
@@ -12340,7 +13279,7 @@ function AdminDraftsPanel({ adminId, onChanged }) {
         return (
           <div key={r.id} className="rounded-xl p-3 mt-3" style={{ background: C.bg }}>
             <div className="flex items-center gap-3">
-              <Avatar initials={p ? p.initials : "?"} size={34} />
+              <Avatar initials={p ? p.initials : "?"} src={p ? p.photo : null} size={34} />
               <div className="flex-1 min-w-0">
                 <div className="text-[14px] font-semibold truncate" style={{ color: C.ink }}>{p ? p.name : r.operator_id}</div>
                 <div className="text-[12px]" style={{ color: C.muted }}>Asked for {r.pack} drafts · {fmtDate(String(r.created_at || "").slice(0, 10))}</div>
@@ -13461,7 +14400,7 @@ function HotelBookingCard({ b, data, user, compact }) {
   return (
     <div className="rounded-2xl p-4 mb-3" style={{ background: C.card, border: `1px solid ${b.status === "requested" ? C.gold + "66" : C.line}` }}>
       <div className="flex items-start gap-3">
-        <Avatar initials={op?.initials || "?"} size={38} />
+        <Avatar initials={op?.initials || "?"} src={op?.photo} size={38} />
         <div className="flex-1 min-w-0">
           <div className="flex items-center justify-between gap-2">
             <div className="text-[15px] font-semibold truncate" style={{ color: C.ink }}>{op?.company || op?.name || "Tour operator"}</div>
@@ -13762,13 +14701,17 @@ function HotelProfile({ user, onSaved }) {
   const [note, setNote] = useState(null);
   const [err, setErr] = useState(null);
   const [certPreview, setCertPreview] = useState(null);
+  const [loadFailed, setLoadFailed] = useState(false);
   const certRef = useRef();
   const field = { background: C.bg, border: `1px solid ${C.line}`, color: C.ink };
   const stayTowns = Object.entries(DK_TOWNS).filter(([, v]) => v.stay).sort((a, b) => a[1].n.localeCompare(b[1].n));
 
   const load = async () => {
-    const { data } = await supabase.from("profiles").select("*").eq("id", me).maybeSingle();
-    if (!data) return;
+    setLoadFailed(false);
+    const { data: fresh, error } = await supabase.from("profiles").select("*").eq("id", me).maybeSingle();
+    // BUILD 55: without a connection the property opens from what this phone remembers; never "Loading…" for ever
+    const data = fresh || (error ? recallMe(me) : null);
+    if (!data) { setLoadFailed(true); return; }
     setP(data);
     setF({ company: data.company_name || "", name: data.full_name || "", phone: (data.phone || "").replace(/^\+?975/, ""), email: data.email || "",
            town: data.hotel_town || hotelTownKey(data.base) || "", tier: data.hotel_tier || "3", stars: data.star_rating || "", kind: data.stay_kind || "",
@@ -13790,7 +14733,7 @@ function HotelProfile({ user, onSaved }) {
       pitch: f.pitch.trim() || null, license_number: f.licNo.trim() || null,
     }).eq("id", me);
     setBusy(false);
-    if (error) { setErr(error.message); return; }
+    if (error) { setErr(navigator.onLine === false ? failText("save your property") : error.message); return; }
     flash("Saved."); onSaved && onSaved(); load();
   };
   const pickCert = (e) => {
@@ -13813,6 +14756,16 @@ function HotelProfile({ user, onSaved }) {
     setBusy(false);
   };
 
+  if (!f && loadFailed) {
+    return (
+      <div className="px-5 py-6">
+        <Empty Icon={Building2} title="Couldn't open your property"
+          body={navigator.onLine === false ? "You're offline. Your property details open once you're connected." : "Please try again in a moment."} />
+        <button type="button" onClick={load} className="tap w-full h-11 rounded-xl text-[14px] font-semibold mt-3"
+          style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }}>Try again</button>
+      </div>
+    );
+  }
   if (!f) return <div className="px-5 py-6 text-[13px]" style={{ color: C.muted }}>Loading…</div>;
   const st = p?.license_status || "none";
   return (
