@@ -64,7 +64,7 @@ const CLOUD = Boolean(supabase);
   } catch (e) {}
 })();
 const DEMO_MODE = false;   // set true only for local demos without a database
-const BUILD = "BUILD 50 — 9 Oct";   // bump every deploy; shown at the top of the welcome screen
+const BUILD = "BUILD 51 — 9 Oct";   // bump every deploy; shown at the top of the welcome screen
 // which device someone is on — shown beside the build so a screenshot tells us both
 const DEVICE = (() => {
   try {
@@ -1173,6 +1173,8 @@ export default function App() {
         .dk-map-sticky{ position: sticky; top: 8px; z-index: 20; background: #FFFFFF; padding-bottom: 6px; }
         .dk-note{ animation: noteIn .32s cubic-bezier(.2,.8,.2,1) both; }
         .dk-note-under{ animation: fade .25s ease both; }
+        .dk-note-over{ animation: noteUp .28s cubic-bezier(.2,.8,.2,1) both; }
+        @keyframes noteUp{ from{ opacity: 0; transform: translateY(10px); } to{ opacity: 1; transform: none; } }
         @keyframes segIn{ from{ opacity: 0; } to{ opacity: 1; } }
         .dk-seg{ animation: segIn .5s ease both; }
         .dk-gm-label{ text-shadow: 0 0 3px rgba(0,0,0,.95), 0 0 1px rgba(0,0,0,.95); white-space: nowrap; }
@@ -9343,6 +9345,9 @@ function loadMapLibre() {
   if (window.maplibregl) return Promise.resolve(window.maplibregl);
   if (_libreP) return _libreP;
   _libreP = new Promise((resolve, reject) => {
+    // BUILD 51: the essential MapLibre rules ship inline, so the canvas, pins and controls are laid out
+    // correctly even if the CDN stylesheet is slow or blocked; the CDN file still loads for the finer details.
+    if (!document.getElementById("dk-ml-base")) { const st = document.createElement("style"); st.id = "dk-ml-base"; st.textContent = DK_ML_BASE_CSS; document.head.appendChild(st); }
     const css = document.createElement("link"); css.rel = "stylesheet"; css.href = "https://cdnjs.cloudflare.com/ajax/libs/maplibre-gl/4.7.1/maplibre-gl.min.css"; document.head.appendChild(css);
     const sc = document.createElement("script"); sc.src = "https://cdnjs.cloudflare.com/ajax/libs/maplibre-gl/4.7.1/maplibre-gl.min.js"; sc.async = true;
     sc.onload = () => resolve(window.maplibregl); sc.onerror = () => { _libreP = null; reject(new Error("MapLibre failed to load")); };
@@ -9350,6 +9355,7 @@ function loadMapLibre() {
   });
   return _libreP;
 }
+const DK_ML_BASE_CSS = `.maplibregl-map{overflow:hidden;position:relative;-webkit-tap-highlight-color:transparent}.maplibregl-canvas{left:0;position:absolute;top:0}.maplibregl-canvas-container.maplibregl-interactive{cursor:grab;user-select:none}.maplibregl-canvas-container.maplibregl-touch-zoom-rotate.maplibregl-touch-drag-pan,.maplibregl-canvas-container.maplibregl-touch-zoom-rotate.maplibregl-touch-drag-pan .maplibregl-canvas{touch-action:none}.maplibregl-ctrl-top-left,.maplibregl-ctrl-top-right,.maplibregl-ctrl-bottom-left,.maplibregl-ctrl-bottom-right{pointer-events:none;position:absolute;z-index:2}.maplibregl-ctrl-top-left{left:0;top:0}.maplibregl-ctrl-top-right{right:0;top:0}.maplibregl-ctrl-bottom-left{bottom:0;left:0}.maplibregl-ctrl-bottom-right{bottom:0;right:0}.maplibregl-ctrl{clear:both;pointer-events:auto;transform:translate(0)}.maplibregl-ctrl-bottom-right .maplibregl-ctrl{float:right;margin:0 10px 10px 0}.maplibregl-ctrl-bottom-left .maplibregl-ctrl{float:left;margin:0 0 10px 10px}.maplibregl-ctrl-group{background:#fff;border-radius:8px;box-shadow:0 1px 3px rgba(0,0,0,.25)}.maplibregl-ctrl-group button{background:transparent;border:0;box-sizing:border-box;cursor:pointer;display:block;height:29px;outline:none;padding:0;width:29px}.maplibregl-ctrl-group button+button{border-top:1px solid #ddd}.maplibregl-ctrl button .maplibregl-ctrl-icon{display:block;height:100%;width:100%;background-position:center;background-repeat:no-repeat}.maplibregl-ctrl button.maplibregl-ctrl-zoom-in .maplibregl-ctrl-icon{background-image:url("data:image/svg+xml;charset=utf-8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 29 29'><path d='M14.5 8.5a1.5 1.5 0 0 0-1.5 1.5v3h-3a1.5 1.5 0 0 0 0 3h3v3a1.5 1.5 0 0 0 3 0v-3h3a1.5 1.5 0 0 0 0-3h-3v-3a1.5 1.5 0 0 0-1.5-1.5z' fill='%23333'/></svg>")}.maplibregl-ctrl button.maplibregl-ctrl-zoom-out .maplibregl-ctrl-icon{background-image:url("data:image/svg+xml;charset=utf-8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 29 29'><path d='M10 13a1.5 1.5 0 0 0 0 3h9a1.5 1.5 0 0 0 0-3h-9z' fill='%23333'/></svg>")}.maplibregl-ctrl-attrib{background:rgba(255,255,255,.8);font:9px/1.2 system-ui,sans-serif;margin:0;padding:2px 5px}.maplibregl-ctrl-attrib.maplibregl-compact{border-radius:12px;margin:10px;min-height:20px;padding:2px 24px 2px 4px;position:relative}.maplibregl-ctrl-attrib.maplibregl-compact:not(.maplibregl-compact-show){padding:0;width:20px;height:20px}.maplibregl-ctrl-attrib.maplibregl-compact:not(.maplibregl-compact-show) .maplibregl-ctrl-attrib-inner{display:none}.maplibregl-ctrl-attrib-button{background:transparent;border:0;cursor:pointer;height:20px;position:absolute;right:0;top:0;width:20px}.maplibregl-ctrl-attrib a{color:inherit;text-decoration:none}.maplibregl-marker{left:0;position:absolute;top:0;will-change:transform}.maplibregl-cooperative-gesture-screen{align-items:center;background:rgba(0,0,0,.4);color:#fff;display:flex;font-size:1.1em;inset:0;justify-content:center;line-height:1.2;opacity:0;padding:1rem;pointer-events:none;position:absolute;text-align:center;transition:opacity 1s ease 1s;z-index:99999}.maplibregl-cooperative-gesture-screen.maplibregl-show{opacity:1;transition:opacity .05s}.maplibregl-cooperative-gesture-screen .maplibregl-mobile-message{display:none}@media (hover:none){.maplibregl-cooperative-gesture-screen .maplibregl-desktop-message{display:none}.maplibregl-cooperative-gesture-screen .maplibregl-mobile-message{display:block}}`;
 const LIBRE_STYLES = {
   satellite: { version: 8, sources: { esri: { type: "raster", tiles: ["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"], tileSize: 256, maxzoom: 18, attribution: "Imagery © Esri, Maxar, Earthstar Geographics" } }, layers: [{ id: "esri", type: "raster", source: "esri" }] },
   topo: { version: 8, sources: { otm: { type: "raster", tiles: ["https://a.tile.opentopomap.org/{z}/{x}/{y}.png", "https://b.tile.opentopomap.org/{z}/{x}/{y}.png", "https://c.tile.opentopomap.org/{z}/{x}/{y}.png"], tileSize: 256, maxzoom: 17, attribution: "© OpenStreetMap contributors, SRTM · © OpenTopoMap (CC-BY-SA)" } }, layers: [{ id: "otm", type: "raster", source: "otm" }] },
@@ -9363,6 +9369,8 @@ function DkLibreMap({ plan, selected, onSelect }) {
   const [failed, setFailed] = useState(false);
   const [kind, setKind] = useState("satellite");
   const [wide, setWide] = useState(false);
+  const [notice, setNotice] = useState(null);     // BUILD 51: one plain line when the imagery had to be swapped
+  const tilesRef = useRef({ ok: 0, bad: 0 });      // BUILD 51: tile health, so a blank map heals itself
   const day = selected ? plan.days.find((d) => d.day === selected) : null;
   const onSelectRef = useRef(onSelect); onSelectRef.current = onSelect;
 
@@ -9384,11 +9392,39 @@ function DkLibreMap({ plan, selected, onSelect }) {
       const map = new ml.Map({ container: boxRef.current, style: LIBRE_STYLES.satellite, center: [90.4, 27.5], zoom: 6.3, attributionControl: { compact: true }, cooperativeGestures: true, pitchWithRotate: false, dragRotate: false, touchPitch: false });
       map.addControl(new ml.NavigationControl({ showCompass: false }), "bottom-right");
       map.on("click", () => onSelectRef.current && onSelectRef.current(null));
-      map.on("load", () => { if (on) { mapRef.current = map; setReady(true); } });
-      map.on("error", (e) => { if (e && e.error && /style|load/i.test(String(e.error.message || "")) && !mapRef.current) { setFailed(true); } });
+      // BUILD 51: count tiles that arrive and tiles that fail, and size the canvas once the box is laid out
+      map.on("data", (e) => { if (e && e.tile && e.dataType === "source") tilesRef.current.ok += 1; });
+      map.on("error", (e) => {
+        if (e && (e.tile || e.sourceId)) { tilesRef.current.bad += 1; return; }
+        if (e && e.error && /style|load/i.test(String(e.error.message || "")) && !mapRef.current) { setFailed(true); }
+      });
+      map.on("load", () => {
+        if (!on) return;
+        mapRef.current = map; setReady(true);
+        try { map.resize(); } catch (e) {}
+        requestAnimationFrame(() => { try { map.resize(); } catch (e) {} });
+        setTimeout(() => { try { map.resize(); } catch (e) {} }, 400);
+      });
     }).catch(() => { if (on) setFailed(true); });
-    return () => { on = false; if (mapRef.current) { mapRef.current.remove(); mapRef.current = null; } };
+    const onVis = () => { if (!document.hidden && mapRef.current) { try { mapRef.current.resize(); } catch (e) {} } };
+    document.addEventListener("visibilitychange", onVis);
+    return () => { on = false; document.removeEventListener("visibilitychange", onVis); if (mapRef.current) { mapRef.current.remove(); mapRef.current = null; } };
   }, []);
+
+  // BUILD 51: watchdog — if no satellite tile has arrived 7 s after the map is ready, switch to contours;
+  // if contours bring nothing either, hand over to the drawn route so the screen is never an empty box.
+  useEffect(() => {
+    if (!ready) return;
+    tilesRef.current = { ok: 0, bad: 0 };
+    const t = setTimeout(() => {
+      const { ok, bad } = tilesRef.current;
+      if (ok > 0) return;
+      try { window.__bthMapDiag = { kind, ok, bad, at: new Date().toISOString() }; } catch (e) {}
+      if (kind === "satellite") { setKind("topo"); setNotice("Satellite imagery didn't come through on this connection — showing contours instead."); }
+      else { setFailed(true); setNotice("Map tiles can't be reached from this network right now — showing the route sketch."); }
+    }, 7000);
+    return () => clearTimeout(t);
+  }, [ready, kind]);
 
   // style switch keeps the route: re-add layers after the new style loads
   const drawRoute = () => {
@@ -9435,17 +9471,22 @@ function DkLibreMap({ plan, selected, onSelect }) {
     if (day) { (day.pts && day.pts.length ? day.pts : [DK_TOWNS[day.night || day.to || day.from]]).forEach((p) => p && b.extend([p.lng, p.lat])); if (!day.moving) { const t = DK_TOWNS[day.night || day.to || day.from]; b.extend([t.lng + 0.16, t.lat + 0.12]); b.extend([t.lng - 0.16, t.lat - 0.12]); } }
     else routePts.forEach((p) => b.extend([p.lng, p.lat]));
     const reduce = typeof matchMedia !== "undefined" && matchMedia("(prefers-reduced-motion: reduce)").matches;
-    map.fitBounds(b, { padding: day ? { top: wide ? 40 : 36, bottom: 36, left: 36, right: wide && day ? 290 : 36 } : 30, maxZoom: 13, duration: reduce ? 0 : 800, essential: true, easing: easeInOut });
+    map.fitBounds(b, { padding: day ? { top: wide ? 40 : 36, bottom: wide ? 36 : 150, left: 36, right: wide && day ? 290 : 36 } : 30, maxZoom: 13, duration: reduce ? 0 : 800, essential: true, easing: easeInOut });
   }, [ready, selected, plan]);
 
   let note = null;
   if (day) {
     const townKey = day.night || day.to || day.from; const town = DK_TOWNS[townKey];
     const planned = (day.acts || []).map((a) => String(a).toLowerCase());
-    const ideas = (DK_SEE[townKey] || []).filter((x) => !planned.some((a) => a.includes(x.t.toLowerCase().split(",")[0]))).slice(0, 2);
+    const ideas = (DK_SEE[townKey] || []).filter((x) => !planned.some((a) => a.includes(x.t.toLowerCase().split(",")[0]))).slice(0, 3);
     note = { town, ideas, passes: [], planned: (day.acts || []).length, profile: [] };
   }
-  if (failed) return <DkRouteMap plan={plan} selected={selected} onSelect={onSelect} />;
+  if (failed) return (
+    <div>
+      <DkRouteMap plan={plan} selected={selected} onSelect={onSelect} />
+      {notice && <div className="text-[11.5px] mt-1.5" style={{ color: C.muted }}>{notice}</div>}
+    </div>
+  );
   return (
     <div className="dk-map-sticky">
       <div className="relative rounded-2xl overflow-hidden" style={{ border: `1px solid ${C.line}`, background: "#0b1a12", aspectRatio: wide ? "2 / 1" : "4 / 3" }}>
@@ -9463,11 +9504,14 @@ function DkLibreMap({ plan, selected, onSelect }) {
             <DkNoteBody note={note} day={day} onClose={() => onSelect && onSelect(null)} />
           </div>
         )}
+        {ready && note && !wide && (
+          <div className="absolute left-2 right-2 bottom-2 dk-note-over" style={{ maxHeight: "48%", overflowY: "auto", zIndex: 6 }} onClick={(e) => e.stopPropagation()}>
+            <DkNoteBody note={note} day={day} onClose={() => onSelect && onSelect(null)} />
+          </div>
+        )}
         {ready && !selected && <div className="absolute left-2 bottom-2 text-[10.5px] rounded-md px-2 py-1 pointer-events-none" style={{ background: "rgba(255,255,255,.9)", color: C.muted, zIndex: 5 }}>Tap a day or a stop to fly in</div>}
       </div>
-      {ready && note && !wide && (
-        <div className="dk-note-under mt-2"><DkNoteBody note={note} day={day} onClose={() => onSelect && onSelect(null)} /></div>
-      )}
+      {notice && <div className="text-[11.5px] mt-1.5" style={{ color: C.muted }}>{notice}</div>}
       <div className="flex flex-wrap gap-1.5 mt-2">
         {stops.map((st) => { const on = day && (day.night === st.key || day.to === st.key);
           return (
