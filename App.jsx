@@ -64,7 +64,7 @@ const CLOUD = Boolean(supabase);
   } catch (e) {}
 })();
 const DEMO_MODE = false;   // set true only for local demos without a database
-const BUILD = "BUILD 52 — 9 Oct";   // bump every deploy; shown at the top of the welcome screen
+const BUILD = "BUILD 53 — 9 Oct";   // bump every deploy; shown at the top of the welcome screen
 // which device someone is on — shown beside the build so a screenshot tells us both
 const DEVICE = (() => {
   try {
@@ -1175,6 +1175,12 @@ export default function App() {
         .dk-note-under{ animation: fade .25s ease both; }
         .dk-note-over{ animation: noteUp .28s cubic-bezier(.2,.8,.2,1) both; }
         .dk-note-side{ animation: noteSide .28s cubic-bezier(.2,.8,.2,1) both; }
+        .dk-ter-labels > *{ position: absolute; left: 0; top: 0; white-space: nowrap; will-change: transform; }
+        .dk-ter-stop{ pointer-events: auto; display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px 2px 2px; border-radius: 999px; background: rgba(255,255,255,.95); border: 1px solid rgba(0,0,0,.15); box-shadow: 0 1px 3px rgba(0,0,0,.3); font: 600 11px/1 -apple-system, Inter, system-ui, sans-serif; color: #1D1D1F; cursor: pointer; }
+        .dk-ter-stop .dk-ter-n{ width: 18px; height: 18px; border-radius: 50%; background: #0066CC; color: #fff; display: inline-flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 700; }
+        .dk-ter-stop.on{ background: #7A2E2E; color: #fff; border-color: #fff; } .dk-ter-stop.on .dk-ter-n{ background: #fff; color: #7A2E2E; }
+        .dk-ter-pass{ font: 600 10.5px/1.2 -apple-system, Inter, system-ui, sans-serif; color: #fff; text-shadow: 0 0 3px rgba(0,0,0,.95), 0 0 6px rgba(0,0,0,.6); }
+        .dk-ter-pick{ font: 700 11px/1.2 -apple-system, Inter, system-ui, sans-serif; padding: 3px 7px; border-radius: 6px; background: rgba(255,255,255,.96); color: #1D1D1F; border: 1px solid rgba(0,0,0,.2); box-shadow: 0 1px 3px rgba(0,0,0,.25); }
         @keyframes noteSide{ from{ opacity: 0; transform: translateX(10px); } to{ opacity: 1; transform: none; } }
         @keyframes noteUp{ from{ opacity: 0; transform: translateY(10px); } to{ opacity: 1; transform: none; } }
         @keyframes segIn{ from{ opacity: 0; } to{ opacity: 1; } }
@@ -9826,7 +9832,9 @@ function DkReliefMap({ plan, selected, onSelect, fallbackNote }) {
   const boxRef = useRef(null);
   const [box, setBox] = useState({ w: 360, h: 270 });
   const [img, setImg] = useState(null);
-  const [mode, setMode] = useState("relief");   // relief | satellite
+  const terrainOK = useMemo(() => dkTerrainCovers(plan), [plan]);   // BUILD 53: the real 3-D model covers the west of the country
+  const [mode, setMode] = useState(() => { if (fallbackNote) return "relief"; try { return localStorage.getItem(DK_TERRAIN_PREF) === "terrain" ? "terrain" : "relief"; } catch (_e) { return "relief"; } });   // relief | terrain | satellite
+  const pickMode = (m) => { setMode(m); try { if (m === "terrain") localStorage.setItem(DK_TERRAIN_PREF, "terrain"); else if (m === "relief") localStorage.removeItem(DK_TERRAIN_PREF); } catch (_e) {} };
   const day = selected ? plan.days.find((d) => d.day === selected) : null;
   const wide = box.w >= 560;
 
@@ -9892,7 +9900,8 @@ function DkReliefMap({ plan, selected, onSelect, fallbackNote }) {
     const ideas = (DK_SEE[townKey] || []).filter((x) => !planned.some((a) => a.includes(x.t.toLowerCase().split(",")[0]))).slice(0, 3);
     note = { town, ideas, passes: [], planned: (day.acts || []).length, profile: [] };
   }
-  if (mode === "satellite") return <DkLibreMap plan={plan} selected={selected} onSelect={onSelect} onBack={() => setMode("relief")} />;
+  if (mode === "satellite") return <DkLibreMap plan={plan} selected={selected} onSelect={onSelect} onBack={() => pickMode("relief")} />;
+  if (mode === "terrain" && terrainOK && !fallbackNote) return <DkTerrainMap plan={plan} selected={selected} onSelect={onSelect} onBack={() => pickMode("relief")} />;
 
   const label = (t, x, y, size, weight, anchor) => (
     <text x={x} y={y} fontSize={size} fontWeight={weight || 600} textAnchor={anchor || "middle"} fill="#fff" stroke="rgba(0,0,0,.75)" strokeWidth={3} paintOrder="stroke" style={{ fontFamily: "-apple-system, Inter, system-ui, sans-serif" }}>{t}</text>
@@ -9938,7 +9947,8 @@ function DkReliefMap({ plan, selected, onSelect, fallbackNote }) {
         {!img && <div className="absolute inset-0 flex items-center justify-center" style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, color: C.muted }}>Drawing the relief…</div>}
         <div className="absolute left-2 top-2" style={{ position: "absolute", left: 8, top: 8, zIndex: 5, display: "inline-flex", borderRadius: 10, overflow: "hidden", background: "rgba(255,255,255,.92)", boxShadow: "0 1px 3px rgba(0,0,0,.25)" }} onClick={(e) => e.stopPropagation()}>
           <span className="px-2.5 h-7 text-[11px] font-semibold" style={{ padding: "0 10px", height: 28, display: "inline-flex", alignItems: "center", fontSize: 11, fontWeight: 600, background: C.pine, color: "#fff" }}>Relief</span>
-          {!fallbackNote && <button type="button" onClick={() => setMode("satellite")} className="tap px-2.5 h-7 text-[11px] font-semibold" style={{ padding: "0 10px", height: 28, fontSize: 11, fontWeight: 600, background: "transparent", color: C.ink, border: 0 }}>Satellite</button>}
+          {!fallbackNote && terrainOK && <button type="button" onClick={() => pickMode("terrain")} className="tap px-2.5 h-7 text-[11px] font-semibold" style={{ padding: "0 10px", height: 28, fontSize: 11, fontWeight: 600, background: "transparent", color: C.ink, border: 0 }}>Terrain</button>}
+          {!fallbackNote && <button type="button" onClick={() => pickMode("satellite")} className="tap px-2.5 h-7 text-[11px] font-semibold" style={{ padding: "0 10px", height: 28, fontSize: 11, fontWeight: 600, background: "transparent", color: C.ink, border: 0 }}>Satellite</button>}
         </div>
         {note && wide && (
           <div className="absolute right-2 top-2 dk-note-side" style={{ position: "absolute", right: 8, top: 8, width: 250, maxHeight: "calc(100% - 16px)", overflowY: "auto", zIndex: 5 }} onClick={(e) => e.stopPropagation()}>
@@ -9954,6 +9964,368 @@ function DkReliefMap({ plan, selected, onSelect, fallbackNote }) {
         <div style={{ position: "absolute", right: 8, bottom: 6, fontSize: 9, color: "rgba(255,255,255,.85)", textShadow: "0 0 3px rgba(0,0,0,.8)", pointerEvents: "none" }}>Stylised relief · heights surveyed</div>
       </div>
       {fallbackNote && <div className="text-[11.5px] mt-1.5" style={{ color: C.muted }}>{fallbackNote}</div>}
+      <div className="flex flex-wrap gap-1.5 mt-2">
+        {stops.map((st) => { const on = day && (day.night === st.key || day.to === st.key);
+          return (
+            <button key={st.key} type="button" onClick={() => onSelect && onSelect(on ? null : st.day)} className="tap inline-flex items-center gap-1.5 rounded-full pl-1 pr-2.5 py-0.5 text-[12px]"
+              style={{ background: on ? C.pineSoft : C.card, border: `1px solid ${on ? C.pine : C.line}`, color: on ? C.pine : C.muted }}>
+              <span className="w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold" style={{ background: on ? C.pine : C.grey, color: on ? "#fff" : C.ink }}>{st.n}</span>{DK_TOWNS[st.key].n}
+            </button>
+          ); })}
+      </div>
+    </div>
+  );
+}
+
+/* ── Terrain: a real 3-D model of western Bhutan (Paro · Haa · Thimphu · Punakha · Wangdue · Gangtey).
+   Heights come from the Copernicus 30 m elevation model, roads and rivers from OpenStreetMap — prepared from the
+   Astra terrain explorer and reduced to three small files in /public (terrain-west-v1.*) that are fetched only when this view is
+   opened (about 1 MB once, then cached for a year). The renderer (three.js) loads from the CDN on demand, so the
+   app bundle does not grow. If anything fails — no WebGL, no network — the relief model takes over. ── */
+const DK_TERRAIN = { base: "/terrain-west-v1", W: 89.25, E: 90.38, S: 27.2, N: 27.88 };   // files: terrain-west-v1.json, -h.webp (heights), .webp (colour)
+const DK_THREE_URL = "https://cdnjs.cloudflare.com/ajax/libs/three.js/0.160.0/three.min.js";
+const DK_TERRAIN_PREF = "bth_map_mode";
+function dkTerrainCovers(plan) {
+  const m = 0.005;
+  const inside = (p) => p && p.lng >= DK_TERRAIN.W + m && p.lng <= DK_TERRAIN.E - m && p.lat >= DK_TERRAIN.S + m && p.lat <= DK_TERRAIN.N - m;
+  let any = false;
+  for (const d of (plan && plan.days) || []) {
+    for (const k of [d.from, d.to, d.night]) if (k && DK_TOWNS[k]) { any = true; if (!inside(DK_TOWNS[k])) return false; }
+    for (const p of d.pts || []) { any = true; if (!inside(p)) return false; }
+  }
+  return any;
+}
+let _threeP = null;
+function loadThree() {
+  if (typeof window === "undefined") return Promise.reject(new Error("no window"));
+  if (window.THREE) return Promise.resolve(window.THREE);
+  if (_threeP) return _threeP;
+  _threeP = new Promise((resolve, reject) => {
+    const sc = document.createElement("script"); sc.src = DK_THREE_URL; sc.async = true;
+    sc.onload = () => (window.THREE ? resolve(window.THREE) : reject(new Error("three.js did not initialise")));
+    sc.onerror = () => { _threeP = null; reject(new Error("three.js failed to load")); };
+    document.head.appendChild(sc);
+  });
+  return _threeP;
+}
+let _terrainP = null;
+function loadTerrainData() {
+  if (_terrainP) return _terrainP;
+  const img = (src) => new Promise((res, rej) => { const im = new Image(); im.decoding = "async"; im.onload = () => res(im); im.onerror = () => rej(new Error("could not load " + src)); im.src = src; });
+  _terrainP = Promise.all([
+    fetch(DK_TERRAIN.base + ".json").then((r) => { if (!r.ok) throw new Error("terrain data " + r.status); return r.json(); }),
+    img(DK_TERRAIN.base + "-h.webp"),
+    img(DK_TERRAIN.base + ".webp"),
+  ]).then(([meta, hImg, tex]) => {
+    const C = meta.cols, R = meta.rows;
+    if (hImg.naturalWidth !== C || hImg.naturalHeight !== R) throw new Error("terrain heights do not match the grid");
+    const cv = document.createElement("canvas"); cv.width = C; cv.height = R;
+    const g = cv.getContext("2d", { willReadFrequently: true }); g.drawImage(hImg, 0, 0);
+    const px = g.getImageData(0, 0, C, R).data;
+    const heights = new Float32Array(C * R);
+    for (let i = 0; i < C * R; i++) heights[i] = px[i * 4] * 256 + px[i * 4 + 1];   // metres = R*256 + G (lossless)
+    const u = meta.unit || 1e-5, W0 = meta.bounds[0], S0 = meta.bounds[1];
+    const dec = (arr) => { const out = []; let x = 0, y = 0; for (let i = 0; i + 1 < arr.length; i += 2) { x += arr[i]; y += arr[i + 1]; out.push([W0 + x * u, S0 + y * u]); } return out; };
+    return {
+      bounds: meta.bounds, cols: C, rows: R, widthM: meta.widthM, heightM: meta.heightM, credit: meta.credit || {}, heights, tex,
+      roads: (meta.roads || []).map((r) => ({ c: r.c, pts: dec(r.p) })),
+      rivers: (meta.rivers || []).map((r) => ({ n: r.n, pts: dec(r.p) })),
+      contours: (meta.contours || []).map((c) => ({ e: c.e, pts: dec(c.p) })),
+    };
+  }).catch((e) => { _terrainP = null; throw e; });
+  return _terrainP;
+}
+
+/* The scene itself: plain three.js driven through a small imperative handle, so React only owns the overlays. */
+function dkTerrainScene(THREE, D, el, labelsEl, cb) {
+  const B = D.bounds, W = D.widthM, H = D.heightM, C = D.cols, R = D.rows, heights = D.heights;
+  const clamp = (x, a, b) => Math.min(b, Math.max(a, x)), lerp = (a, b, t) => a + (b - a) * t, DEG = Math.PI / 180, DIAG = Math.hypot(W, H);
+  let minH = Infinity, maxH = -Infinity; for (let i = 0; i < heights.length; i++) { if (heights[i] < minH) minH = heights[i]; if (heights[i] > maxH) maxH = heights[i]; }
+  const floorH = Math.floor(minH / 500) * 500 - 250, spacing = Math.max(W / (C - 1), H / (R - 1));
+  const toWorld = (lon, lat) => ({ x: ((lon - B[0]) / (B[2] - B[0]) - 0.5) * W, z: (0.5 - (lat - B[1]) / (B[3] - B[1])) * H });
+  const toGeo = (x, z) => ({ lon: B[0] + (x / W + 0.5) * (B[2] - B[0]), lat: B[3] - (z / H + 0.5) * (B[3] - B[1]) });
+  const meshHeight = (x, z) => { const u = clamp(x / W + 0.5, 0, 1) * (C - 1), v = clamp(z / H + 0.5, 0, 1) * (R - 1), c = Math.min(C - 2, Math.floor(u)), r = Math.min(R - 2, Math.floor(v)), fx = u - c, fy = v - r, i = r * C + c; const h00 = heights[i], h10 = heights[i + 1], h01 = heights[i + C], h11 = heights[i + C + 1]; const h = fx + fy <= 1 ? h00 + fx * (h10 - h00) + fy * (h01 - h00) : h11 + (1 - fx) * (h01 - h11) + (1 - fy) * (h10 - h11); return h - floorH; };
+
+  const scene = new THREE.Scene(); scene.background = new THREE.Color("#e7eee6");
+  const camera = new THREE.PerspectiveCamera(38, 1, 10, DIAG * 20);
+  const phone = typeof matchMedia !== "undefined" && matchMedia("(max-width: 700px)").matches;
+  const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, powerPreference: "high-performance" });   // throws without WebGL
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, phone ? 1.5 : 2));
+  renderer.outputColorSpace = THREE.SRGBColorSpace; renderer.setClearColor("#e7eee6");
+  const canvas = renderer.domElement; canvas.style.display = "block"; canvas.style.width = "100%"; canvas.style.height = "100%"; canvas.style.touchAction = "pan-y"; canvas.setAttribute("aria-label", "3-D terrain of western Bhutan with the planned route");
+  el.appendChild(canvas);
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x8b9177, 2));
+  const sun = new THREE.DirectionalLight(0xffffff, 0.65); sun.position.set(-W, Math.max(W, H), H / 2); scene.add(sun);
+
+  // the ground
+  const vtx = new Float32Array(C * R * 3), uv = new Float32Array(C * R * 2), index = new Uint32Array((C - 1) * (R - 1) * 6);
+  for (let r = 0; r < R; r++) for (let c = 0; c < C; c++) { const i = r * C + c; vtx[i * 3] = (c / (C - 1) - 0.5) * W; vtx[i * 3 + 1] = heights[i] - floorH; vtx[i * 3 + 2] = (r / (R - 1) - 0.5) * H; uv[i * 2] = c / (C - 1); uv[i * 2 + 1] = 1 - r / (R - 1); }
+  let k = 0; for (let r = 0; r < R - 1; r++) for (let c = 0; c < C - 1; c++) { const i = r * C + c; index[k++] = i; index[k++] = i + C; index[k++] = i + 1; index[k++] = i + 1; index[k++] = i + C; index[k++] = i + C + 1; }
+  const geometry = new THREE.BufferGeometry(); geometry.setAttribute("position", new THREE.BufferAttribute(vtx, 3)); geometry.setAttribute("uv", new THREE.BufferAttribute(uv, 2)); geometry.setIndex(new THREE.BufferAttribute(index, 1)); geometry.computeVertexNormals(); geometry.computeBoundingSphere();
+  const texture = new THREE.Texture(D.tex); texture.colorSpace = THREE.SRGBColorSpace; texture.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy()); texture.needsUpdate = true;
+  const groundMat = new THREE.MeshLambertMaterial({ color: 0xffffff, map: texture, side: THREE.FrontSide });
+  const terrain = new THREE.Mesh(geometry, groundMat); scene.add(terrain);
+  // the skirt: a wall down from the edges, so the block reads as a slab
+  const edge = []; for (let c = 0; c < C; c++) edge.push(c); for (let r = 1; r < R; r++) edge.push(r * C + C - 1); for (let c = C - 2; c >= 0; c--) edge.push((R - 1) * C + c); for (let r = R - 2; r > 0; r--) edge.push(r * C);
+  const sk = []; for (let n = 0; n < edge.length; n++) { const a = edge[n], b = edge[(n + 1) % edge.length]; const ax = vtx[a * 3], ay = vtx[a * 3 + 1], az = vtx[a * 3 + 2], bx = vtx[b * 3], by = vtx[b * 3 + 1], bz = vtx[b * 3 + 2]; sk.push(ax, ay, az, bx, by, bz, ax, 0, az, bx, by, bz, bx, 0, bz, ax, 0, az); }
+  const skirtGeo = new THREE.BufferGeometry(); skirtGeo.setAttribute("position", new THREE.Float32BufferAttribute(sk, 3)); skirtGeo.computeVertexNormals();
+  const skirt = new THREE.Mesh(skirtGeo, new THREE.MeshLambertMaterial({ color: 0x8b9d78, side: THREE.DoubleSide })); scene.add(skirt);
+
+  // lines draped on the ground
+  const clipSeg = (a, b) => { let x0 = a.x, z0 = a.z, x1 = b.x, z1 = b.z; const dx = x1 - x0, dz = z1 - z0; let t0 = 0, t1 = 1; const p = [-dx, dx, -dz, dz], q = [x0 + W / 2, W / 2 - x0, z0 + H / 2, H / 2 - z0]; for (let i = 0; i < 4; i++) { if (Math.abs(p[i]) < 1e-10) { if (q[i] < 0) return null; } else { const t = q[i] / p[i]; if (p[i] < 0) t0 = Math.max(t0, t); else t1 = Math.min(t1, t); if (t0 > t1) return null; } } return [{ x: x0 + t0 * dx, z: z0 + t0 * dz }, { x: x0 + t1 * dx, z: z0 + t1 * dz }]; };
+  const ribbon = (paths, width, color, lift, opacity, over) => {   // over: drawn on top of the ground, like ink on a map
+    const verts = [];
+    for (const path of paths) for (let i = 1; i < path.length; i++) {
+      const seg = clipSeg(toWorld(path[i - 1][0], path[i - 1][1]), toWorld(path[i][0], path[i][1])); if (!seg) continue;
+      const [a, b] = seg, dx = b.x - a.x, dz = b.z - a.z, len = Math.hypot(dx, dz); if (len < 0.1) continue;
+      const nx = -dz / len * width / 2, nz = dx / len * width / 2, n = Math.max(1, Math.ceil(len / (spacing * 0.85)));
+      for (let j = 0; j < n; j++) { const t0 = j / n, t1 = (j + 1) / n, x0 = lerp(a.x, b.x, t0), z0 = lerp(a.z, b.z, t0), x1 = lerp(a.x, b.x, t1), z1 = lerp(a.z, b.z, t1);
+        const A = [x0 + nx, meshHeight(x0 + nx, z0 + nz) + lift, z0 + nz], Q = [x0 - nx, meshHeight(x0 - nx, z0 - nz) + lift, z0 - nz], E = [x1 + nx, meshHeight(x1 + nx, z1 + nz) + lift, z1 + nz], F = [x1 - nx, meshHeight(x1 - nx, z1 - nz) + lift, z1 - nz];
+        verts.push(...A, ...E, ...Q, ...Q, ...E, ...F); }
+    }
+    const geo = new THREE.BufferGeometry(); geo.setAttribute("position", new THREE.Float32BufferAttribute(verts, 3));
+    return new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color, side: THREE.DoubleSide, transparent: opacity < 1, opacity, depthWrite: false, depthTest: !over }));
+  };
+  const carto = 85;   // metres: about one screen pixel when a day fills the view
+  const base = new THREE.Group(); scene.add(base);
+  const roadPaths = D.roads.map((r) => r.pts), riverPaths = D.rivers.map((r) => r.pts);
+  const roadBack = ribbon(roadPaths, carto * 1.8, 0xfff9df, 15, 1); roadBack.renderOrder = 3; base.add(roadBack);
+  const road = ribbon(roadPaths, carto, 0xbb903e, 18, 1); road.renderOrder = 4; base.add(road);
+  const river = ribbon(riverPaths, carto * 1.3, 0x3789a4, 13, 0.97); river.renderOrder = 2; base.add(river);
+  { const cl = []; for (const c of D.contours) for (let i = 1; i < c.pts.length; i++) { const seg = clipSeg(toWorld(c.pts[i - 1][0], c.pts[i - 1][1]), toWorld(c.pts[i][0], c.pts[i][1])); if (!seg) continue; const n = Math.max(1, Math.ceil(Math.hypot(seg[1].x - seg[0].x, seg[1].z - seg[0].z) / (spacing * 0.8))); for (let j = 0; j < n; j++) for (const t of [j / n, (j + 1) / n]) { const x = lerp(seg[0].x, seg[1].x, t), z = lerp(seg[0].z, seg[1].z, t); cl.push(x, meshHeight(x, z) + 7, z); } }
+    const geo = new THREE.BufferGeometry(); geo.setAttribute("position", new THREE.Float32BufferAttribute(cl, 3)); const o = new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ color: 0x705935, transparent: true, opacity: 0.42, depthWrite: false })); o.renderOrder = 1; base.add(o); }
+  // the trip: the whole route, and the selected day on top of it
+  const trip = new THREE.Group(); scene.add(trip);
+  const dayGroup = new THREE.Group(); scene.add(dayGroup);
+  const clearGroup = (g) => { for (const o of [...g.children]) { o.geometry.dispose(); o.material.dispose(); g.remove(o); } };
+
+  // labels are HTML, placed each frame
+  const labels = [];   // { el, lon, lat, lift, w, h, kind, prio }
+  const clearLabels = () => { for (const l of labels) if (l.kind !== "pick") l.el.remove(); labels.length = 0; };   // the elevation chip is kept
+  const addLabel = (node, lon, lat, lift, kind, prio) => { labelsEl.appendChild(node); labels.push({ el: node, lon, lat, lift, kind, prio, w: 0, h: 0 }); };
+  let measure = true, layoutMode = "phone", hasDay = false;
+  // screen areas the overlays occupy: the view toggle, and the zoom buttons (left on wide screens; bottom-right on phones while no day is open)
+  const reserved = () => [{ x: 0, y: 0, w: 150, h: 40 }, layoutMode === "wide" ? { x: 0, y: 40, w: 48, h: 100 } : hasDay ? { x: 0, y: size.h * 0.5, w: size.w, h: size.h * 0.5 } : { x: size.w - 48, y: size.h - 130, w: 48, h: 130 }];
+
+  // the camera
+  const st = { az: -18 * DEG, tilt: 55 * DEG, dist: DIAG, tx: 0, tz: 0 };
+  const size = { w: 1, h: 1 };
+  const tanV = Math.tan(19 * DEG);
+  const fitDist = () => { const aspect = size.w / size.h; return Math.max(W / (2 * tanV * aspect), H / (2 * tanV)) * 1.1 + DIAG * 0.14; };
+  let pending = false, tween = null, frames = 0, disposed = false;
+  const proj = new THREE.Vector3();
+  const project = (x, y, z) => { proj.set(x, y, z).project(camera); return { x: (proj.x * 0.5 + 0.5) * size.w, y: (-0.5 * proj.y + 0.5) * size.h, z: proj.z }; };
+  const occluded = (x, y, z) => { for (let i = 1; i < 20; i++) { const t = i / 20, px = lerp(x, camera.position.x, t), pz = lerp(z, camera.position.z, t); if (Math.abs(px) > W / 2 || Math.abs(pz) > H / 2) continue; if (meshHeight(px, pz) > lerp(y, camera.position.y, t) + 30) return true; } return false; };
+  const updateCamera = () => {
+    st.tx = clamp(st.tx, -W * 0.65, W * 0.65); st.tz = clamp(st.tz, -H * 0.65, H * 0.65);
+    const y = meshHeight(st.tx, st.tz);
+    camera.position.set(st.tx + st.dist * Math.sin(st.tilt) * Math.sin(st.az), y + st.dist * Math.cos(st.tilt), st.tz + st.dist * Math.sin(st.tilt) * Math.cos(st.az));
+    if (Math.abs(camera.position.x) < W / 2 && Math.abs(camera.position.z) < H / 2) camera.position.y = Math.max(camera.position.y, meshHeight(camera.position.x, camera.position.z) + Math.max(150, st.dist * 0.02));
+    camera.lookAt(st.tx, y, st.tz); camera.updateMatrixWorld();
+  };
+  const updateLabels = () => {
+    if (measure) { for (const l of labels) { l.w = l.el.offsetWidth || 80; l.h = l.el.offsetHeight || 24; } measure = false; }
+    const placed = reserved();
+    const sorted = [...labels].sort((a, b) => b.prio - a.prio);
+    for (const l of sorted) {
+      const p = toWorld(l.lon, l.lat), y = meshHeight(p.x, p.z) + l.lift, q = project(p.x, y, p.z);
+      const rect = { x: q.x - l.w / 2 - 1, y: q.y - l.h - 1, w: l.w + 2, h: l.h + 2 };
+      let hidden = q.z < -1 || q.z > 1 || rect.x < 2 || rect.x + rect.w > size.w - 2 || rect.y < 2 || q.y > size.h - 6 || (l.kind !== "pick" && occluded(p.x, y, p.z));
+      if (!hidden && l.kind !== "pick") for (const a of placed) if (rect.x < a.x + a.w && rect.x + rect.w > a.x && rect.y < a.y + a.h && rect.y + rect.h > a.y) { hidden = true; break; }
+      if (!hidden) placed.push(rect);
+      l.el.style.visibility = hidden ? "hidden" : "visible"; l.el.style.transform = `translate(${q.x}px, ${q.y}px) translate(-50%, -100%)`;
+    }
+  };
+  const render = (now) => {
+    pending = false; if (disposed) return;
+    if (tween) { const t = clamp((now - tween.start) / tween.dur, 0, 1), e = 1 - Math.pow(1 - t, 3); for (const key of Object.keys(tween.to)) st[key] = lerp(tween.from[key], tween.to[key], e); if (t >= 1) tween = null; }
+    updateCamera(); renderer.render(scene, camera); updateLabels(); frames++;
+    if (frames === 1 && cb.onFirstFrame) cb.onFirstFrame(renderer);
+    if (tween) requestRender();
+  };
+  const requestRender = () => { if (!pending && !disposed) { pending = true; requestAnimationFrame(render); } };
+  const animateTo = (to, dur) => { const reduce = typeof matchMedia !== "undefined" && matchMedia("(prefers-reduced-motion: reduce)").matches; if (reduce || !dur) { Object.assign(st, to); tween = null; requestRender(); return; } const from = {}; for (const key of Object.keys(to)) from[key] = st[key]; tween = { from, to, start: performance.now(), dur }; requestRender(); };
+  const resize = () => { size.w = Math.max(1, el.clientWidth); size.h = Math.max(1, el.clientHeight); renderer.setSize(size.w, size.h, false); camera.aspect = size.w / size.h; camera.updateProjectionMatrix(); measure = true; requestRender(); };
+  resize(); st.dist = fitDist() * 0.83;
+
+  // the elevation chip
+  const pickEl = document.createElement("div"); pickEl.className = "dk-ter-pick"; pickEl.style.visibility = "hidden"; labelsEl.appendChild(pickEl);
+  const pick = { el: pickEl, lon: 0, lat: 0, lift: 25, kind: "pick", prio: 99, w: 0, h: 0 };
+  const showPick = (lon, lat) => { const p = toWorld(lon, lat); const m = meshHeight(p.x, p.z) + floorH; pickEl.textContent = `≈ ${Math.round(m / 10) * 10} m`; pick.lon = lon; pick.lat = lat; if (!labels.includes(pick)) labels.push(pick); measure = true; requestRender(); };
+  const hidePick = () => { const i = labels.indexOf(pick); if (i >= 0) labels.splice(i, 1); pickEl.style.visibility = "hidden"; requestRender(); };
+  const ray = new THREE.Raycaster(), mouse = new THREE.Vector2();
+  const inspect = (cx, cy) => { const r = canvas.getBoundingClientRect(); mouse.set((cx - r.left) / r.width * 2 - 1, -(cy - r.top) / r.height * 2 + 1); updateCamera(); ray.setFromCamera(mouse, camera); const hits = ray.intersectObject(terrain, false); if (hits.length) { const g = toGeo(hits[0].point.x, hits[0].point.z); showPick(g.lon, g.lat); } else hidePick(); };
+
+  // gestures: one finger orbits (vertical drags scroll the page), two fingers pan and zoom, wheel zooms, a tap inspects
+  const pointers = new Map(); let tap = null, gesture = null;
+  const zoom = (f) => { tween = null; st.dist = clamp(st.dist * f, DIAG * 0.06, DIAG * 3); requestRender(); };
+  const pan = (dx, dy) => { const m = st.dist * 2 * tanV / size.h, ca = Math.cos(st.az), sa = Math.sin(st.az); st.tx -= dx * m * ca + dy * m * sa; st.tz += dx * m * sa - dy * m * ca; requestRender(); };
+  const onDown = (e) => { if (e.button !== 0 && e.button !== 2) return; tween = null; try { canvas.setPointerCapture(e.pointerId); } catch (_e) {} pointers.set(e.pointerId, { x: e.clientX, y: e.clientY }); tap = { x: e.clientX, y: e.clientY, moved: false, t: performance.now() }; gesture = pointers.size === 1 ? { pan: e.button === 2 || e.shiftKey } : null; if (pointers.size > 1 && tap) tap.moved = true; };
+  const onMove = (e) => { const prev = pointers.get(e.pointerId); if (!prev) return; const dx = e.clientX - prev.x, dy = e.clientY - prev.y; if (tap && Math.hypot(e.clientX - tap.x, e.clientY - tap.y) > 6) tap.moved = true;
+    if (pointers.size === 2) { const other = [...pointers.entries()].find(([id]) => id !== e.pointerId)[1]; const d0 = Math.hypot(prev.x - other.x, prev.y - other.y), d1 = Math.hypot(e.clientX - other.x, e.clientY - other.y); if (d0 > 0 && d1 > 0) zoom(d0 / d1); pan(dx / 2, dy / 2); }
+    else if (gesture && gesture.pan) pan(dx, dy);
+    else if (gesture) { st.az -= dx * 0.006; st.tilt = clamp(st.tilt + dy * 0.004, 15 * DEG, 70 * DEG); requestRender(); }
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY }); };
+  const onUp = (e, cancel) => { if (!pointers.has(e.pointerId)) return; const isTap = !cancel && pointers.size === 1 && tap && !tap.moved && performance.now() - tap.t < 600; pointers.delete(e.pointerId); try { canvas.releasePointerCapture(e.pointerId); } catch (_e) {} if (pointers.size) { gesture = { pan: false }; if (tap) tap.moved = true; } else { gesture = null; settle(); } if (isTap) inspect(e.clientX, e.clientY); };
+  const onCancel = (e) => onUp(e, true);
+  const onWheel = (e) => { e.preventDefault(); zoom(Math.exp(clamp(e.deltaY, -200, 200) * 0.0015)); clearTimeout(wheelTimer); wheelTimer = setTimeout(settle, 250); };
+  const onCtx = (e) => e.preventDefault();
+  canvas.addEventListener("pointerdown", onDown); canvas.addEventListener("pointermove", onMove); canvas.addEventListener("pointerup", (e) => onUp(e, false)); canvas.addEventListener("pointercancel", onCancel); canvas.addEventListener("wheel", onWheel, { passive: false }); canvas.addEventListener("contextmenu", onCtx);
+  const onLost = (e) => { e.preventDefault(); if (cb.onLost) cb.onLost(); };
+  canvas.addEventListener("webglcontextlost", onLost);
+  let ro = null; if (typeof ResizeObserver !== "undefined") { ro = new ResizeObserver(resize); ro.observe(el); } else window.addEventListener("resize", resize);
+
+  // the public handle
+  let planPath = [], dayPath = null, builtDist = st.dist, wheelTimer = null;
+  const mpp = (dist) => 2 * dist * tanV / size.h;   // metres per screen pixel at the camera target
+  const buildDay = (dist) => { clearGroup(dayGroup); if (!dayPath) return; const m = mpp(dist); const back = ribbon([dayPath], m * 8, 0xffffff, 28, 0.95, true); back.renderOrder = 7; dayGroup.add(back); const line = ribbon([dayPath], m * 4.5, 0x7a2e2e, 31, 0.98, true); line.renderOrder = 8; dayGroup.add(line); };
+  // after the user zooms a long way, the route lines are rebuilt so they keep their width on screen
+  const settle = () => { if (disposed || Math.abs(Math.log(st.dist / builtDist)) < Math.log(1.6)) return; builtDist = st.dist; buildTrip(st.dist, !!dayPath || hasDay); buildDay(st.dist); requestRender(); };
+  const buildTrip = (dist, dim) => { clearGroup(trip); builtDist = dist; if (planPath.length < 2) return; const m = mpp(dist); const back = ribbon([planPath], m * 6, 0xffffff, 22, dim ? 0.5 : 0.9, true); back.renderOrder = 5; trip.add(back); const line = ribbon([planPath], m * 3.4, 0x7a2e2e, 25, dim ? 0.45 : 0.98, true); line.renderOrder = 6; trip.add(line); };
+  const api = {
+    setPlan(routePts, stops, passes) {
+      clearLabels();
+      planPath = routePts.map((p) => [p.lng, p.lat]);
+      buildTrip(st.dist, false);
+      for (const s of stops) { const t = DK_TOWNS[s.key]; if (!t) continue; const node = document.createElement("button"); node.type = "button"; node.className = "dk-ter-stop"; node.setAttribute("aria-label", `Stop ${s.n}: ${t.n}`); node.dataset.key = s.key; node.innerHTML = `<span class="dk-ter-n">${s.n}</span><span>${t.n}</span>`; node.addEventListener("click", (e) => { e.stopPropagation(); cb.onStop(s); }); addLabel(node, t.lng, t.lat, 30, "stop", 10 - s.n * 0.01); }
+      for (const pk of passes) { const ps = DK_PASSES[pk]; if (!ps) continue; const node = document.createElement("div"); node.className = "dk-ter-pass"; node.textContent = `${ps.n} · ${ps.alt.toLocaleString()} m`; addLabel(node, ps.lng, ps.lat, 30, "pass", 5); }
+      for (const pk of DK_PEAKS) { if (pk.lng < B[0] || pk.lng > B[2] || pk.lat < B[1] || pk.lat > B[3]) continue; const node = document.createElement("div"); node.className = "dk-ter-pass"; node.textContent = `▲ ${pk.n} · ${pk.alt.toLocaleString()} m`; addLabel(node, pk.lng, pk.lat, 60, "peak", 4); }
+      measure = true; requestRender();
+    },
+    setDay(day, layout) {
+      clearGroup(dayGroup); hidePick(); layoutMode = layout; hasDay = !!day;
+      for (const l of labels) if (l.kind === "stop") l.el.classList.toggle("on", !!(day && (day.night === l.el.dataset.key || day.to === l.el.dataset.key)));
+      let pts = [];
+      if (day) {
+        if (day.moving && day.pts && day.pts.length > 1) pts = day.pts;
+        else { const t = DK_TOWNS[day.night || day.to || day.from]; if (t) pts = [t]; }
+      }
+      dayPath = null;
+      if (!pts.length) { const dist = fitDist() * 0.83; buildTrip(dist, false); animateTo({ tx: 0, tz: 0, az: -18 * DEG, tilt: 55 * DEG, dist }, 750); return; }
+      const ws = pts.map((p) => toWorld(p.lng, p.lat)); const xs = ws.map((p) => p.x), zs = ws.map((p) => p.z);
+      let cx = (Math.min(...xs) + Math.max(...xs)) / 2, cz = (Math.min(...zs) + Math.max(...zs)) / 2;
+      const ex = Math.max(...xs) - Math.min(...xs) + 5000, ez = Math.max(...zs) - Math.min(...zs) + 5000, aspect = size.w / size.h;
+      // the ideas card covers the lower half on phones and the right side on wide screens: fit the day into what is left
+      const dist = clamp(Math.max(ex / (2 * tanV * aspect) * (layout === "wide" ? 1.9 : 1.3), ez / (2 * tanV) * (layout === "phone" ? 2.6 : 1.3)), DIAG * 0.14, DIAG * 0.9);
+      const az = -18 * DEG, tilt = 52 * DEG;
+      if (layout === "phone") { const sft = 0.5 * dist * tanV / Math.sin(tilt); cx += Math.sin(az) * sft; cz += Math.cos(az) * sft; }
+      else if (layout === "wide") { const sft = 0.28 * dist * tanV * aspect; cx += Math.cos(az) * sft; cz -= Math.sin(az) * sft; }
+      buildTrip(dist, true);
+      dayPath = day.moving && day.pts && day.pts.length > 1 ? day.pts.map((p) => [p.lng, p.lat]) : null; buildDay(dist);
+      animateTo({ tx: cx, tz: cz, az, tilt, dist }, 750);
+    },
+    zoom(f) { zoom(f); clearTimeout(wheelTimer); wheelTimer = setTimeout(settle, 250); },
+    reset() { animateTo({ az: -18 * DEG, tilt: 55 * DEG }, 500); },
+    dispose() {
+      disposed = true; tween = null; clearTimeout(wheelTimer);
+      canvas.removeEventListener("pointerdown", onDown); canvas.removeEventListener("pointermove", onMove); canvas.removeEventListener("pointercancel", onCancel); canvas.removeEventListener("wheel", onWheel); canvas.removeEventListener("contextmenu", onCtx); canvas.removeEventListener("webglcontextlost", onLost);
+      if (ro) ro.disconnect(); else window.removeEventListener("resize", resize);
+      clearGroup(trip); clearGroup(dayGroup); clearGroup(base); clearLabels(); pickEl.remove();
+      geometry.dispose(); groundMat.dispose(); texture.dispose(); skirtGeo.dispose(); skirt.material.dispose();
+      renderer.dispose(); try { renderer.forceContextLoss(); } catch (_e) {} canvas.remove();
+    },
+  };
+  return api;
+}
+
+function DkTerrainMap({ plan, selected, onSelect, onBack }) {
+  const boxRef = useRef(null), sceneRef = useRef(null), labelsRef = useRef(null), apiRef = useRef(null);
+  const [box, setBox] = useState({ w: 360, h: 270 });
+  const [status, setStatus] = useState("loading");   // loading | ready | failed
+  const [notice, setNotice] = useState(null);
+  const [credit, setCredit] = useState(false);
+  const day = selected ? plan.days.find((d) => d.day === selected) : null;
+  const wide = box.w >= 560;
+  const onSelectRef = useRef(onSelect); onSelectRef.current = onSelect;
+  const selRef = useRef(selected); selRef.current = selected;
+  const stops = useMemo(() => { const out = []; const seen = new Set(); for (const d of plan.days) if (d.night && !seen.has(d.night)) { seen.add(d.night); out.push({ key: d.night, n: out.length + 1, day: d.day }); } return out; }, [plan]);
+  const routePts = useMemo(() => { const pts = []; for (const d of plan.days) for (const p of d.pts || []) { const last = pts[pts.length - 1]; if (!last || last.lat !== p.lat || last.lng !== p.lng) pts.push(p); } return pts; }, [plan]);
+  const passesOnRoute = useMemo(() => { const set = new Set(); for (const d of plan.days) for (const pk of d.passes || []) set.add(pk); return [...set]; }, [plan]);
+
+  useEffect(() => {
+    const el = boxRef.current; if (!el) return;
+    const check = () => { const r = el.getBoundingClientRect(); if (r.width > 0) setBox({ w: r.width, h: r.height }); };
+    check(); if (typeof ResizeObserver === "undefined") { window.addEventListener("resize", check); return () => window.removeEventListener("resize", check); }
+    const ro = new ResizeObserver(check); ro.observe(el); return () => ro.disconnect();
+  }, []);
+
+  const fail = (msg) => { try { localStorage.removeItem(DK_TERRAIN_PREF); } catch (_e) {} setNotice(msg); setStatus("failed"); };
+  // boot: renderer and data in parallel, then the scene; anything wrong hands over to the relief model
+  useEffect(() => {
+    let on = true, api = null;
+    const timer = setTimeout(() => { if (on && !api) fail("The 3-D terrain is taking too long to load — showing the relief model."); }, 25000);
+    Promise.all([loadThree(), loadTerrainData()]).then(([THREE, D]) => {
+      if (!on || !sceneRef.current) return;
+      try {
+        api = dkTerrainScene(THREE, D, sceneRef.current, labelsRef.current, {
+          onStop: (s) => { const cur = selRef.current; onSelectRef.current && onSelectRef.current(cur === s.day ? null : s.day); },
+          onLost: () => { if (on) fail("The graphics on this device paused — showing the relief model."); },
+          onFirstFrame: (renderer) => {
+            // a drawn frame should not be the bare background at the centre; if it is, the device did not really draw
+            try { const gl = renderer.getContext(); const px = new Uint8Array(4); gl.readPixels(Math.floor(gl.drawingBufferWidth / 2), Math.floor(gl.drawingBufferHeight / 2), 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+              if (Math.abs(px[0] - 231) < 3 && Math.abs(px[1] - 238) < 3 && Math.abs(px[2] - 230) < 3) fail("The 3-D terrain could not be drawn on this device — showing the relief model."); } catch (_e) {}
+          },
+        });
+      } catch (e) { fail("This device cannot draw 3-D terrain — showing the relief model."); return; }
+      apiRef.current = api; setStatus("ready");
+    }).catch(() => { if (on) fail("The 3-D terrain could not be loaded on this connection — showing the relief model."); });
+    return () => { on = false; clearTimeout(timer); if (api) api.dispose(); apiRef.current = null; };
+  }, []);
+  useEffect(() => { if (status === "ready" && apiRef.current) apiRef.current.setPlan(routePts, stops, passesOnRoute); }, [status, routePts, stops, passesOnRoute]);
+  useEffect(() => { if (status === "ready" && apiRef.current) apiRef.current.setDay(day, wide ? "wide" : "phone"); }, [status, day, wide]);
+
+  // Drukpah's notes for the selected day
+  let note = null;
+  if (day) {
+    const townKey = day.night || day.to || day.from; const town = DK_TOWNS[townKey];
+    const planned = (day.acts || []).map((a) => String(a).toLowerCase());
+    const ideas = (DK_SEE[townKey] || []).filter((x) => !planned.some((a) => a.includes(x.t.toLowerCase().split(",")[0]))).slice(0, 3);
+    note = { town, ideas, passes: [], planned: (day.acts || []).length, profile: [] };
+  }
+  if (status === "failed") return <DkReliefMap plan={plan} selected={selected} onSelect={onSelect} fallbackNote={notice} />;
+
+  const btn = { width: 30, height: 30, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15, fontWeight: 600, background: "transparent", border: 0, color: C.ink, cursor: "pointer" };
+  return (
+    <div className="dk-map-sticky">
+      <div ref={boxRef} className="relative rounded-2xl overflow-hidden" style={{ position: "relative", border: `1px solid ${C.line}`, background: "#e7eee6", aspectRatio: wide ? "2 / 1" : "4 / 3" }} onClick={() => onSelect && onSelect(null)}>
+        <div ref={sceneRef} style={{ position: "absolute", inset: 0 }} onClick={(e) => e.stopPropagation()} />
+        <div ref={labelsRef} className="dk-ter-labels" style={{ position: "absolute", inset: 0, overflow: "hidden", pointerEvents: "none" }} />
+        {status === "loading" && (
+          <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 6, fontSize: 12, color: C.muted, background: "linear-gradient(180deg, #e6ecf2 0%, #dfe7e0 60%, #d6dfd5 100%)" }}>
+            <div className="w-5 h-5 rounded-full border-2 animate-spin" style={{ width: 20, height: 20, borderRadius: "50%", border: `2px solid ${C.line}`, borderTopColor: C.pine }} />
+            <div>Loading the 3-D terrain…</div>
+            <div style={{ fontSize: 10.5 }}>about 1 MB, kept for next time</div>
+          </div>
+        )}
+        <div className="absolute left-2 top-2" style={{ position: "absolute", left: 8, top: 8, zIndex: 5, display: "inline-flex", borderRadius: 10, overflow: "hidden", background: "rgba(255,255,255,.92)", boxShadow: "0 1px 3px rgba(0,0,0,.25)" }} onClick={(e) => e.stopPropagation()}>
+          <button type="button" onClick={onBack} className="tap px-2.5 h-7 text-[11px] font-semibold" style={{ padding: "0 10px", height: 28, fontSize: 11, fontWeight: 600, background: "transparent", color: C.ink, border: 0 }}>Relief</button>
+          <span className="px-2.5 h-7 text-[11px] font-semibold" style={{ padding: "0 10px", height: 28, display: "inline-flex", alignItems: "center", fontSize: 11, fontWeight: 600, background: C.pine, color: "#fff" }}>Terrain</span>
+        </div>
+        {status === "ready" && (wide || !selected) && (
+          <div style={wide ? { position: "absolute", left: 8, top: 44, zIndex: 5, display: "flex", flexDirection: "column", borderRadius: 10, overflow: "hidden", background: "rgba(255,255,255,.92)", boxShadow: "0 1px 3px rgba(0,0,0,.25)" } : { position: "absolute", right: 8, bottom: 28, zIndex: 5, display: "flex", flexDirection: "column", borderRadius: 10, overflow: "hidden", background: "rgba(255,255,255,.92)", boxShadow: "0 1px 3px rgba(0,0,0,.25)" }} onClick={(e) => e.stopPropagation()}>
+            <button type="button" aria-label="Zoom in" style={btn} onClick={() => apiRef.current && apiRef.current.zoom(0.8)}>+</button>
+            <button type="button" aria-label="Zoom out" style={{ ...btn, borderTop: `1px solid ${C.line}` }} onClick={() => apiRef.current && apiRef.current.zoom(1.25)}>−</button>
+            <button type="button" aria-label="Face north" style={{ ...btn, borderTop: `1px solid ${C.line}`, fontSize: 12 }} onClick={() => apiRef.current && apiRef.current.reset()}>N</button>
+          </div>
+        )}
+        {note && wide && (
+          <div className="absolute right-2 top-2 dk-note-side" style={{ position: "absolute", right: 8, top: 8, width: 250, maxHeight: "calc(100% - 16px)", overflowY: "auto", zIndex: 5 }} onClick={(e) => e.stopPropagation()}>
+            <DkNoteBody note={note} day={day} onClose={() => onSelect && onSelect(null)} />
+          </div>
+        )}
+        {note && !wide && (
+          <div className="absolute left-2 right-2 bottom-2 dk-note-over" style={{ position: "absolute", left: 8, right: 8, bottom: 8, maxHeight: "48%", overflowY: "auto", zIndex: 6 }} onClick={(e) => e.stopPropagation()}>
+            <DkNoteBody note={note} day={day} onClose={() => onSelect && onSelect(null)} />
+          </div>
+        )}
+        {!selected && status === "ready" && <div style={{ position: "absolute", left: 8, bottom: 8, fontSize: 10.5, borderRadius: 6, padding: "4px 8px", pointerEvents: "none", background: "rgba(255,255,255,.9)", color: C.muted, zIndex: 5 }}>Drag to turn · tap for height</div>}
+        <button type="button" onClick={(e) => { e.stopPropagation(); setCredit((v) => !v); }} style={{ position: "absolute", right: 8, bottom: 6, fontSize: 9, color: "rgba(255,255,255,.9)", textShadow: "0 0 3px rgba(0,0,0,.8)", background: "transparent", border: 0, padding: 0, cursor: "pointer", zIndex: 5 }}>Copernicus DEM · © OpenStreetMap ⓘ</button>
+        {credit && (
+          <div className="rounded-lg" style={{ position: "absolute", right: 8, bottom: 24, maxWidth: 280, padding: "8px 10px", fontSize: 10.5, lineHeight: 1.4, background: "rgba(255,255,255,.96)", color: C.muted, border: `1px solid ${C.line}`, zIndex: 7 }} onClick={(e) => e.stopPropagation()}>
+            Elevation: produced using Copernicus WorldDEM-30 © DLR e.V. 2010–2014 and © Airbus Defence and Space GmbH 2014–2018, provided under COPERNICUS by the European Union and ESA; all rights reserved. Roads and rivers © OpenStreetMap contributors (ODbL). Heights are model estimates, not surveys; mapped roads do not show current conditions.
+          </div>
+        )}
+      </div>
       <div className="flex flex-wrap gap-1.5 mt-2">
         {stops.map((st) => { const on = day && (day.night === st.key || day.to === st.key);
           return (
