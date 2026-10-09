@@ -64,7 +64,7 @@ const CLOUD = Boolean(supabase);
   } catch (e) {}
 })();
 const DEMO_MODE = false;   // set true only for local demos without a database
-const BUILD = "BUILD 53 — 9 Oct";   // bump every deploy; shown at the top of the welcome screen
+const BUILD = "BUILD 54 — 9 Oct";   // bump every deploy; shown at the top of the welcome screen
 // which device someone is on — shown beside the build so a screenshot tells us both
 const DEVICE = (() => {
   try {
@@ -7746,7 +7746,6 @@ function EnquiryForm({ user, enquiry, actions, onBack, onSaved }) {
    "From → To · … · Night in Town (hotel)" shape), the route can be rebuilt for the map. BUILD 52. */
 function dkPlanFromItinerary(rows) {
   if (!Array.isArray(rows) || rows.length === 0) return null;
-  const byName = {}; for (const k of Object.keys(DK_TOWNS)) byName[DK_TOWNS[k].n.toLowerCase()] = k;
   const hotelKey = (t) => { const m = String(t || "").toLowerCase(); if (m.includes("home") || m.includes("farm")) return "home"; if (m.includes("lux")) return "lux"; if (m.includes("4")) return "4"; if (m.includes("3")) return "3"; return "3"; };
   const days = []; let prevNight = null;
   for (const r of rows.slice().sort((a, b) => (a.day || 0) - (b.day || 0))) {
@@ -7754,27 +7753,167 @@ function dkPlanFromItinerary(rows) {
     const parts = text.split(" · ").map((x) => x.trim()).filter(Boolean);
     let from = null, to = null, night = null, hotel = "3", h = 0;
     const acts = [];
-    for (const part of parts) {
+    parts.forEach((part, i) => {
       const mv = part.match(/^(.+?)\s*(?:→|->)\s*(.+?)(?:\s*\(.*\))?$/);
       const nt = part.match(/^Night in (.+?)(?:\s*\((.*)\))?$/i);
-      const hm = part.match(/^(\d+)([¼½¾])?\s*h$/);
-      if (mv && byName[mv[1].toLowerCase()] && byName[mv[2].toLowerCase()]) { from = byName[mv[1].toLowerCase()]; to = byName[mv[2].toLowerCase()]; continue; }
-      if (nt && byName[nt[1].toLowerCase()]) { night = byName[nt[1].toLowerCase()]; hotel = hotelKey(nt[2]); continue; }
-      if (hm) { h = Number(hm[1]) + ({ "¼": 0.25, "½": 0.5, "¾": 0.75 }[hm[2]] || 0); continue; }
-      if (byName[part.toLowerCase()] && !from) { from = byName[part.toLowerCase()]; continue; }
+      const hm = part.match(/^(\d+)?\s*([¼½¾])?\s*h$/);
+      // BUILD 54: towns are also found at the end of a phrase ("Arrival paro → Thimphu") and by their other names
+      const a = mv ? dkTownKey(mv[1]) : null, b = mv ? dkTownKey(mv[2].split(",")[0]) : null;
+      if (mv && !to && a && b) { from = a.key; to = b.key; const c = mv[2].indexOf(","); if (c >= 0 && mv[2].slice(c + 1).trim()) acts.push(mv[2].slice(c + 1).trim()); return; }
+      const n = nt ? dkTownKey(nt[1]) : null;
+      if (nt && n) { night = n.key; hotel = hotelKey(nt[2]); return; }
+      if (hm && (hm[1] || hm[2])) { h = Number(hm[1] || 0) + ({ "¼": 0.25, "½": 0.5, "¾": 0.75 }[hm[2]] || 0); return; }
+      const t = dkTownKey(part);
+      if (t && t.exact && !from) { from = t.key; return; }
+      if (i === 0) return;   // the day's name ("Over Dochula to Punakha"), not something to do
       acts.push(part);
-    }
+    });
     if (!from) from = prevNight || night;
     if (!from && !night) continue;
     const moving = Boolean(to && from && to !== from);
     let pts = [], passes = [], km = 0;
     if (moving) { try { const leg = dkRoute(from, to); pts = leg.pts || []; passes = leg.passes || []; km = leg.km || 0; if (!h) h = leg.h || 0; } catch (e) { pts = [DK_TOWNS[from], DK_TOWNS[to]].filter(Boolean); } }
     else { const t = DK_TOWNS[night || from]; pts = t ? [t] : []; }
-    days.push({ day: r.day, from, to: moving ? to : null, night: night || (moving ? to : from), hotel, moving, h, km, pts, passes, acts: acts.slice(1) });
+    days.push({ day: r.day, from, to: moving ? to : null, night: night || (moving ? to : from), hotel, moving, h, km, pts, passes, acts });
     prevNight = night || (moving ? to : from);
   }
   if (days.length === 0 || !days.some((d) => d.night)) return null;
   return { days, notes: [] };
+}
+
+/* ── Trip itinerary cards (BUILD 54): a saved day's text — "Name · From → To · 2½ h · things, planned · Night in Town (hotel)" —
+   read back into its parts for display, and Drukpah's ideas for that day, which an editor can add with one tap. ── */
+const DK_TOWN_ALIAS = { "wangdue phodrang": "wangdue", "wangdi": "wangdue", "phobjikha": "gangtey", "jakar": "bumthang", "tashigang": "trashigang", "trashi yangtse": "yangtse", "phuntsholing": "phuentsholing" };
+function dkTownKey(s) {   // a town name, an alias, or a town at the end of a phrase ("Arrival paro") → { key, prefix, exact }
+  const raw = String(s || "").trim(); const m = raw.toLowerCase().replace(/\s+/g, " ");
+  if (!m) return null;
+  const names = {}; for (const k of Object.keys(DK_TOWNS)) names[DK_TOWNS[k].n.toLowerCase()] = k;
+  for (const al of Object.keys(DK_TOWN_ALIAS)) names[al] = DK_TOWN_ALIAS[al];
+  if (names[m]) return { key: names[m], prefix: "", exact: true };
+  for (const n of Object.keys(names).sort((x, y) => y.length - x.length)) if (m.endsWith(" " + n)) return { key: names[n], prefix: raw.slice(0, raw.length - n.length).trim(), exact: false };
+  return null;
+}
+const dkNorm = (s) => String(s || "").toLowerCase().replace(/[‐-―-]/g, " ").replace(/\s+/g, " ").trim();
+function DkSpark({ color }) {   // a small sparkle, drawn here so it needs nothing from the icon set
+  return <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 3l1.9 5.6 5.6 1.9-5.6 1.9L12 18l-1.9-5.6-5.6-1.9 5.6-1.9z" /><path d="M19 3v4M17 5h4" /></svg>;
+}
+function dkSplitActs(s) {
+  const out = [];
+  for (const piece of String(s || "").split(", ")) { const p = piece.trim(); if (!p) continue; if (out.length && /^[a-zà-ÿ]/.test(p)) out[out.length - 1] += ", " + p; else out.push(p); }   // "…and, on a clear day, the Himalaya" stays one item
+  return out;
+}
+function dkParseDay(title) {
+  const text = String(title || "").trim();
+  const parts = text.split(" · ").map((x) => x.trim()).filter(Boolean);
+  const d = { raw: text, parts, name: null, from: null, to: null, fromKey: null, toKey: null, hours: null, acts: [], night: null, nightKey: null, hotel: null, actsIndex: -1, nightIndex: -1 };
+  let anchor = -1;   // the part that places the day: a leg, or a town on its own
+  parts.forEach((part, i) => {
+    const nt = part.match(/^Night in (.+?)(?:\s*\((.*)\))?$/i);
+    const mv = part.match(/^(.+?)\s*(?:→|->)\s*([^,]+?)(?:,\s*(.+))?$/);
+    const hm = /^(?:\d+(?:[.,]\d+)?\s*[¼½¾]?|[¼½¾])\s*h$/.test(part);
+    if (nt && d.nightIndex < 0) { const k = dkTownKey(nt[1]); d.nightKey = k ? k.key : null; d.night = k && k.exact ? DK_TOWNS[k.key].n : nt[1]; d.hotel = nt[2] || null; d.nightIndex = i; return; }
+    if (mv && anchor < 0) {
+      const a = dkTownKey(mv[1]), b = dkTownKey(mv[2]);
+      d.fromKey = a ? a.key : null; d.toKey = b ? b.key : null;
+      d.to = b && b.exact ? DK_TOWNS[b.key].n : mv[2];
+      if (a && (a.exact || !d.name)) { d.from = DK_TOWNS[a.key].n; if (a.prefix) d.name = a.prefix.charAt(0).toUpperCase() + a.prefix.slice(1); }
+      else d.from = mv[1];
+      anchor = i; if (mv[3]) { d.actsIndex = i; d.acts.push(...dkSplitActs(mv[3])); } return;
+    }
+    if (hm && d.hours === null && anchor >= 0) { d.hours = part; return; }
+    const tk = anchor < 0 ? dkTownKey(part) : null;
+    if (tk && tk.exact) { d.from = DK_TOWNS[tk.key].n; d.fromKey = tk.key; anchor = i; return; }
+    if (i === 0) { d.name = part; return; }
+    if (d.actsIndex < 0) d.actsIndex = i;
+    d.acts.push(...dkSplitActs(part));
+  });
+  return d;
+}
+function dkAddIdeaToTitle(title, idea) {
+  const d = dkParseDay(title); const parts = d.parts.slice();
+  if (d.actsIndex >= 0) parts[d.actsIndex] = parts[d.actsIndex] + ", " + idea;
+  else if (d.nightIndex >= 0) parts.splice(d.nightIndex, 0, idea);
+  else parts.push(idea);
+  return parts.join(" · ");
+}
+/* Local, lesser-known touches — the things that make a day memorable. "arrive": only on the day the road comes in. */
+const DK_NICHE = {
+  paro: [
+    { t: "Walk across Nyamai Zam, the covered bridge below Rinpung Dzong", re: /nyamai/ },
+    { t: "Dungtse Lhakhang, the chorten-shaped temple of Thangtong Gyalpo", re: /dungtse/ },
+    { t: "Short hike up to Zuri Dzong for the view over the valley", re: /zuri/, e: "moderate" },
+    { t: "Dinner and a taste of ara at a farmhouse", re: /\bara\b|farmhouse dinner/ },
+  ],
+  thimphu: [
+    { t: "Evening flag-lowering at Tashichho Dzong", re: /flag lowering/ },
+    { t: "Simply Bhutan, a living museum of village life", re: /simply bhutan/ },
+    { t: "Watch an archery match at Changlimithang", re: /archery|changlimithang/ },
+    { t: "Sunset over the valley from Sangaygang viewpoint", re: /sangaygang/ },
+    { t: "Centenary Farmers' Market by the Wang Chhu", re: /farmers.? market|weekend market/ },
+  ],
+  haa: [{ t: "Home-cooked hoentay, Haa's buckwheat dumplings, at a farmhouse", re: /hoentay/ }],
+  punakha: [
+    { t: "Rafting on the Mo Chhu", re: /raft/, note: "local tip · on the river" },
+    { t: "Picnic where the Pho Chhu and Mo Chhu meet", re: /picnic|confluence/ },
+    { t: "Sangchhen Dorji Lhuendrup Nunnery, on the ridge above the valley", re: /nunnery|sangchhen/ },
+  ],
+  wangdue: [{ t: "Walk through Rinchengang, a village of stone masons", re: /rinchengang/ }],
+  gangtey: [{ t: "Watch black-necked cranes in the valley (in winter)", re: /cranes? in the valley|crane watching|watch .*cranes?/ }],
+  trongsa: [{ t: "Stop at Chendebji Chorten on the road in", re: /chendebji/, arrive: true }],
+  bumthang: [
+    { t: "Red Panda beer and Swiss cheese at the Bumthang brewery", re: /red panda|brewery|cheese/ },
+    { t: "Buckwheat pancakes (khuli) in a Bumthang farmhouse", re: /khuli|buckwheat pancake/ },
+  ],
+  yangtse: [{ t: "Watch wooden bowls (dapa) being turned by local craftsmen", re: /dapa|wooden bowl/ }],
+};
+const DK_EXTRA_IDEAS = [
+  { t: "Hot-stone bath at a farmhouse", re: /hot stone/ },
+  { t: "Try archery with locals", re: /archery/ },
+  { t: "Dress in gho and kira for the day", re: /\bgho\b|\bkira\b/ },
+  { t: "Light butter lamps at a temple in the evening", re: /butter lamp/ },
+  { t: "Picnic lunch by the river", re: /picnic/ },
+  { t: "Join a family for a home-cooked meal", re: /local family|home cooked|meal with|farmhouse dinner|cook a bhutanese/ },
+];
+function dkDayIdeas(d, dayNo, ctx) {
+  const c = ctx || {};
+  const planned = [...(c.planned || []), ...d.acts].map(dkNorm);   // the whole trip: nothing planned on another day comes back
+  const has = (t) => { const k = dkNorm(String(t).split(/[,:(]/)[0]); return planned.some((a) => a.includes(k) || (a.length >= 8 && k.includes(a))); };
+  const hasRe = (re) => planned.some((a) => re.test(a));
+  const from = d.fromKey, to = d.toKey, moving = Boolean(from && to && from !== to);
+  const dest = d.nightKey || (moving ? to : null) || from || c.prevNight || null;
+  const leaving = !d.nightKey && !moving && /\b(fly|flight|depart|departure|farewell|leave|exit)\b/i.test(d.raw);
+  const out = [];
+  if (moving) {
+    try {
+      const leg = dkRoute(from, to); let flags = false;
+      for (const p of leg.passes || []) {
+        const P = DK_PASSES[p]; if (!P) continue;
+        if (!planned.some((a) => a.includes(dkNorm(P.n)))) out.push({ t: p === "dochula" ? "Stop at Dochula: 108 chortens and, on a clear day, the Himalaya" : `Cross ${P.n} (${P.alt.toLocaleString("en")} m)`, why: "on the way" });
+        if (!flags && !hasRe(/prayer flag/)) { out.push({ t: `Hoist prayer flags at ${P.n}`, why: "memorable" }); flags = true; }
+      }
+    } catch (e) {}
+  }
+  // the town's sights not yet in the trip, and its local touches, taken in turn so neither crowds out the other
+  const sights = [], niche = [];
+  for (const x of (dest && DK_SEE[dest]) || []) {
+    if (leaving && x.e === "moderate") continue;
+    if (!has(x.t)) sights.push({ t: x.t, why: x.e === "moderate" ? "moderate walk" : "sight" });
+  }
+  for (const x of (dest && DK_NICHE[dest]) || []) {
+    if (x.arrive && !(moving && to === dest)) continue;
+    if (leaving && x.e === "moderate") continue;
+    if (!hasRe(x.re)) niche.push({ t: x.t, why: x.note || (x.e === "moderate" ? "local tip · moderate walk" : "local tip") });   // its own words decide: a planned dzong visit still leaves room for the evening there
+  }
+  for (let i = 0; i < Math.max(sights.length, niche.length); i++) { if (sights[i]) out.push(sights[i]); if (niche[i]) out.push(niche[i]); }
+  const more = [];
+  if (!leaving) {   // two of the "memorable" extras, a different pair each day
+    const extras = DK_EXTRA_IDEAS.filter((x) => !hasRe(x.re) && !out.some((o) => x.re.test(dkNorm(o.t))));
+    const o = ((Number(dayNo) || 1) - 1) * 2;
+    for (let i = 0; i < Math.min(2, extras.length); i++) more.push({ t: extras[(o + i) % extras.length].t, why: "memorable" });
+  }
+  const seen = new Set(); const uniq = (arr) => arr.filter((x) => { const k = dkNorm(x.t); if (seen.has(k)) return false; seen.add(k); return true; });
+  const main = uniq(out), extra = uniq(more), cap = leaving ? 3 : 7;
+  return [...main.slice(0, cap - Math.min(1, extra.length)), ...extra].slice(0, cap);   // a full day still keeps one memorable extra
 }
 
 function ItineraryBuilder({ trip, canEdit, onChanged, embedded }) {
@@ -7785,9 +7924,16 @@ function ItineraryBuilder({ trip, canEdit, onChanged, embedded }) {
   const [editId, setEditId] = useState(null);
   const [editText, setEditText] = useState("");
   const [mapSel, setMapSel] = useState(null);   // BUILD 52: the day lit up on the relief map
+  const [ideasFor, setIdeasFor] = useState(null); // BUILD 54: the day whose Drukpah ideas are open
 
   useEffect(() => { setDays(trip.itinerary || []); }, [trip.itinerary]);
   const mapPlan = useMemo(() => dkPlanFromItinerary(days), [days]);
+  // BUILD 54: each day read into its parts, with where the group woke up and everything planned across the trip
+  const parsed = useMemo(() => {
+    let prev = null; const all = [];
+    const list = days.map((it) => { const d = dkParseDay(it.title); const prevNight = prev; prev = d.nightKey || d.toKey || d.fromKey || prev; all.push(...d.acts); return { it, d, prevNight }; });
+    return { list, all };
+  }, [days]);
 
   const nights = trip.start && trip.end
     ? Math.max(1, Math.round((new Date(trip.end) - new Date(trip.start)) / 86400e3) + 1)
@@ -7808,7 +7954,7 @@ function ItineraryBuilder({ trip, canEdit, onChanged, embedded }) {
   };
 
   const saveEdit = async (dayNo) => {
-    const t = editText.trim();
+    const t = editText.replace(/\s*\n+\s*/g, " ").trim();   // one line: the map reads the day by its " · " parts
     if (!t) return;
     setBusy(true);
     const { error } = await supabase.from("trip_itinerary")
@@ -7816,6 +7962,17 @@ function ItineraryBuilder({ trip, canEdit, onChanged, embedded }) {
     setBusy(false);
     if (error) { console.error("itinerary update failed:", error.message); return; }
     setEditId(null);
+    onChanged && onChanged();
+  };
+
+  const addIdea = async (it, idea) => {
+    const t = dkAddIdeaToTitle(it.title, idea);
+    setBusy(true);
+    const { error } = await supabase.from("trip_itinerary")
+      .update({ title: t }).eq("trip_id", trip.id).eq("day_no", it.day);
+    setBusy(false);
+    if (error) { console.error("itinerary update failed:", error.message); return; }
+    setDays((ds) => ds.map((d) => (d.day === it.day ? { ...d, title: t } : d)));   // shown at once; the trip refresh follows
     onChanged && onChanged();
   };
 
@@ -7857,19 +8014,23 @@ function ItineraryBuilder({ trip, canEdit, onChanged, embedded }) {
 
       {days.length > 0 && (
         <div className="space-y-2 mb-3">
-          {days.map((it) => (
-            <div key={it.day} className="rounded-xl px-3.5 py-3 flex items-start gap-3"
+          {parsed.list.map(({ it, d, prevNight }) => { const open = ideasFor === it.day; const ideas = open ? dkDayIdeas(d, it.day, { planned: parsed.all, prevNight }) : null;
+            const where = d.to ? `${d.from} → ${d.to}` : (d.from || d.night || "");
+            return (
+            <div key={it.day} className="rounded-xl px-3.5 py-3"
               style={{ background: C.card, border: `1px solid ${mapSel === it.day ? C.pine : C.line}` }}>
+              <div className="flex items-start gap-3">
               <button type="button" onClick={() => mapPlan && setMapSel(mapSel === it.day ? null : it.day)} aria-label={`Show day ${it.day} on the map`}
                 className="tap w-8 h-8 rounded-lg flex items-center justify-center shrink-0" style={{ background: mapSel === it.day ? C.maroon : C.pine, border: 0 }}>
                 <span className="text-[12px] font-bold" style={{ color: C.goldSoft }}>{it.day}</span>
               </button>
               {editId === it.day ? (
                 <div className="flex-1">
-                  <input value={editText} onChange={(e) => setEditText(e.target.value)} maxLength={120}
-                    onKeyDown={(e) => e.key === "Enter" && saveEdit(it.day)}
-                    className="w-full h-10 px-3 rounded-lg text-[14px] mb-2"
-                    style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} autoFocus />
+                  <textarea value={editText} onChange={(e) => setEditText(e.target.value)} maxLength={600} rows={4}
+                    onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); saveEdit(it.day); } }}
+                    className="w-full px-3 py-2 rounded-lg text-[14px] leading-snug mb-2"
+                    style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink, resize: "vertical" }} autoFocus />
+                  <div className="text-[11.5px] mb-2" style={{ color: C.muted }}>Keep the " · " between the parts: name · From → To · hours · things planned · Night in Town (hotel).</div>
                   <div className="flex gap-2">
                     <button onClick={() => setEditId(null)} className="tap flex-1 h-9 rounded-lg text-[13px] font-semibold"
                       style={{ background: C.card, border: `1px solid ${C.line}`, color: C.muted }}>Cancel</button>
@@ -7879,7 +8040,23 @@ function ItineraryBuilder({ trip, canEdit, onChanged, embedded }) {
                 </div>
               ) : (
                 <>
-                  <span className="flex-1 text-[14px] leading-snug" style={{ color: C.ink }}>{it.title}</span>
+                  <div className="flex-1 min-w-0">
+                    {(
+                      <>
+                        <div className="text-[15px] font-semibold leading-tight" style={{ color: C.ink }}>Day {it.day}{d.name ? <span className="font-normal" style={{ color: C.muted }}> · {d.name}</span> : null}</div>
+                        {where && <div className="text-[13px] font-medium mt-0.5" style={{ color: C.pine }}>{where}{d.hours ? ` · ${d.hours}` : ""}</div>}
+                        {d.acts.length > 0 && (
+                          <div className="mt-2">
+                            <div className="text-[10.5px] font-semibold tracking-[.08em] uppercase" style={{ color: C.goldText }}>Things planned</div>
+                            <ul className="mt-1 space-y-0.5">
+                              {d.acts.map((a, i) => <li key={i} className="text-[13.5px] leading-snug flex gap-1.5" style={{ color: C.ink }}><span className="mt-[7px] w-1 h-1 rounded-full shrink-0" style={{ background: C.gold }} /><span>{a}</span></li>)}
+                            </ul>
+                          </div>
+                        )}
+                        {d.night && <div className="text-[12.5px] mt-2" style={{ color: C.muted }}>Night in {d.night}{d.hotel ? ` · ${d.hotel}` : ""}</div>}
+                      </>
+                    )}
+                  </div>
                   {canEdit && (
                     <div className="flex gap-1 shrink-0">
                       <button onClick={() => { setEditId(it.day); setEditText(it.title); }}
@@ -7894,8 +8071,29 @@ function ItineraryBuilder({ trip, canEdit, onChanged, embedded }) {
                   )}
                 </>
               )}
+              </div>
+              {/* BUILD 54: Drukpah's ideas for this stretch — one tap to add any of them to the day */}
+              {editId !== it.day && (
+                <div className="mt-2.5 pt-2.5" style={{ borderTop: `1px solid ${C.line}` }}>
+                  <button type="button" onClick={() => setIdeasFor(open ? null : it.day)} aria-expanded={open}
+                    className="tap inline-flex items-center gap-1.5 text-[12.5px] font-semibold" style={{ color: C.goldText, background: "transparent", border: 0, padding: 0 }}>
+                    <DkSpark color={C.gold} /> {open ? "Hide Drukpah's ideas" : "Drukpah's ideas for this day"}
+                  </button>
+                  {open && (ideas.length ? (
+                    <ul className="mt-2 space-y-1.5">
+                      {ideas.map((x) => (
+                        <li key={x.t} className="flex items-start gap-2 text-[13px] leading-snug" style={{ color: C.ink }}>
+                          <span className="mt-[7px] w-1 h-1 rounded-full shrink-0" style={{ background: C.gold }} />
+                          <span className="flex-1 min-w-0">{x.t}{x.why ? <span style={{ color: C.muted }}> · {x.why}</span> : null}</span>
+                          {canEdit && <button type="button" disabled={busy} onClick={() => addIdea(it, x.t)} className="tap shrink-0 h-7 px-2.5 rounded-full text-[12px] font-semibold" style={{ background: C.pineSoft, color: C.pine, border: `1px solid ${C.pine}` }}>+ Add</button>}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : <div className="text-[12.5px] mt-1.5" style={{ color: C.muted }}>All of Drukpah's picks for this stretch are already in the day.</div>)}
+                </div>
+              )}
             </div>
-          ))}
+          ); })}
         </div>
       )}
 
@@ -7904,9 +8102,9 @@ function ItineraryBuilder({ trip, canEdit, onChanged, embedded }) {
           <div className="text-[13px] font-medium mb-2" style={{ color: C.ink }}>
             Day {(days.length ? Math.max(...days.map((d) => d.day || 0)) : 0) + 1}
           </div>
-          <input value={title} onChange={(e) => setTitle(e.target.value)} maxLength={120}
+          <input value={title} onChange={(e) => setTitle(e.target.value)} maxLength={600}
             onKeyDown={(e) => e.key === "Enter" && add()}
-            placeholder="e.g. Paro → Thimphu, Buddha Dordenma, evening at Tashichho Dzong"
+            placeholder="e.g. Paro → Thimphu · 1¼ h · Buddha Dordenma, Tashichho Dzong · Night in Thimphu (3-star)"
             className="w-full h-11 px-3.5 rounded-lg text-[14px] mb-2.5"
             style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} autoFocus />
           <div className="flex gap-2">
@@ -10052,7 +10250,7 @@ function dkTerrainScene(THREE, D, el, labelsEl, cb) {
   const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, powerPreference: "high-performance" });   // throws without WebGL
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, phone ? 1.5 : 2));
   renderer.outputColorSpace = THREE.SRGBColorSpace; renderer.setClearColor("#e7eee6");
-  const canvas = renderer.domElement; canvas.style.display = "block"; canvas.style.width = "100%"; canvas.style.height = "100%"; canvas.style.touchAction = "pan-y"; canvas.setAttribute("aria-label", "3-D terrain of western Bhutan with the planned route");
+  const canvas = renderer.domElement; canvas.style.display = "block"; canvas.style.width = "100%"; canvas.style.height = "100%"; canvas.style.touchAction = "pan-y";   // vertical swipes scroll the page; sideways swipes and two fingers reach the terrain canvas.setAttribute("aria-label", "3-D terrain of western Bhutan with the planned route");
   el.appendChild(canvas);
   scene.add(new THREE.HemisphereLight(0xffffff, 0x8b9177, 2));
   const sun = new THREE.DirectionalLight(0xffffff, 0.65); sun.position.set(-W, Math.max(W, H), H / 2); scene.add(sun);
@@ -10156,21 +10354,70 @@ function dkTerrainScene(THREE, D, el, labelsEl, cb) {
   const ray = new THREE.Raycaster(), mouse = new THREE.Vector2();
   const inspect = (cx, cy) => { const r = canvas.getBoundingClientRect(); mouse.set((cx - r.left) / r.width * 2 - 1, -(cy - r.top) / r.height * 2 + 1); updateCamera(); ray.setFromCamera(mouse, camera); const hits = ray.intersectObject(terrain, false); if (hits.length) { const g = toGeo(hits[0].point.x, hits[0].point.z); showPick(g.lon, g.lat); } else hidePick(); };
 
-  // gestures: one finger orbits (vertical drags scroll the page), two fingers pan and zoom, wheel zooms, a tap inspects
-  const pointers = new Map(); let tap = null, gesture = null;
+  // gestures — whatever you touch moves with your finger.
+  //   touch: one finger sideways turns the terrain (up and down stay with the page scroll); two fingers move, pinch and
+  //          turn it, holding the ground under them; a tap shows the height.
+  //   mouse: drag turns and tips it; right-drag or shift-drag moves it; the wheel zooms.
+  // Turning pivots on the centre of the view, so the part above the centre and the part below it move in opposite
+  // directions; the direction is chosen from where the drag starts, so the part under the finger goes the finger's way.
+  const pointers = new Map(); let tap = null, gesture = null, pair = null;
   const zoom = (f) => { tween = null; st.dist = clamp(st.dist * f, DIAG * 0.06, DIAG * 3); requestRender(); };
-  const pan = (dx, dy) => { const m = st.dist * 2 * tanV / size.h, ca = Math.cos(st.az), sa = Math.sin(st.az); st.tx -= dx * m * ca + dy * m * sa; st.tz += dx * m * sa - dy * m * ca; requestRender(); };
-  const onDown = (e) => { if (e.button !== 0 && e.button !== 2) return; tween = null; try { canvas.setPointerCapture(e.pointerId); } catch (_e) {} pointers.set(e.pointerId, { x: e.clientX, y: e.clientY }); tap = { x: e.clientX, y: e.clientY, moved: false, t: performance.now() }; gesture = pointers.size === 1 ? { pan: e.button === 2 || e.shiftKey } : null; if (pointers.size > 1 && tap) tap.moved = true; };
-  const onMove = (e) => { const prev = pointers.get(e.pointerId); if (!prev) return; const dx = e.clientX - prev.x, dy = e.clientY - prev.y; if (tap && Math.hypot(e.clientX - tap.x, e.clientY - tap.y) > 6) tap.moved = true;
-    if (pointers.size === 2) { const other = [...pointers.entries()].find(([id]) => id !== e.pointerId)[1]; const d0 = Math.hypot(prev.x - other.x, prev.y - other.y), d1 = Math.hypot(e.clientX - other.x, e.clientY - other.y); if (d0 > 0 && d1 > 0) zoom(d0 / d1); pan(dx / 2, dy / 2); }
-    else if (gesture && gesture.pan) pan(dx, dy);
-    else if (gesture) { st.az -= dx * 0.006; st.tilt = clamp(st.tilt + dy * 0.004, 15 * DEG, 70 * DEG); requestRender(); }
-    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY }); };
-  const onUp = (e, cancel) => { if (!pointers.has(e.pointerId)) return; const isTap = !cancel && pointers.size === 1 && tap && !tap.moved && performance.now() - tap.t < 600; pointers.delete(e.pointerId); try { canvas.releasePointerCapture(e.pointerId); } catch (_e) {} if (pointers.size) { gesture = { pan: false }; if (tap) tap.moved = true; } else { gesture = null; settle(); } if (isTap) inspect(e.clientX, e.clientY); };
+  // fallback move (used only when no ground is under the pointer): a screen pixel up the view covers more ground than one across
+  const pan = (dx, dy) => { const m = st.dist * 2 * tanV / size.h, my = m / Math.max(0.25, Math.cos(st.tilt)), ca = Math.cos(st.az), sa = Math.sin(st.az); st.tx -= dx * m * ca + dy * my * sa; st.tz += dx * m * sa - dy * my * ca; requestRender(); };
+  const aim = (px, py) => { updateCamera(); const r = canvas.getBoundingClientRect(); if (!r.width || !r.height) return false; mouse.set((px - r.left) / r.width * 2 - 1, -(py - r.top) / r.height * 2 + 1); ray.setFromCamera(mouse, camera); return true; };
+  // the height of the real ground under a screen position (once, when a hand goes down), or null over the sky
+  const surfaceAt = (px, py) => { if (!aim(px, py)) return null; const hits = ray.intersectObject(terrain, false); return hits.length ? hits[0].point.y : null; };
+  // the point at height h (default: the view's centre) under a screen position, or null when that is sky
+  const groundAt = (px, py, h) => {
+    if (!aim(px, py)) return null;
+    const o = ray.ray.origin, d = ray.ray.direction, y = h == null ? meshHeight(st.tx, st.tz) : h;
+    if (d.y > -0.02) return null;
+    const t = (y - o.y) / d.y; if (!(t > 0) || t > DIAG * 3) return null;
+    return { x: o.x + d.x * t, z: o.z + d.z * t };
+  };
+  // move the view so that ground point g (at height h) sits under screen position (px, py); the view rides on the terrain,
+  // so its height changes as it moves — a second and third pass take that up
+  const hold = (g, px, py, h) => {
+    if (!g) return false;
+    for (let k = 0; k < 3; k++) { const g1 = groundAt(px, py, h); if (!g1) return k > 0; const ex = g.x - g1.x, ez = g.z - g1.z; st.tx += ex; st.tz += ez; if (Math.hypot(ex, ez) < 1) break; }
+    requestRender(); return true;
+  };
+  const pairState = () => { const [a, b] = [...pointers.values()]; return { cx: (a.x + b.x) / 2, cy: (a.y + b.y) / 2, d: Math.hypot(a.x - b.x, a.y - b.y), ang: Math.atan2(b.y - a.y, b.x - a.x) }; };
+  const onDown = (e) => {
+    if (e.pointerType === "mouse" && e.button !== 0 && e.button !== 2) return;
+    tween = null; try { canvas.setPointerCapture(e.pointerId); } catch (_e) {}
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pointers.size === 1) {
+      tap = { x: e.clientX, y: e.clientY, moved: false, t: performance.now() }; pair = null;
+      const isMouse = e.pointerType === "mouse";
+      if (isMouse && (e.button === 2 || e.shiftKey)) { const h = surfaceAt(e.clientX, e.clientY); gesture = { kind: "move", h, g: groundAt(e.clientX, e.clientY, h) }; }
+      else { const r = canvas.getBoundingClientRect(); gesture = { kind: "turn", side: e.clientY - r.top <= r.height / 2 ? 1 : -1, tilt: isMouse }; }
+    } else { if (tap) tap.moved = true; gesture = null; pair = pointers.size === 2 ? pairState() : null; if (pair) pair.h = surfaceAt(pair.cx, pair.cy); }
+  };
+  const onMove = (e) => {
+    const prev = pointers.get(e.pointerId); if (!prev) return;
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    const dx = e.clientX - prev.x, dy = e.clientY - prev.y;
+    if (tap && Math.hypot(e.clientX - tap.x, e.clientY - tap.y) > 6) tap.moved = true;
+    if (pointers.size === 2 && pair) {
+      const now = pairState(), g = groundAt(pair.cx, pair.cy, pair.h);
+      if (pair.d > 0 && now.d > 0) st.dist = clamp(st.dist * pair.d / now.d, DIAG * 0.06, DIAG * 3);
+      let da = now.ang - pair.ang; if (da > Math.PI) da -= 2 * Math.PI; if (da < -Math.PI) da += 2 * Math.PI; st.az += da;
+      if (!hold(g, now.cx, now.cy, pair.h)) pan(now.cx - pair.cx, now.cy - pair.cy);
+      now.h = pair.h; pair = now; tween = null; requestRender();
+    } else if (pointers.size === 1 && gesture) {
+      if (gesture.kind === "move") { if (!hold(gesture.g, e.clientX, e.clientY, gesture.h)) pan(dx, dy); }
+      else { st.az += dx * 0.006 * gesture.side; if (gesture.tilt) st.tilt = clamp(st.tilt + dy * 0.004 * gesture.side, 15 * DEG, 70 * DEG); requestRender(); }
+    }
+  };
+  const onUp = (e, cancel) => { if (!pointers.has(e.pointerId)) return; const isTap = !cancel && pointers.size === 1 && tap && !tap.moved && performance.now() - tap.t < 600; pointers.delete(e.pointerId); try { canvas.releasePointerCapture(e.pointerId); } catch (_e) {} pair = null; gesture = null; if (pointers.size) { if (tap) tap.moved = true; } else settle(); if (isTap) inspect(e.clientX, e.clientY); };
+  const onUpEv = (e) => onUp(e, false);
   const onCancel = (e) => onUp(e, true);
+  const onTouch = (e) => { if (e.touches && e.touches.length >= 2 && e.cancelable) e.preventDefault(); };   // two fingers belong to the terrain, not the page
   const onWheel = (e) => { e.preventDefault(); zoom(Math.exp(clamp(e.deltaY, -200, 200) * 0.0015)); clearTimeout(wheelTimer); wheelTimer = setTimeout(settle, 250); };
   const onCtx = (e) => e.preventDefault();
-  canvas.addEventListener("pointerdown", onDown); canvas.addEventListener("pointermove", onMove); canvas.addEventListener("pointerup", (e) => onUp(e, false)); canvas.addEventListener("pointercancel", onCancel); canvas.addEventListener("wheel", onWheel, { passive: false }); canvas.addEventListener("contextmenu", onCtx);
+  canvas.addEventListener("pointerdown", onDown); canvas.addEventListener("pointermove", onMove); canvas.addEventListener("pointerup", onUpEv); canvas.addEventListener("pointercancel", onCancel); canvas.addEventListener("wheel", onWheel, { passive: false }); canvas.addEventListener("contextmenu", onCtx);
+  canvas.addEventListener("touchstart", onTouch, { passive: false }); canvas.addEventListener("touchmove", onTouch, { passive: false });
   const onLost = (e) => { e.preventDefault(); if (cb.onLost) cb.onLost(); };
   canvas.addEventListener("webglcontextlost", onLost);
   let ro = null; if (typeof ResizeObserver !== "undefined") { ro = new ResizeObserver(resize); ro.observe(el); } else window.addEventListener("resize", resize);
@@ -10218,7 +10465,7 @@ function dkTerrainScene(THREE, D, el, labelsEl, cb) {
     reset() { animateTo({ az: -18 * DEG, tilt: 55 * DEG }, 500); },
     dispose() {
       disposed = true; tween = null; clearTimeout(wheelTimer);
-      canvas.removeEventListener("pointerdown", onDown); canvas.removeEventListener("pointermove", onMove); canvas.removeEventListener("pointercancel", onCancel); canvas.removeEventListener("wheel", onWheel); canvas.removeEventListener("contextmenu", onCtx); canvas.removeEventListener("webglcontextlost", onLost);
+      canvas.removeEventListener("pointerdown", onDown); canvas.removeEventListener("pointermove", onMove); canvas.removeEventListener("pointerup", onUpEv); canvas.removeEventListener("pointercancel", onCancel); canvas.removeEventListener("wheel", onWheel); canvas.removeEventListener("contextmenu", onCtx); canvas.removeEventListener("touchstart", onTouch); canvas.removeEventListener("touchmove", onTouch); canvas.removeEventListener("webglcontextlost", onLost);
       if (ro) ro.disconnect(); else window.removeEventListener("resize", resize);
       clearGroup(trip); clearGroup(dayGroup); clearGroup(base); clearLabels(); pickEl.remove();
       geometry.dispose(); groundMat.dispose(); texture.dispose(); skirtGeo.dispose(); skirt.material.dispose();
@@ -10236,6 +10483,7 @@ function DkTerrainMap({ plan, selected, onSelect, onBack }) {
   const [credit, setCredit] = useState(false);
   const day = selected ? plan.days.find((d) => d.day === selected) : null;
   const wide = box.w >= 560;
+  const coarse = typeof matchMedia !== "undefined" && matchMedia("(pointer: coarse)").matches;
   const onSelectRef = useRef(onSelect); onSelectRef.current = onSelect;
   const selRef = useRef(selected); selRef.current = selected;
   const stops = useMemo(() => { const out = []; const seen = new Set(); for (const d of plan.days) if (d.night && !seen.has(d.night)) { seen.add(d.night); out.push({ key: d.night, n: out.length + 1, day: d.day }); } return out; }, [plan]);
@@ -10318,7 +10566,7 @@ function DkTerrainMap({ plan, selected, onSelect, onBack }) {
             <DkNoteBody note={note} day={day} onClose={() => onSelect && onSelect(null)} />
           </div>
         )}
-        {!selected && status === "ready" && <div style={{ position: "absolute", left: 8, bottom: 8, fontSize: 10.5, borderRadius: 6, padding: "4px 8px", pointerEvents: "none", background: "rgba(255,255,255,.9)", color: C.muted, zIndex: 5 }}>Drag to turn · tap for height</div>}
+        {!selected && status === "ready" && <div style={{ position: "absolute", left: 8, bottom: 8, maxWidth: "calc(100% - 200px)", minWidth: 120, fontSize: 10.5, lineHeight: 1.3, borderRadius: 6, padding: "4px 8px", pointerEvents: "none", background: "rgba(255,255,255,.9)", color: C.muted, zIndex: 5 }}>{coarse ? "Swipe sideways to turn · two fingers to move" : "Drag to turn · right-drag to move"}</div>}
         <button type="button" onClick={(e) => { e.stopPropagation(); setCredit((v) => !v); }} style={{ position: "absolute", right: 8, bottom: 6, fontSize: 9, color: "rgba(255,255,255,.9)", textShadow: "0 0 3px rgba(0,0,0,.8)", background: "transparent", border: 0, padding: 0, cursor: "pointer", zIndex: 5 }}>Copernicus DEM · © OpenStreetMap ⓘ</button>
         {credit && (
           <div className="rounded-lg" style={{ position: "absolute", right: 8, bottom: 24, maxWidth: 280, padding: "8px 10px", fontSize: 10.5, lineHeight: 1.4, background: "rgba(255,255,255,.96)", color: C.muted, border: `1px solid ${C.line}`, zIndex: 7 }} onClick={(e) => e.stopPropagation()}>
