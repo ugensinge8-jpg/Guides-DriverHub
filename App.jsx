@@ -66,7 +66,7 @@ const CLOUD = Boolean(supabase);
   } catch (e) {}
 })();
 const DEMO_MODE = false;   // set true only for local demos without a database
-const BUILD = "BUILD 56 — 10 Oct";   // bump every deploy; shown at the top of the welcome screen
+const BUILD = "BUILD 57 — 10 Oct";   // bump every deploy; shown at the top of the welcome screen
 // which device someone is on — shown beside the build so a screenshot tells us both
 const DEVICE = (() => {
   try {
@@ -1870,6 +1870,7 @@ function Shell({ user, posts, jobs, trips, listings, enquiries, actions, engagem
   const { invites: crewInvites, creditRequests: openCreditRequests } = React.useContext(InvitesCtx);
   const [tab, setTab] = useState(() => tabForOpen(initialOpen, user.kind) || DEFAULT_TAB[user.kind]);
   const [overlay, setOverlay] = useState(null); // {type:'profile'|'request', talentId}
+  const [crewDates, setCrewDates] = useState(null); // BUILD 57: { from, to, title? } chosen in Find talent
   const [dmWith, setDmWith] = useState(null);
   const [sharedPost, setSharedPost] = useState(null);
   const [searchTerm, setSearchTerm] = useState("");
@@ -2266,7 +2267,7 @@ function Shell({ user, posts, jobs, trips, listings, enquiries, actions, engagem
               onRequest={() => setOverlay({ type: "request", talentId: overlay.talentId })}
               onBack={() => setOverlay(null)} />
           ) : (
-            <RequestForm key={overlay.talentId} talent={talentById(overlay.talentId)} operator={user.name}
+            <RequestForm key={overlay.talentId} talent={talentById(overlay.talentId)} operator={user.name} initial={crewDates}
               onBack={() => setOverlay({ type: "profile", talentId: overlay.talentId })}
               onSend={async (job) => { const r = await actions.sendJob(job); if (r && r.ok === false) return r; setOverlay(null); setTab("requests"); return r; }} />
           )
@@ -2285,7 +2286,8 @@ function Shell({ user, posts, jobs, trips, listings, enquiries, actions, engagem
             {tab === "hotel_profile" && <HotelProfile user={user} onSaved={actions.reloadDirectory} />}
             {tab === "itinerary" && <QuickItinerary user={user} trips={trips} actions={actions} />}
             {tab === "insights" && <InsightsTab user={user} trips={trips} enquiries={enquiries} />}
-            {tab === "discover" && <Discover onOpen={openProfile} initialQuery={searchTerm} dirTick={dirTick} />}
+            {tab === "discover" && <Discover onOpen={openProfile} initialQuery={searchTerm} dirTick={dirTick} dates={crewDates} onDates={setCrewDates}
+              myTrips={(trips || []).filter((t) => t && String(t.operatorId) === String(actorId) && t.status !== "cancelled" && t.start && (t.end || t.start) >= isoDay(0))} />}
             {tab === "requests" && <OperatorJobs user={user} jobs={jobs} listings={listings} posts={posts} actions={actions} eng={eng} onOpen={openProfile} />}
             {tab === "feed" && <Feed posts={posts} eng={eng} admin={user.kind === "admin"} onDelete={actions.deletePost} onOpenProfile={openProfile} following={myFollowing} user={user} trips={trips} stays={hotelData} />}
             {tab === "review" && <Review posts={posts} onApprove={actions.approve} onReject={actions.reject} eng={eng} />}
@@ -2888,12 +2890,13 @@ function Pill({ Icon, children }) {
 }
 
 /* ============================ Discover (operator) ========================= */
-function Discover({ onOpen, initialQuery, dirTick }) {
+function Discover({ onOpen, initialQuery, dirTick, dates, onDates, myTrips }) {
   const [q, setQ] = useState(initialQuery || "");
   useEffect(() => { if (initialQuery) setQ(initialQuery); }, [initialQuery]);
   const [role, setRole] = useState("all");
   const [lang, setLang] = useState(null);
   const [onlyFree, setOnlyFree] = useState(false);
+  const [pickDates, setPickDates] = useState(false);
 
   const POOL = useMemo(() => [...TALENT, ...Object.values(PROFILE_DIR).filter((p) => p.role === "guide" || p.role === "driver")], [dirTick]);
   // BUILD 56: what tour operators graded after real trips (averages; the database shows these to operators and admins)
@@ -2910,21 +2913,27 @@ function Discover({ onOpen, initialQuery, dirTick }) {
     });
     return () => { on = false; };
   }, [dirTick]);
+  // BUILD 57: who is free on the operator's trip dates (confirmed trips and blocked days count as taken)
+  const freeOn = useCrewFreeOn(POOL, dates);
+  const dateState = (t) => (dates ? freeOn.of[String(t.id)] || null : null);
+  const DATE_RANK = { free: 0, pending: 1, unknown: 2 };
   const list = POOL.filter((t) => (role === "all" || t.role === role))
+    .filter((t) => (!dates || !dateState(t) || dateState(t).state !== "taken"))
     .filter((t) => (!onlyFree || (t.availability || "open") === "open"))
     .filter((t) => (!lang || (t.languages || []).some((l) => l && l.n === lang)))
     .filter((t) => {
       const hay = `${t.name || ""} ${t.base || ""} ${(t.tags || []).join(" ")}`.toLowerCase();
       return hay.includes(q.toLowerCase());
     })
-    // verified licences first (as the guides' page promises), then the best graded by operators, then guests' rating
-    .sort((a, b) => (b.verified ? 1 : 0) - (a.verified ? 1 : 0)
+    // free on the trip dates first (when set), then verified licences, then the best graded by operators, then guests' rating
+    .sort((a, b) => (dates ? (DATE_RANK[(dateState(a) || {}).state] ?? 2) - (DATE_RANK[(dateState(b) || {}).state] ?? 2) : 0)
+      || (b.verified ? 1 : 0) - (a.verified ? 1 : 0)
       || ((graded[b.id] && graded[b.id].overall) || 0) - ((graded[a.id] && graded[a.id].overall) || 0)
       || (b.rating || 0) - (a.rating || 0));
 
   return (
     <div className="px-5 py-4">
-      <SectionLabel trailing={`${list.length} available`}>Find talent</SectionLabel>
+      <SectionLabel trailing={dates ? (freeOn.loading ? "Checking…" : `${list.length} free`) : `${list.length} available`}>Find talent</SectionLabel>
 
       <div className="relative mb-3">
         <Search size={16} color={C.muted} className="absolute left-3.5 top-1/2 -translate-y-1/2" />
@@ -2939,18 +2948,115 @@ function Discover({ onOpen, initialQuery, dirTick }) {
         })}
       </div>
 
+      <div className="flex items-stretch gap-2 mb-3">
+        <button type="button" onClick={() => setPickDates(true)} className="tap flex-1 min-w-0 h-11 rounded-xl px-3.5 flex items-center gap-2.5 text-[14px]"
+          style={{ background: dates ? C.pineSoft : C.card, border: `1px solid ${dates ? C.pine : C.line}`, color: dates ? C.pine : C.ink }}>
+          <CalendarDays size={16} />
+          <span className="flex-1 min-w-0 text-left truncate font-semibold">
+            {dates ? `Free ${fmtDayRange(dates.from, dates.to)}${dates.title ? " · " + dates.title : ""}` : "Trip dates: show who's free"}
+          </span>
+        </button>
+        {dates && (
+          <button type="button" aria-label="Clear trip dates" onClick={() => onDates(null)} className="tap w-11 h-11 rounded-xl flex items-center justify-center shrink-0"
+            style={{ background: C.card, border: `1px solid ${C.line}` }}><X size={17} color={C.ink} /></button>
+        )}
+      </div>
+
       <div className="flex gap-2 overflow-x-auto hidescroll pb-1 mb-4" style={{ scrollbarWidth: "none" }}>
         <Chip on={onlyFree} onClick={() => setOnlyFree((v) => !v)}>Available now</Chip>
         <Chip on={!lang} onClick={() => setLang(null)}>All languages</Chip>
         {LANG_OPTIONS.map((l) => <Chip key={l} on={lang === l} onClick={() => setLang(lang === l ? null : l)}>{l}</Chip>)}
       </div>
 
-      {list.length === 0 ? (
-        <Empty Icon={Search} title="No matches" body="Try a different role or language filter." />
+      {dates && freeOn.loading ? (
+        <div className="rounded-2xl px-4 py-6 flex items-center justify-center gap-2 text-[14px]" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.muted }}>
+          <Loader2 size={16} className="animate-spin" /> Checking who's free {fmtDayRange(dates.from, dates.to)}…
+        </div>
+      ) : list.length === 0 ? (
+        dates ? <Empty Icon={CalendarDays} title="Nobody free on these dates" body="Try other dates or filters, or clear the dates to see everyone." />
+              : <Empty Icon={Search} title="No matches" body="Try a different role or language filter." />
       ) : (
-        <div className="space-y-3">{list.map((t) => <TalentCard key={t.id} t={t} graded={graded[t.id]} onOpen={() => onOpen(t.id)} />)}</div>
+        <div className="space-y-3">{list.map((t) => <TalentCard key={t.id} t={t} graded={graded[t.id]} dateState={dateState(t)} onOpen={() => onOpen(t.id)} />)}</div>
       )}
+      {pickDates && <CrewDatesSheet dates={dates} myTrips={myTrips || []} onClose={() => setPickDates(false)}
+        onApply={(d) => { onDates(d); setPickDates(false); }} />}
     </div>
+  );
+}
+
+/* BUILD 57 — trip dates in Find talent.
+   Reads each person's calendar through talent_busy() (the same function the request form uses). A confirmed trip or a
+   blocked day in the range = taken (hidden). Requests waiting = still free (whoever they accept first gets the booking).
+   A calendar that could not be read = "unknown": still listed, clearly marked, never presented as free. */
+const fmtDayRange = (from, to) => (!to || to === from ? fmtDate(from) : `${fmtDate(from)}–${fmtDate(to)}`);
+function useCrewFreeOn(pool, dates) {
+  const ids = (pool || []).map((t) => String(t.id));
+  const key = dates && dates.from && dates.to ? `${dates.from}|${dates.to}|${ids.join(",")}` : null;
+  const [res, setRes] = useState({ key: null, of: {} });
+  useEffect(() => {
+    if (!key) return;
+    let on = true;
+    const from = dates.from, to = dates.to, of = {};
+    const ask = async (id) => {
+      if (!CLOUD) { of[id] = { state: "unknown" }; return; }
+      try {
+        const { data, error } = await supabase.rpc("talent_busy", { p_talent: id, p_from: from, p_to: to });
+        if (error || !Array.isArray(data)) { if (error) console.error("talent_busy:", error.message); of[id] = { state: "unknown" }; return; }
+        const hits = (k) => data.filter((r) => r && r.kind === k && r.from_date <= to && (r.to_date || r.from_date) >= from).length;
+        if (hits("trip") || hits("block")) of[id] = { state: "taken" };
+        else { const n = hits("pending"); of[id] = { state: n ? "pending" : "free", pending: n }; }
+      } catch (e) { of[id] = { state: "unknown" }; }
+    };
+    (async () => {
+      for (let i = 0; i < ids.length; i += 6) {
+        await Promise.all(ids.slice(i, i + 6).map(ask));
+        if (!on) return;
+      }
+      setRes({ key, of });
+    })();
+    return () => { on = false; };
+  }, [key]);
+  return { loading: !!key && res.key !== key, of: key && res.key === key ? res.of : {} };
+}
+
+function CrewDatesSheet({ dates, myTrips, onClose, onApply }) {
+  const [from, setFrom] = useState((dates && dates.from) || "");
+  const [to, setTo] = useState((dates && dates.to) || "");
+  const bad = from && to && to < from;
+  const ok = from && to && !bad;
+  const upcoming = [...myTrips].sort((a, b) => String(a.start).localeCompare(String(b.start))).slice(0, 5);
+  const field = { background: C.card, border: `1px solid ${C.line}`, color: C.ink };
+  return (
+    <Sheet onClose={onClose}>
+      <div className="text-[18px] font-semibold mb-1" style={{ color: C.ink }}>Trip dates</div>
+      <p className="text-[13px] mb-4" style={{ color: C.muted }}>Only guides and drivers free on every one of these days will show.</p>
+      {upcoming.length > 0 && (
+        <>
+          <Label>Your upcoming trips</Label>
+          <div className="space-y-2 mb-4">
+            {upcoming.map((t) => (
+              <button key={t.id} type="button" onClick={() => onApply({ from: t.start, to: t.end || t.start, title: t.title })}
+                className="tap w-full text-left rounded-xl px-3.5 py-2.5 flex items-center gap-3" style={field}>
+                <CalendarDays size={16} color={C.pine} />
+                <span className="flex-1 min-w-0"><span className="block text-[14px] font-semibold truncate">{t.title}</span>
+                  <span className="block text-[12px]" style={{ color: C.muted }}>{fmtDayRange(t.start, t.end || t.start)}</span></span>
+              </button>
+            ))}
+          </div>
+          <Label>Or choose dates</Label>
+        </>
+      )}
+      <div className="grid grid-cols-2 gap-3 mb-2">
+        <div><div className="text-[12px] mb-1" style={{ color: C.muted }}>Start</div>
+          <input type="date" aria-label="Trip start" value={from} onChange={(e) => { setFrom(e.target.value); if (!to || e.target.value > to) setTo(e.target.value); }}
+            className="w-full h-12 px-3.5 rounded-xl text-[14px]" style={field} /></div>
+        <div><div className="text-[12px] mb-1" style={{ color: C.muted }}>End</div>
+          <input type="date" aria-label="Trip end" value={to} min={from || undefined} onChange={(e) => setTo(e.target.value)}
+            className="w-full h-12 px-3.5 rounded-xl text-[14px]" style={field} /></div>
+      </div>
+      {bad && <div className="text-[13px] mb-2" style={{ color: C.maroon }}>The end date is before the start date.</div>}
+      <div className="mt-3"><OCta disabled={!ok} onClick={() => ok && onApply({ from, to })}>Show who's free</OCta></div>
+    </Sheet>
   );
 }
 function Chip({ on, onClick, children }) {
@@ -2958,7 +3064,7 @@ function Chip({ on, onClick, children }) {
     style={{ background: on ? C.pine : C.grey, border: `1px solid ${on ? C.pine : "transparent"}`, color: on ? "#fff" : C.ink }}>{children}</button>;
 }
 
-function TalentCard({ t, onOpen, graded }) {
+function TalentCard({ t, onOpen, graded, dateState }) {
   return (
     <button onClick={onOpen} className="tap w-full text-left rounded-2xl p-4" style={{ background: C.card, border: `1px solid ${C.line}` }}>
       <div className="flex items-center gap-3.5">
@@ -2978,7 +3084,7 @@ function TalentCard({ t, onOpen, graded }) {
         </div>
       </div>
       <div className="flex flex-wrap items-center gap-1.5 mt-3">
-        <AvailabilityChip talent={t} />
+        {dateState ? <DateStateChip st={dateState} /> : <AvailabilityChip talent={t} />}
         {graded && graded.trips > 0 && (
           <span className="text-[12px] font-semibold rounded-md px-1.5 py-0.5 inline-flex items-center gap-1" style={{ background: C.pineSoft, color: C.pine }}
             title="Average of the grades tour operators gave after real trips">
@@ -2991,6 +3097,13 @@ function TalentCard({ t, onOpen, graded }) {
       </div>
     </button>
   );
+}
+
+function DateStateChip({ st }) {
+  const m = st.state === "free" ? { bg: C.pineSoft, fg: C.pine, Icon: CalendarCheck, t: "Free on your dates" }
+    : st.state === "pending" ? { bg: C.goldSoft, fg: C.goldText, Icon: CalendarCheck, t: `Free · ${st.pending} request${st.pending === 1 ? "" : "s"} waiting` }
+    : { bg: C.bg, fg: C.muted, Icon: CalendarDays, t: "Couldn't check dates" };
+  return <span className="text-[12px] font-semibold rounded-md px-1.5 py-0.5 inline-flex items-center gap-1" style={{ background: m.bg, color: m.fg }}><m.Icon size={12} /> {m.t}</span>;
 }
 
 /* ======================= Sent requests (operator) ======================== */
@@ -3474,15 +3587,15 @@ function TalentProfile({ talent, posts, canRequest, self, contactOnly, eng, onRe
 }
 
 /* ============================ Job request form =========================== */
-function RequestForm({ talent, operator, onBack, onSend }) {
-  const [title, setTitle] = useState("");
-  const [start, setStart] = useState("");
-  const [end, setEnd] = useState("");
+function RequestForm({ talent, operator, onBack, onSend, initial }) {
+  const [title, setTitle] = useState((initial && initial.title) || "");
+  const [start, setStart] = useState((initial && initial.from) || "");
+  const [end, setEnd] = useState((initial && initial.to) || "");
   const [langs, setLangs] = useState([]);
   const [notes, setNotes] = useState("");
   const [sending, setSending] = useState(false);
   const [err, setErr] = useState(null);
-  const avail = useRequestAvailability(talent, start, end);
+  const avail = useRequestAvailability({ talent, start, end });
   const canSend = title.trim() && start && end && end >= start && avail.ok && !sending;
   const send = async () => {
     if (!canSend) return;
