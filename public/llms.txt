@@ -1,0 +1,17 @@
+# Bhutan Tourism Hub
+
+> A Bhutan-based platform where tour operators find and book licensed, verified freelance guides and drivers, request hotel rooms, plan day-by-day itineraries and run each trip in one place. Guest reviews are tied to real trips, and tour operators grade the crew they employed after each trip. Free for licensed guides, drivers, tour operators and hotels in Bhutan; no commission. Travellers book their trip with a licensed Bhutanese tour operator; the hub is the professionals' tool and does not sell trips to travellers directly.
+
+## Pages
+
+- [Hire licensed guides and drivers in Bhutan](https://bhutantourismhub.com/hire-guides-drivers): how tour operators find, check and book freelance guides and drivers.
+- [For tour operators](https://bhutantourismhub.com/tour-operators): crew, itineraries, hotel rooms, enquiries and each trip's chat in one place.
+- [For freelance guides and drivers](https://bhutantourismhub.com/guides): direct requests, open jobs, a protected calendar and a portable trip record.
+- [For hotels](https://bhutantourismhub.com/hotels): room requests from tour operators, answered in one tap.
+- [VIP and private trips in Bhutan](https://bhutantourismhub.com/vip-travel-bhutan): choosing senior guides and trusted drivers on real trip records.
+- [Bhutan travel guide](https://bhutantourismhub.com/bhutan-travel-guide): visas, the Sustainable Development Fee, guides, getting there, seasons and regions.
+- [How a trip runs](https://bhutantourismhub.com/demo): from enquiry to the guest's review.
+
+## Contact
+
+ugyen@bhutantourismhub.com
