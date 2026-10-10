@@ -66,7 +66,7 @@ const CLOUD = Boolean(supabase);
   } catch (e) {}
 })();
 const DEMO_MODE = false;   // set true only for local demos without a database
-const BUILD = "BUILD 55 — 9 Oct";   // bump every deploy; shown at the top of the welcome screen
+const BUILD = "BUILD 56 — 10 Oct";   // bump every deploy; shown at the top of the welcome screen
 // which device someone is on — shown beside the build so a screenshot tells us both
 const DEVICE = (() => {
   try {
@@ -1932,8 +1932,8 @@ function Shell({ user, posts, jobs, trips, listings, enquiries, actions, engagem
     return () => window.removeEventListener("bth-open", onOpen);
   }, [user.kind]);
   // reminders the server writes (system_nudges, review_nudges) — the ones the app cannot work out by itself.
-  // Left out: what the bell already shows from live data, and "grade-crew" (there is no grading in the app yet).
-  const NUDGE_SKIP = { trip3: 1, trip1: 1, "lic-redo": 1, lic30: 1, licexp: 1, "job-new": 1, ended: 1, "grade-crew": 1 };
+  // Left out: what the bell already shows from live data. "grade-crew" opens the trip's grading (BUILD 56).
+  const NUDGE_SKIP = { trip3: 1, trip1: 1, "lic-redo": 1, lic30: 1, licexp: 1, "job-new": 1, ended: 1 };
   const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   const loadNudges = async () => {
     if (!CLOUD || !signedIn) return;   // without the sign-in the server would answer with nothing: keep what is shown
@@ -1955,7 +1955,9 @@ function Shell({ user, posts, jobs, trips, listings, enquiries, actions, engagem
     }
     const rows = [
       ...sys.map((r) => ({ id: `sn-${r.id}`, kind: r.kind, title: r.title, body: r.body, created_at: r.created_at,
-        tripId: r.kind === "review-approve" ? tripOfReview[r.ref] || null : null, sheet: r.kind === "review-approve" ? "reviews" : null })),
+        tripId: r.kind === "review-approve" ? tripOfReview[r.ref] || null
+              : r.kind === "grade-crew" && UUID.test(String(r.ref || "").split(":")[0]) ? String(r.ref).split(":")[0] : null,
+        sheet: r.kind === "review-approve" ? "reviews" : r.kind === "grade-crew" ? "grade" : null })),
       ...(R.data || []).filter((r) => !NUDGE_SKIP[r.kind]).map((r) => ({ id: `rn-${r.id}`, kind: r.kind, title: r.title, body: r.body,
         created_at: r.created_at, tripId: r.trip_id || null, sheet: "reviews" })),
     ];
@@ -2894,6 +2896,20 @@ function Discover({ onOpen, initialQuery, dirTick }) {
   const [onlyFree, setOnlyFree] = useState(false);
 
   const POOL = useMemo(() => [...TALENT, ...Object.values(PROFILE_DIR).filter((p) => p.role === "guide" || p.role === "driver")], [dirTick]);
+  // BUILD 56: what tour operators graded after real trips (averages; the database shows these to operators and admins)
+  const [graded, setGraded] = useState({});
+  useEffect(() => {
+    if (!CLOUD) return;
+    const ids = POOL.map((t) => t.id).filter((id) => /^[0-9a-f-]{36}$/i.test(String(id)));
+    if (!ids.length) return;
+    let on = true;
+    supabase.rpc("crew_grade_overviews", { p_ids: ids }).then(({ data, error }) => {
+      if (!on || error || !Array.isArray(data)) return;
+      const m = {}; data.forEach((r) => { m[r.profile_id] = { overall: Number(r.overall), trips: Number(r.trips) }; });
+      setGraded(m);
+    });
+    return () => { on = false; };
+  }, [dirTick]);
   const list = POOL.filter((t) => (role === "all" || t.role === role))
     .filter((t) => (!onlyFree || (t.availability || "open") === "open"))
     .filter((t) => (!lang || (t.languages || []).some((l) => l && l.n === lang)))
@@ -2901,7 +2917,10 @@ function Discover({ onOpen, initialQuery, dirTick }) {
       const hay = `${t.name || ""} ${t.base || ""} ${(t.tags || []).join(" ")}`.toLowerCase();
       return hay.includes(q.toLowerCase());
     })
-    .sort((a, b) => (b.rating || 0) - (a.rating || 0));
+    // verified licences first (as the guides' page promises), then the best graded by operators, then guests' rating
+    .sort((a, b) => (b.verified ? 1 : 0) - (a.verified ? 1 : 0)
+      || ((graded[b.id] && graded[b.id].overall) || 0) - ((graded[a.id] && graded[a.id].overall) || 0)
+      || (b.rating || 0) - (a.rating || 0));
 
   return (
     <div className="px-5 py-4">
@@ -2929,7 +2948,7 @@ function Discover({ onOpen, initialQuery, dirTick }) {
       {list.length === 0 ? (
         <Empty Icon={Search} title="No matches" body="Try a different role or language filter." />
       ) : (
-        <div className="space-y-3">{list.map((t) => <TalentCard key={t.id} t={t} onOpen={() => onOpen(t.id)} />)}</div>
+        <div className="space-y-3">{list.map((t) => <TalentCard key={t.id} t={t} graded={graded[t.id]} onOpen={() => onOpen(t.id)} />)}</div>
       )}
     </div>
   );
@@ -2939,7 +2958,7 @@ function Chip({ on, onClick, children }) {
     style={{ background: on ? C.pine : C.grey, border: `1px solid ${on ? C.pine : "transparent"}`, color: on ? "#fff" : C.ink }}>{children}</button>;
 }
 
-function TalentCard({ t, onOpen }) {
+function TalentCard({ t, onOpen, graded }) {
   return (
     <button onClick={onOpen} className="tap w-full text-left rounded-2xl p-4" style={{ background: C.card, border: `1px solid ${C.line}` }}>
       <div className="flex items-center gap-3.5">
@@ -2960,6 +2979,12 @@ function TalentCard({ t, onOpen }) {
       </div>
       <div className="flex flex-wrap items-center gap-1.5 mt-3">
         <AvailabilityChip talent={t} />
+        {graded && graded.trips > 0 && (
+          <span className="text-[12px] font-semibold rounded-md px-1.5 py-0.5 inline-flex items-center gap-1" style={{ background: C.pineSoft, color: C.pine }}
+            title="Average of the grades tour operators gave after real trips">
+            <UserCheck size={12} /> {graded.overall.toFixed(1)} from operators · {graded.trips} {graded.trips === 1 ? "trip" : "trips"}
+          </span>
+        )}
         {(t.languages || []).slice(0, 3).map((l) => (
           <span key={l.n} className="text-[12px] rounded-md px-1.5 py-0.5" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.muted }}>{l.n}</span>
         ))}
@@ -3319,22 +3344,8 @@ function TalentProfile({ talent, posts, canRequest, self, contactOnly, eng, onRe
 
               <div className="mt-6" />
 
-              {/* trip record */}
-              <div className="rounded-2xl overflow-hidden" style={{ border: `1px solid ${C.line}` }}>
-                <div className="px-4 py-3.5 flex items-center justify-between" style={{ background: C.pine }}>
-                  <div><div className="text-[11px] font-semibold tracking-[.14em] uppercase" style={{ color: C.goldSoft }}>Trip record</div>
-                    <div className="text-[13px] mt-0.5" style={{ color: "#ffffffcc" }}>Graded by operators</div></div>
-                  <div className="text-right"><div className="text-[26px] font-semibold leading-none text-white">{typeof t.rating === "number" ? t.rating.toFixed(1) : "New"}</div><div className="mt-1 flex justify-end"><Stars score={t.rating || 0} light /></div></div>
-                </div>
-                <div className="px-4 py-4 space-y-3.5" style={{ background: C.card }}>
-                  {Object.keys(t.grades || {}).length === 0 ? (
-                    <p className="text-[14px]" style={{ color: C.muted }}>No trips graded yet — the record fills in after the first completed trip.</p>
-                  ) : Object.entries(t.grades).map(([kk, v]) => (
-                    <div key={kk}><div className="flex items-baseline justify-between mb-1.5"><span className="text-[14px] font-medium" style={{ color: C.ink }}>{kk}</span><span className="text-[13px] font-semibold" style={{ color: C.pine }}>{typeof v === "number" ? v.toFixed(1) : "—"}</span></div>
-                      <div className="h-2 rounded-full overflow-hidden" style={{ background: C.lineSoft }}><div className="h-full rounded-full" style={{ width: `${(v / 5) * 100}%`, background: `linear-gradient(90deg, ${C.gold}, #D9A94E)` }} /></div></div>
-                  ))}
-                </div>
-              </div>
+              {/* trip record: what tour operators graded after real trips (BUILD 56) — operators, admins and the person */}
+              <OperatorGrades talent={t} show={Boolean(self || canRequest || contactOnly)} self={!!self} />
 
               {t.pitch && <div className="mt-5 pl-4" style={{ borderLeft: `3px solid ${C.gold}` }}><p className="text-[15px] leading-relaxed" style={{ color: C.ink }}>{t.pitch}</p></div>}
 
@@ -3626,11 +3637,20 @@ function TripHub({ user, meId, trip, actions, onBack, openSheet }) {
   const isTalent = user.kind === "guide" || user.kind === "driver";
   const [chatOpen, setChatOpen] = useState(false);
   const [inviting, setInviting] = useState(false);
+  const [grading, setGrading] = useState(false);   // BUILD 56
   const [askingOperator, setAskingOperator] = useState(false);
   const [section, setSection] = useState(null);   // tasks | hotels | guests | crew | itinerary | details
   const reviews = useTripReviews(trip, canInvite);   // BUILD 55: what guests sent, for the operator to publish
-  // BUILD 55: a notification about this trip's reviews opens them straight away
-  useEffect(() => { if (openSheet && openSheet.sheet === "reviews" && canInvite) setInviting(true); }, [openSheet && openSheet.n]);
+  // BUILD 56: the trip's own operator grades the crew once the trip has ended (for 90 days)
+  const gradeWindow = gradeWindowOf(trip);
+  const canGrade = Boolean(trip.operatorId && trip.operatorId === meId && gradeWindow.open);
+  const grades = useTripGrades(trip, meId, canGrade);
+  // BUILD 55: a notification about this trip's reviews (or, BUILD 56, its grading) opens it straight away
+  useEffect(() => {
+    if (!openSheet) return;
+    if (openSheet.sheet === "reviews" && canInvite) setInviting(true);
+    if (openSheet.sheet === "grade" && canGrade) setGrading(true);
+  }, [openSheet && openSheet.n]);
   if (chatOpen) return <TripChatView user={user} meId={meId} trip={trip} actions={actions} onBack={() => setChatOpen(false)} />;
   if (section && !isTalent) {
     const titles = { tasks: "Operator tasks", hotels: "Hotels", guests: "Guests", crew: "Crew", itinerary: "Itinerary", details: "Trip details" };
@@ -3758,6 +3778,35 @@ function TripHub({ user, meId, trip, actions, onBack, openSheet }) {
           </button>
         )}
 
+        {canGrade && !grades.off && (() => {   // hidden until the database has grading
+          const crew = gradableCrew(trip, meId);
+          if (!crew.length) return null;
+          const done = crew.filter((m) => (grades.rows || []).some((g) => g.profile_id === m.id)).length;
+          const left = crew.length - done;
+          const tone = left ? C.goldText : C.pine;
+          return (
+            <button type="button" onClick={() => setGrading(true)}
+              className="tap w-full rounded-2xl p-4 mb-4 flex items-center gap-3 text-left"
+              style={{ background: left ? C.goldSoft : C.pineSoft, border: `1px solid ${tone}33` }}>
+              <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0" style={{ background: left ? C.gold : C.pine }}>
+                <UserCheck size={18} color="#FFFFFF" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="text-[14px] font-semibold" style={{ color: tone }}>Grade your crew</div>
+                <div className="text-[13px] mt-0.5 leading-snug" style={{ color: tone, opacity: .85 }}>
+                  {left ? `${left} of ${crew.length} still to grade — punctuality, conduct and more. It helps other operators choose.`
+                        : `All graded. You can adjust until ${fmtDate(gradeWindow.until)}.`}
+                </div>
+              </div>
+              {left > 0 && (
+                <span className="shrink-0 min-w-[22px] h-[22px] px-1.5 rounded-full text-[12px] font-bold flex items-center justify-center" style={{ background: C.gold, color: "#FFFFFF" }}>{left}</span>
+              )}
+              <ChevronLeft size={17} color={tone} style={{ transform: "rotate(180deg)" }} />
+            </button>
+          );
+        })()}
+
+        {grading && <CrewGradeSheet trip={trip} meId={meId} grades={grades} until={gradeWindow.until} onClose={() => setGrading(false)} />}
         {inviting && <ReviewInvite user={user} trip={trip} reviews={reviews} onClose={() => setInviting(false)}
           onOpenCrew={isTalent ? null : () => { setInviting(false); setSection("crew"); }} />}
         {askingOperator && <OperatorInvite user={user} trip={trip} onClose={() => setAskingOperator(false)} />}
@@ -7593,6 +7642,210 @@ function useTripReviews(trip, enabled) {
     return () => { supabase.removeChannel(ch); };
   }, [tripId, enabled]);
   return { rows, reload: load };
+}
+
+/* ========================================================================== */
+/*  CREW GRADES (BUILD 56)                                                    */
+/*  After a trip its tour operator grades each guide and driver. Fair by     */
+/*  design: only the trip's operator, only after the trip, one grade per     */
+/*  person per trip; others see averages across trips, never one grade; the  */
+/*  note stays with its author. The database enforces all of it.             */
+/* ========================================================================== */
+const GRADE_FIELDS = (role) => [
+  ["punctuality", "Punctuality", "On time, every day of the trip"],
+  ["conduct", "Conduct & discipline", "Professional, sober, respectful"],
+  ["cleanliness", "Cleanliness & presentation", role === "driver" ? "Neat, and a clean, ready vehicle" : "Neat, well presented"],
+  ["guest_care", "Guest care", "Safety, patience, attention to guests"],
+  ["skill", role === "driver" ? "Safe driving" : "Knowledge", role === "driver" ? "Calm, careful, well rested" : "Culture, history, nature, routes"],
+  ["communication", "Communication", "Kept you informed, easy to reach"],
+];
+const GRADE_DAYS = 90;
+// a trip can be graded from its last day until GRADE_DAYS later
+function gradeWindowOf(trip) {
+  if (!trip || !trip.end) return { open: false, until: null };
+  const end = new Date(trip.end + "T00:00");
+  const until = new Date(end.getTime() + GRADE_DAYS * 86400e3);
+  const today = localISO(new Date());
+  return { open: trip.end <= today && localISO(until) >= today && trip.status !== "cancelled", until: localISO(until) };
+}
+const gradableCrew = (trip, meId) => (trip.members || []).filter((m) => m && m.id && m.id !== meId &&
+  !["operator", "moderator", "manager"].includes(String(m.roleInTrip || "").toLowerCase()));
+const gradeOff = (error) => Boolean(error) && (error.code === "PGRST202" || /grade_crew|crew_grade|character_marks/i.test(String(error.message || "")) && /function|column|exist|schema/i.test(String(error.message || "")));
+
+// the grades this operator gave on one trip
+function useTripGrades(trip, meId, enabled) {
+  const [rows, setRows] = useState(null);
+  const [off, setOff] = useState(false);
+  const tripId = trip && trip.id;
+  const load = async () => {
+    if (!CLOUD || !enabled || !tripId) { setRows([]); return; }
+    const { data, error } = await supabase.from("character_marks")
+      .select("profile_id,punctuality,conduct,cleanliness,guest_care,skill,communication,note,updated_at")
+      .eq("trip_id", tripId).eq("operator_id", meId).eq("kind", "grade");
+    if (error) { if (gradeOff(error)) setOff(true); else console.warn("trip grades:", error.message); setRows((r) => r || []); return; }
+    setRows((data || []).filter((g) => g.punctuality != null));
+  };
+  useEffect(() => { load(); }, [tripId, enabled]);
+  return { rows, off, reload: load };
+}
+
+function StarPick({ value, onChange, label }) {
+  return (
+    <div className="flex items-center gap-0.5" role="radiogroup" aria-label={label}>
+      {[1, 2, 3, 4, 5].map((i) => (
+        <button key={i} type="button" role="radio" aria-checked={value === i} aria-label={`${label}: ${i} of 5`}
+          onClick={() => onChange(i)} className="tap w-8 h-8 flex items-center justify-center rounded-lg" style={{ background: "transparent", border: 0 }}>
+          <Star size={20} color={i <= (value || 0) ? C.gold : C.line} fill={i <= (value || 0) ? C.gold : "transparent"} strokeWidth={1.8} />
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function CrewGradeCard({ trip, person, saved, onSaved }) {
+  const fields = GRADE_FIELDS(person.role);
+  const [scores, setScores] = useState(() => {
+    const o = {}; fields.forEach(([k]) => { o[k] = saved ? saved[k] || 0 : 0; }); return o;
+  });
+  const [note, setNote] = useState((saved && saved.note) || "");
+  const [busy, setBusy] = useState(false);
+  const [dirty, setDirty] = useState(false);
+  const complete = fields.every(([k]) => scores[k] >= 1);
+  const overall = complete ? fields.reduce((n, [k]) => n + scores[k], 0) / fields.length : null;
+  const set = (k, v) => { setScores((x) => ({ ...x, [k]: v })); setDirty(true); };
+  const save = async () => {
+    if (!complete) { toast("Give every line a mark from 1 to 5.", "info"); return; }
+    setBusy(true);
+    const { data, error } = await supabase.rpc("grade_crew_member", { p_trip: trip.id, p_profile: person.id, p_scores: scores, p_note: note.trim() || null });
+    setBusy(false);
+    if (error) {
+      console.error("grade_crew_member:", error.message);
+      toast(gradeOff(error) ? "Grading isn't switched on yet — it needs a database update." : failText("save that grade"));
+      return;
+    }
+    if (!data || !data.ok) { toast((data && data.reason) || "We couldn't save that grade.", "error"); return; }
+    setDirty(false);
+    toast(`Saved. Thank you — other operators see only ${person.name.split(" ")[0]}'s averages.`, "ok");
+    onSaved && onSaved();
+  };
+  return (
+    <div className="rounded-2xl p-4" style={{ background: C.card, border: `1px solid ${saved && !dirty ? C.pine + "55" : C.line}` }}>
+      <div className="flex items-center gap-3 mb-3">
+        <Avatar initials={person.initials} src={person.photo} size={44} />
+        <div className="flex-1 min-w-0">
+          <div className="text-[15px] font-semibold truncate" style={{ color: C.ink }}>{person.name}</div>
+          <div className="text-[12px] capitalize" style={{ color: C.muted }}>{String(person.role || "crew").replace("_", " ")}</div>
+        </div>
+        {overall != null && <div className="text-right shrink-0"><div className="text-[18px] font-semibold leading-none" style={{ color: C.ink }}>{overall.toFixed(1)}</div><Stars score={overall} /></div>}
+      </div>
+      <div className="divide-y" style={{ borderColor: C.lineSoft }}>
+        {fields.map(([k, label, hint]) => (
+          <div key={k} className="py-2 flex items-center justify-between gap-2" style={{ borderColor: C.lineSoft }}>
+            <div className="min-w-0">
+              <div className="text-[14px] font-medium leading-tight" style={{ color: C.ink }}>{label}</div>
+              <div className="text-[12px] leading-snug" style={{ color: C.muted }}>{hint}</div>
+            </div>
+            <StarPick value={scores[k]} onChange={(v) => set(k, v)} label={`${label} for ${person.name}`} />
+          </div>
+        ))}
+      </div>
+      <textarea value={note} onChange={(e) => { setNote(e.target.value); setDirty(true); }} rows={2} maxLength={500}
+        placeholder="Private note — only you see it (optional)" aria-label={`Private note about ${person.name}`}
+        className="w-full mt-2.5 px-3 py-2 rounded-xl text-[14px] leading-snug resize-none" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
+      <button type="button" onClick={save} disabled={busy || (saved && !dirty)}
+        className="tap w-full h-11 mt-2.5 rounded-xl text-[14px] font-semibold inline-flex items-center justify-center gap-1.5"
+        style={{ background: saved && !dirty ? C.pineSoft : complete ? C.pine : "#C7CEC7", color: saved && !dirty ? C.pine : "#FFFFFF", border: 0 }}>
+        {busy ? <Loader2 size={16} className="animate-spin" /> : saved && !dirty ? <><Check size={15} /> Graded</> : saved ? "Update grade" : "Save grade"}
+      </button>
+    </div>
+  );
+}
+
+function CrewGradeSheet({ trip, meId, grades, until, onClose }) {
+  const crew = gradableCrew(trip, meId).map((m) => {
+    const t = talentById(m.id);
+    return { id: m.id, name: (t && t.name) || m.name || "Crew", role: m.roleInTrip || (t && t.role) || "", photo: (t && t.photo) || null,
+             initials: (t && t.initials) || m.initials || initialsOf(m.name || "?") };
+  });
+  const savedOf = (id) => (grades.rows || []).find((g) => g.profile_id === id) || null;
+  return createPortal((
+    <div className="fixed inset-0 flex items-end" style={{ background: "rgba(8,10,8,.55)", zIndex: 230 }} onClick={onClose}>
+      <div className="w-full rounded-t-3xl flex flex-col safe-bottom" style={{ background: C.card, maxHeight: "92dvh" }} onClick={(e) => e.stopPropagation()}>
+        <div className="p-5 pb-3 shrink-0">
+          <div className="w-10 h-1 rounded-full mx-auto mb-4" style={{ background: C.line }} />
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <div className="text-[17px] font-semibold" style={{ color: C.ink }}>Grade your crew</div>
+              <p className="text-[13px] mt-1 truncate" style={{ color: C.muted }}>{trip.title} · {fmtDate(trip.start)} – {fmtDate(trip.end)}</p>
+            </div>
+            <button type="button" onClick={onClose} aria-label="Close" className="tap shrink-0 w-8 h-8 rounded-full flex items-center justify-center" style={{ background: C.grey, border: 0 }}>
+              <X size={15} color={C.ink} />
+            </button>
+          </div>
+        </div>
+        <div className="flex-1 overflow-y-auto hidescroll px-5 pb-6" style={{ scrollbarWidth: "none" }}>
+          <p className="text-[13px] leading-snug mb-4 rounded-xl px-3.5 py-2.5" style={{ background: C.bg, color: C.muted }}>
+            Grade what you saw on this trip, fairly. Other tour operators see each person's <b>averages across trips</b>, never your grade
+            alone; the person sees their own averages; your note stays with you. You can adjust until {fmtDate(until)}.
+          </p>
+          {grades.off ? (
+            <Empty Icon={UserCheck} title="Grading isn't switched on yet" body="It needs a small database update. Your trips are unaffected." />
+          ) : grades.rows === null ? (
+            <div className="flex items-center justify-center gap-2 py-10 text-[14px]" style={{ color: C.muted }}><Loader2 size={17} className="animate-spin" /> Loading…</div>
+          ) : (
+            <div className="space-y-3">
+              {crew.map((p) => <CrewGradeCard key={p.id + ":" + (savedOf(p.id) ? savedOf(p.id).updated_at : "new")} trip={trip} person={p} saved={savedOf(p.id)} onSaved={grades.reload} />)}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  ), document.body);
+}
+
+// a person's averages, as tour operators graded them (operators, admins, and the person themself)
+function OperatorGrades({ talent, show, self }) {
+  const [sum, setSum] = useState(undefined);   // undefined loading · null not available · object
+  const crewRole = talent && (talent.role === "guide" || talent.role === "driver");
+  useEffect(() => {
+    if (!show || !crewRole || !CLOUD) { setSum(null); return; }
+    let on = true;
+    supabase.rpc("crew_grade_summary", { p_profile: talent.id }).then(({ data, error }) => {
+      if (!on) return;
+      if (error) { if (!gradeOff(error)) console.warn("crew_grade_summary:", error.message); setSum(null); return; }
+      setSum(data || null);
+    });
+    return () => { on = false; };
+  }, [talent && talent.id, show]);
+  if (!show || !crewRole || !sum) return null;
+  const n = Number(sum.trips || 0);
+  const overall = n ? Number(sum.overall) : null;
+  return (
+    <div className="rounded-2xl overflow-hidden" style={{ border: `1px solid ${C.line}` }}>
+      <div className="px-4 py-3.5 flex items-center justify-between" style={{ background: C.pine }}>
+        <div><div className="text-[11px] font-semibold tracking-[.14em] uppercase" style={{ color: C.goldSoft }}>Trip record</div>
+          <div className="text-[13px] mt-0.5" style={{ color: "#ffffffcc" }}>
+            {n ? `Graded by ${sum.operators} ${Number(sum.operators) === 1 ? "operator" : "operators"} · ${n} ${n === 1 ? "trip" : "trips"}` : "Graded by tour operators"}
+          </div></div>
+        <div className="text-right"><div className="text-[26px] font-semibold leading-none text-white">{overall != null ? overall.toFixed(1) : "New"}</div><div className="mt-1 flex justify-end"><Stars score={overall || 0} light /></div></div>
+      </div>
+      <div className="px-4 py-4 space-y-3.5" style={{ background: C.card }}>
+        {!n ? (
+          <p className="text-[14px]" style={{ color: C.muted }}>No trips graded yet. After each trip, the tour operator grades punctuality, conduct and more; the averages appear here.</p>
+        ) : GRADE_FIELDS(talent.role).map(([k, label]) => {
+          const v = Number(sum[k]);
+          return (
+            <div key={k}><div className="flex items-baseline justify-between mb-1.5"><span className="text-[14px] font-medium" style={{ color: C.ink }}>{label}</span><span className="text-[13px] font-semibold" style={{ color: C.pine }}>{isFinite(v) ? v.toFixed(1) : "—"}</span></div>
+              <div className="h-2 rounded-full overflow-hidden" style={{ background: C.lineSoft }}><div className="h-full rounded-full" style={{ width: `${isFinite(v) ? (v / 5) * 100 : 0}%`, background: `linear-gradient(90deg, ${C.gold}, #D9A94E)` }} /></div></div>
+          );
+        })}
+        <p className="text-[12px] leading-snug pt-1" style={{ color: C.muted }}>
+          {self ? "Only tour operators and you see these. Each one is an average of the grades operators gave after real trips."
+                : "Averages of the grades tour operators gave after real trips with them."}
+        </p>
+      </div>
+    </div>
+  );
 }
 
 function ReviewInvite({ user, trip, reviews, onClose, onOpenCrew }) {
