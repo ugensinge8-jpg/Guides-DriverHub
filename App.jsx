@@ -66,7 +66,7 @@ const CLOUD = Boolean(supabase);
   } catch (e) {}
 })();
 const DEMO_MODE = false;   // set true only for local demos without a database
-const BUILD = "BUILD 61 — 12 Oct";   // bump every deploy; shown at the top of the welcome screen
+const BUILD = "BUILD 63 — 12 Oct";   // bump every deploy; shown at the top of the welcome screen
 // which device someone is on — shown beside the build so a screenshot tells us both
 const DEVICE = (() => {
   try {
@@ -3408,7 +3408,7 @@ function TalentProfile({ talent, posts, canRequest, self, contactOnly, eng, onRe
                 <h1 className="text-[22px] font-semibold leading-tight tracking-[-0.01em]" style={{ color: C.ink, wordBreak: "break-word" }}>{t.name}</h1>
                 {t.verified && <BadgeCheck size={17} color={C.pine} className="shrink-0 mt-1" />}
               </div>
-              <div className="flex items-center gap-1 text-[14px] mt-1" style={{ color: C.muted }}><MapPin size={13} /> {roleLabel(t.role)}{t.base ? ` · ${t.base}` : ""}</div>
+              <ProfileChips t={t} />
               {t.role !== "operator" && <div className="mt-2"><AvailabilityChip talent={t} /></div>}
             </div>
           </div>
@@ -3444,8 +3444,7 @@ function TalentProfile({ talent, posts, canRequest, self, contactOnly, eng, onRe
       </div>
 
       <div className="px-5">
-        {self && t.role !== "operator" && t.role !== "hotel" && <AvailabilityEditor talent={t} onSet={onSetAvailability} />}
-        {self && (t.role === "guide" || t.role === "driver") && <TalentCalendar talent={t} self trips={trips} jobs={jobs} />}
+        {self && (t.role === "guide" || t.role === "driver") && <AvailabilityCard talent={t} trips={trips} jobs={jobs} onChanged={onProfileSaved} />}
         {!self && canRequest && (t.role === "guide" || t.role === "driver") && <TalentCalendar talent={t} self={false} />}
         {self && t.role !== "operator" && <ProfileSetupCard talent={t} onSaved={onProfileSaved} />}
 
@@ -3642,6 +3641,33 @@ function RequestForm({ talent, operator, onBack, onSend, initial }) {
           <Send size={18} /> Send request to {String(talent.name || "them").split(" ")[0]}
         </button>
       </div>
+    </div>
+  );
+}
+/* BUILD 62: under the name — role and home base as white chips, specialities as blue hashtags */
+const dkHashtag = (s) => "#" + String(s || "").split(/\s+/).filter(Boolean).map((w) => (w === "&" ? "&" : w.charAt(0).toUpperCase() + w.slice(1))).join("");
+function ProfileChips({ t }) {
+  const [all, setAll] = useState(false);
+  const tags = (t.tags || []).filter(Boolean);
+  const shown = all ? tags : tags.slice(0, 4);
+  const chip = { background: "#FFFFFF", border: `1px solid ${C.line}`, color: C.ink, boxShadow: "0 1px 2px rgba(0,0,0,.06)" };
+  const RoleIcon = t.role === "driver" ? Car : t.role === "guide" ? Compass : Briefcase;
+  return (
+    <div className="mt-2">
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className="inline-flex items-center gap-1.5 rounded-full px-3 h-8 text-[13px] font-semibold" style={chip}><RoleIcon size={14} color={C.pine} /> {roleLabel(t.role)}</span>
+        {t.base && <span className="inline-flex items-center gap-1.5 rounded-full px-3 h-8 text-[13px] font-semibold" style={chip}><MapPin size={14} color={C.maroon} /> {t.base}</span>}
+      </div>
+      {tags.length > 0 && (
+        <div className="flex flex-wrap items-center gap-1.5 mt-2" aria-label="Specialities">
+          {shown.map((x) => (
+            <span key={x} className="inline-flex items-center rounded-full px-2.5 h-7 text-[12.5px] font-semibold" style={{ background: C.pineSoft, color: C.pine }}>{dkHashtag(x)}</span>
+          ))}
+          {tags.length > 4 && !all && (
+            <button type="button" onClick={() => setAll(true)} className="tap inline-flex items-center rounded-full px-2.5 h-7 text-[12.5px] font-semibold" style={{ background: "transparent", border: `1px dashed ${C.pine}`, color: C.pine }}>+{tags.length - 4} more</button>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -6477,6 +6503,88 @@ function AvailabilityChip({ talent }) {
       <span className="rounded-full" style={{ width: 7, height: 7, background: st.dot }} />
       {st.label}{until}
     </span>
+  );
+}
+
+/** BUILD 63: the guide's or driver's own availability — worked out by the hub; they only add dates they're already booked. */
+function AvailabilityCard({ talent, trips, jobs, onChanged }) {
+  const talentId = talent && talent.id;
+  const { ranges, blocks, loaded, reload } = useTalentBusy({ talentId, self: true, trips, jobs, from: isoDay(-45), to: isoDay(400) });
+  const [adding, setAdding] = useState(null);
+  const [showCal, setShowCal] = useState(false);
+  const [month, setMonth] = useState(monthKey(isoDay(0)));
+  const [err, setErr] = useState(null);
+  const today = isoDay(0);
+  const now = ranges.filter((r) => (r.kind === "trip" || r.kind === "block") && r.from <= today && r.to >= today);
+  const until = now.length ? now.map((r) => r.to).sort().pop() : null;
+  const nowTrip = now.find((r) => r.kind === "trip");
+  const st = until ? AVAIL.busy : AVAIL.open;
+  const upTrips = ranges.filter((r) => r.kind === "trip" && r.to >= today).sort((a, b) => a.from.localeCompare(b.from)).slice(0, 6);
+  const upBlocks = blocks.filter((b) => b.to >= today).sort((a, b) => a.from.localeCompare(b.from));
+  const pending = ranges.filter((r) => r.kind === "pending" && r.to >= today).length;
+  const changed = () => { reload(); onChanged && onChanged(); };
+  const remove = async (id) => {
+    setErr(null);
+    const { error } = await supabase.from("talent_blocks").delete().eq("id", id);
+    if (error) setErr(navigator.onLine === false ? failText("remove those dates") : error.message); else changed();
+  };
+  const span = (a, b) => (a === b ? fmtDate(a) : `${fmtDate(a)} – ${fmtDate(b)}`);
+  return (
+    <div className="rounded-2xl p-4 mt-5" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+      <div className="flex items-center gap-2 mb-2">
+        <CalendarDays size={16} color={C.gold} />
+        <span className="text-[14px] font-semibold flex-1" style={{ color: C.ink }}>Your availability</span>
+      </div>
+      <div className="inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[13px] font-semibold" style={{ background: st.bg, color: st.fg }} aria-label="Your status">
+        <span className="rounded-full" style={{ width: 8, height: 8, background: st.dot }} />
+        {st.label}{until ? ` · until ${fmtDate(until)}` : ""}
+      </div>
+      <p className="text-[12.5px] mt-2 mb-3 leading-snug" style={{ color: C.muted }}>
+        {nowTrip ? `On "${nowTrip.title}". ` : ""}Set for you: trips booked here, and dates you add below, show you as On a trip. Otherwise you're Available for work.
+      </p>
+      <button type="button" onClick={() => setAdding({ from: today, to: today })} className="tap w-full h-11 rounded-xl text-[14px] font-semibold inline-flex items-center justify-center gap-1.5"
+        style={{ background: C.pine, color: "#fff" }}><Plus size={15} strokeWidth={3} /> Add dates you're already booked</button>
+      {!loaded && <div className="text-[12px] mt-2" style={{ color: C.muted }}>Loading…</div>}
+      {(upTrips.length > 0 || upBlocks.length > 0 || pending > 0) && (
+        <div className="mt-3 rounded-xl overflow-hidden" style={{ border: `1px solid ${C.lineSoft}` }}>
+          {pending > 0 && <div className="px-3 py-2.5 text-[12px]" style={{ color: C.goldText, borderBottom: `1px solid ${C.lineSoft}` }}>{pending} request{pending === 1 ? "" : "s"} waiting for your answer, under Jobs → Invites.</div>}
+          {upTrips.map((r) => (
+            <div key={"t" + r.id} className="px-3 py-2.5 flex items-center gap-3" style={{ borderBottom: `1px solid ${C.lineSoft}` }}>
+              <Lock size={13} color={C.pine} className="shrink-0" />
+              <div className="flex-1 min-w-0"><div className="text-[13px] font-medium truncate" style={{ color: C.ink }}>{r.title}</div>
+                <div className="text-[11.5px]" style={{ color: C.muted }}>{span(r.from, r.to)}{r.operator ? ` · ${r.operator}` : ""} · booked here</div></div>
+            </div>
+          ))}
+          {upBlocks.map((b) => (
+            <div key={"b" + b.id} className="px-3 py-2.5 flex items-center gap-3" style={{ borderBottom: `1px solid ${C.lineSoft}` }}>
+              <CalendarDays size={13} color={C.muted} className="shrink-0" />
+              <div className="flex-1 min-w-0"><div className="text-[13px] font-medium truncate" style={{ color: C.ink }}>{b.label || "Already booked"}</div>
+                <div className="text-[11.5px]" style={{ color: C.muted }}>{span(b.from, b.to)}</div></div>
+              <button type="button" onClick={() => remove(b.id)} aria-label={`Remove ${span(b.from, b.to)}`} className="tap h-8 px-3 rounded-lg text-[12px] font-semibold" style={{ background: C.grey, color: C.maroon }}>Remove</button>
+            </div>
+          ))}
+        </div>
+      )}
+      {err && <div className="text-[12px] mt-2 rounded-lg px-3 py-2" style={{ background: C.maroonSoft, color: C.maroon }}>{err}</div>}
+      <button type="button" onClick={() => setShowCal((v) => !v)} aria-expanded={showCal} className="tap mt-3 text-[13px] font-semibold inline-flex items-center gap-1" style={{ color: C.pine, background: "transparent", border: 0, padding: 0 }}>
+        {showCal ? "Hide calendar" : "Show calendar"} <ChevronLeft size={15} style={{ transform: showCal ? "rotate(90deg)" : "rotate(-90deg)" }} />
+      </button>
+      {showCal && (
+        <div className="mt-3 fade">
+          <div className="flex items-center justify-end gap-1 mb-2">
+            <button type="button" onClick={() => setMonth(shiftMonth(month, -1))} className="tap w-8 h-8 rounded-full flex items-center justify-center" style={{ background: C.grey }} aria-label="Previous month"><ChevronLeft size={15} color={C.ink} /></button>
+            <button type="button" onClick={() => setMonth(shiftMonth(month, 1))} className="tap w-8 h-8 rounded-full flex items-center justify-center" style={{ background: C.grey }} aria-label="Next month"><ChevronLeft size={15} color={C.ink} style={{ transform: "rotate(180deg)" }} /></button>
+          </div>
+          <CalMonth month={month} ranges={ranges} onPick={null} />
+          <div className="flex flex-wrap gap-3 text-[11px] mt-2" style={{ color: C.muted }}>
+            <span className="inline-flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm" style={{ background: C.pine }} /> trip booked here</span>
+            <span className="inline-flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm" style={{ background: "#D7D7DC" }} /> booked by you</span>
+            <span className="inline-flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm" style={{ border: `1.5px solid ${C.gold}` }} /> request waiting</span>
+          </div>
+        </div>
+      )}
+      {adding && <BlockDatesSheet talentId={talentId} init={adding} ranges={ranges} onClose={() => setAdding(null)} onSaved={() => { setAdding(null); changed(); }} />}
+    </div>
   );
 }
 
@@ -16199,18 +16307,18 @@ function BlockDatesSheet({ talentId, init, ranges, onClose, onSaved, onRemove })
   };
   return (
     <Sheet onClose={onClose}>
-      <div className="text-[18px] font-semibold mb-1" style={{ color: C.ink }}>{edit ? "Blocked dates" : "Block dates"}</div>
-      <p className="text-[13px] mb-3" style={{ color: C.muted }}>Operators can't send you requests for these days. Remove the block any time.</p>
+      <div className="text-[18px] font-semibold mb-1" style={{ color: C.ink }}>{edit ? "Dates you're booked" : "Add dates you're already booked"}</div>
+      <p className="text-[13px] mb-3" style={{ color: C.muted }}>You show as On a trip on these days, and operators can't request you for them. Remove them any time.</p>
       <div className="grid grid-cols-2 gap-3 mb-3">
         <div><Label>From</Label><input type="date" value={from} min={isoDay(0)} onChange={(e) => { setFrom(e.target.value); if (to < e.target.value) setTo(e.target.value); }} className="w-full h-11 px-3 rounded-xl text-[14px]" style={field} /></div>
         <div><Label>To</Label><input type="date" value={to} min={from} onChange={(e) => setTo(e.target.value)} className="w-full h-11 px-3 rounded-xl text-[14px]" style={field} /></div>
       </div>
       <Label>Note for yourself (optional, private)</Label>
-      <input value={label} onChange={(e) => setLabel(e.target.value)} maxLength={60} placeholder="Family · own tour · rest" className="w-full h-11 px-3.5 rounded-xl text-[14px] mb-3" style={field} />
+      <input value={label} onChange={(e) => setLabel(e.target.value)} maxLength={60} placeholder="Trip with another agency · family · rest" className="w-full h-11 px-3.5 rounded-xl text-[14px] mb-3" style={field} />
       {pendClash.length > 0 && <div className="text-[12px] mb-3 rounded-lg px-3 py-2" style={{ background: C.goldSoft, color: C.goldText }}>{pendClash.length} request{pendClash.length === 1 ? "" : "s"} waiting for these days will stay open; decline {pendClash.length === 1 ? "it" : "them"} under Jobs → Invites if you're not taking work then.</div>}
       {err && <div className="text-[13px] mb-3 rounded-lg px-3 py-2" style={{ background: C.maroonSoft, color: C.maroon }}>{err}</div>}
-      <OCta busy={busy} onClick={save}>{edit ? "Save changes" : "Block these dates"}</OCta>
-      {onRemove && <button type="button" onClick={onRemove} className="tap w-full h-10 mt-2 text-[13px] font-semibold" style={{ color: C.maroon }}>Unblock these dates</button>}
+      <OCta busy={busy} onClick={save}>{edit ? "Save changes" : "Save these dates"}</OCta>
+      {onRemove && <button type="button" onClick={onRemove} className="tap w-full h-10 mt-2 text-[13px] font-semibold" style={{ color: C.maroon }}>Remove these dates</button>}
     </Sheet>
   );
 }
