@@ -66,7 +66,7 @@ const CLOUD = Boolean(supabase);
   } catch (e) {}
 })();
 const DEMO_MODE = false;   // set true only for local demos without a database
-const BUILD = "BUILD 57 — 10 Oct";   // bump every deploy; shown at the top of the welcome screen
+const BUILD = "BUILD 60 — 12 Oct";   // bump every deploy; shown at the top of the welcome screen
 // which device someone is on — shown beside the build so a screenshot tells us both
 const DEVICE = (() => {
   try {
@@ -5156,6 +5156,7 @@ function AdminUsers({ onChanged, currentAdminId }) {
       {note && <div className="rounded-xl px-3 py-2 text-[13px] mb-3" style={{ background: C.pineSoft, color: C.pine }}>{note}</div>}
 
       <AdminDraftsPanel adminId={currentAdminId} onChanged={onChanged} />
+      <AdminTrailStatus />
 
       {rows === null ? (
         <div className="flex items-center gap-2 text-[14px] py-6 justify-center" style={{ color: C.muted }}><Loader2 size={17} className="animate-spin" /> Loading…</div>
@@ -5194,6 +5195,7 @@ function AdminUsers({ onChanged, currentAdminId }) {
                         <span className="text-[13px] font-semibold" style={{ color: C.ink, fontFamily: "monospace", letterSpacing: ".04em" }}>{u.license_number}</span>
                       </div>
                     )}
+                    {u.license_check && typeof u.license_check === "object" && <AdminLicenceCheck c={u.license_check} expiry={u.license_expiry} />}
                     {u.license_expiry && (() => {
                       const exp = new Date(u.license_expiry + "T23:59");
                       const days = Math.round((exp - new Date()) / 86400e3);
@@ -5202,7 +5204,7 @@ function AdminUsers({ onChanged, currentAdminId }) {
                         <div className="flex items-center justify-between mt-1">
                           <span className="text-[12px]" style={{ color: C.muted }}>Valid until</span>
                           <span className="text-[13px] font-semibold" style={{ color: bad ? C.maroon : soon ? C.goldText : C.ink }}>
-                            {fmtDate(u.license_expiry)}{bad ? " · EXPIRED" : soon ? ` · ${days}d left` : ""}
+                            {fmtDateLong(u.license_expiry)}{bad ? " · EXPIRED" : soon ? ` · ${days}d left` : ""}
                           </span>
                         </div>
                       );
@@ -5288,6 +5290,26 @@ function AdminUsers({ onChanged, currentAdminId }) {
   );
 }
 
+/** BUILD 58: what the guide's phone read on the licence photo — a hint for checking, not a verdict. */
+function AdminLicenceCheck({ c, expiry }) {
+  const row = (label, value, tone) => (
+    <div className="flex items-start justify-between gap-3 mt-1">
+      <span className="text-[12px] shrink-0" style={{ color: C.muted }}>{label}</span>
+      <span className="text-[12px] font-semibold text-right" style={{ color: tone === "bad" ? C.maroon : tone === "warn" ? C.goldText : tone === "ok" ? C.pine : C.ink }}>{value}</span>
+    </div>
+  );
+  const readWords = { ok: null, unfinished: "Not read (saved before reading finished)", offline: "Not read (no connection)", error: "Not read (reader didn't load)", unreadable: "Writing not readable" };
+  return (
+    <div className="mb-1 pb-1.5" style={{ borderBottom: `1px dashed ${C.line}` }}>
+      {row("Photo", LIC_SOURCE_WORDS[c.source] || "—", c.source === "screenshot" ? "bad" : c.source === "camera" ? "ok" : "warn")}
+      {c.read && c.read !== "ok" ? row("Photo check", readWords[c.read] || "Not read", "warn") : (<>
+        {c.number && row("Number on photo", c.number === "match" ? "Found ✓" : "Not found", c.number === "match" ? "ok" : "warn")}
+        {c.expiry_read && row("Date on photo", `${fmtDateLong(c.expiry_read)}${expiry && c.expiry_read !== expiry ? " · differs" : expiry ? " ✓" : ""}`,
+          c.expiry_read < isoDay(0) ? "bad" : expiry && c.expiry_read !== expiry ? "warn" : "ok")}
+      </>)}
+    </div>
+  );
+}
 function ConfirmDelete({ onConfirm, busy }) {
   const [arm, setArm] = useState(false);
   if (!arm) return (
@@ -5355,6 +5377,8 @@ function Onboard({ mode: initialMode, session, onBack, onDone, invite }) {
   const [showPw, setShowPw] = useState(false);
   const [reset, setReset] = useState(false);
   const [licPreview, setLicPreview] = useState(null);
+  const [licFrom, setLicFrom] = useState(null);   // BUILD 58: camera | gallery | older | screenshot
+  const licReader = useLicenceReader(licPreview);
   const [licNumber, setLicNumber] = useState("");
   const [licExpiry, setLicExpiry] = useState("");
   const licRef = useRef();
@@ -5432,7 +5456,8 @@ function Onboard({ mode: initialMode, session, onBack, onDone, invite }) {
       setErr("Your session expired. Tap Resend code and verify again.");
       return;
     }
-    const { error } = await supabase.from("profiles").upsert({
+    const licCheck = licensePath ? licCheckRecord(licReader, licNumber.trim(), licExpiry || null, licFrom) : null;
+    const profileRow = {
       id: effUid, email: (email || session?.user?.email || "").trim() || null, role,
       full_name: name.trim(), phone: phone.trim() || null, base: role === "hotel" ? (DK_TOWNS[base] ? DK_TOWNS[base].n : base) : (base.trim() || null),
       company_name: role === "operator" || role === "hotel" ? (company.trim() || name.trim()) : null,
@@ -5441,7 +5466,14 @@ function Onboard({ mode: initialMode, session, onBack, onDone, invite }) {
       vehicle: role === "driver" ? vehicle : null,
       license_path: licensePath || null, license_status: licensePath ? "submitted" : "none",
       license_number: licNumber.trim() || null, license_expiry: licExpiry || null,
-    });
+      ...(licCheck ? { license_check: licCheck } : {}),
+    };
+    let { error } = await supabase.from("profiles").upsert(profileRow);
+    if (error && licCheck && /license_check/.test(error.message || "")) {
+      // BUILD 58: the database doesn't keep the photo check yet — save the profile without it
+      const { license_check, ...rest } = profileRow;
+      ({ error } = await supabase.from("profiles").upsert(rest));
+    }
     setBusy(false);
     if (error) {
       console.error("PROFILE SAVE FAILED", error, "uid:", effUid, "session uid:", sess.session.user.id);
@@ -5450,11 +5482,12 @@ function Onboard({ mode: initialMode, session, onBack, onDone, invite }) {
     }
     onDone();
   };
-  const pickLicense = (e) => {
-    const f = e.target.files?.[0]; e.target.value = "";
-    if (!f || !f.type.startsWith("image/")) { setErr("Please choose a photo of your license."); return; }
+  const pickLicense = (f, how) => {
+    if (!f) return;
+    if (!f.type.startsWith("image/")) { setErr("Please choose a photo of your license."); return; }
     setErr(null);
-    const r = new FileReader(); r.onload = () => setLicPreview(r.result); r.readAsDataURL(f);
+    const from = licSource(f, how);
+    const r = new FileReader(); r.onload = () => { setLicPreview(r.result); setLicFrom(from); }; r.readAsDataURL(f);
   };
   const submitLicense = async () => {
     setBusy(true); setErr(null);
@@ -5753,17 +5786,17 @@ function Onboard({ mode: initialMode, session, onBack, onDone, invite }) {
           {licPreview ? (
             <div className="relative rounded-xl overflow-hidden mb-4" style={{ border: `1px solid ${C.line}` }}>
               <img src={licPreview} alt="Your licence" className="w-full block" style={{ maxHeight: 320, objectFit: "contain", background: C.bg }} />
-              <button onClick={() => setLicPreview(null)} className="tap absolute top-2 right-2 w-8 h-8 rounded-full flex items-center justify-center" style={{ background: "rgba(0,0,0,.55)" }}><X size={16} color="#fff" /></button>
+              <button onClick={() => { setLicPreview(null); setLicFrom(null); }} aria-label="Remove the photo" className="tap absolute top-2 right-2 w-8 h-8 rounded-full flex items-center justify-center" style={{ background: "rgba(0,0,0,.55)" }}><X size={16} color="#fff" /></button>
             </div>
           ) : (
-            <button onClick={() => licRef.current?.click()} className="tap w-full rounded-2xl p-8 flex flex-col items-center justify-center text-center mb-4"
+            <div className="w-full rounded-2xl px-5 py-6 flex flex-col items-center justify-center text-center mb-3"
               style={{ background: C.card, border: `1.5px dashed ${C.line}` }}>
-              <div className="rounded-2xl flex items-center justify-center mb-3" style={{ width: 52, height: 52, background: C.goldSoft }}><Upload size={23} color={C.gold} /></div>
-              <div className="text-[15px] font-semibold" style={{ color: C.ink }}>Upload a photo of your license</div>
+              <div className="rounded-2xl flex items-center justify-center mb-3" style={{ width: 52, height: 52, background: C.goldSoft }}><Camera size={23} color={C.gold} /></div>
+              <div className="text-[15px] font-semibold" style={{ color: C.ink }}>Photograph your licence card</div>
               <div className="text-[13px] mt-1" style={{ color: C.muted }}>Front side · clear and readable</div>
-            </button>
+            </div>
           )}
-          <input ref={licRef} type="file" accept="image/*" onChange={pickLicense} className="hidden" />
+          <div className="mb-3"><LicencePhotoPick onPick={pickLicense} has={!!licPreview} /></div>
 
           <div className="rounded-xl px-3.5 py-2.5 mb-4 flex items-start gap-2.5" style={{ background: C.bg, border: `1px dashed ${C.line}` }}>
             <Camera size={15} color={C.gold} className="shrink-0 mt-0.5" />
@@ -5790,6 +5823,7 @@ function Onboard({ mode: initialMode, session, onBack, onDone, invite }) {
             We'll remind you before it expires, so your Verified badge never lapses mid-season.
           </p>
 
+          <LicenceReadout reader={licReader} number={licNumber} expiry={licExpiry} role={role} onUseExpiry={setLicExpiry} />
           {err && <p className="text-[13px] mb-3" style={{ color: C.maroon }}>{err}</p>}
           <OCta disabled={!licPreview || !licNumber.trim()} busy={busy} onClick={submitLicense}>Submit & enter the hub</OCta>
           <button onClick={() => finish(null)} disabled={busy} className="tap w-full text-[14px] font-medium mt-3" style={{ color: C.muted }}>Skip for now — I’ll add it later</button>
@@ -9010,7 +9044,7 @@ function dkPlanFromItinerary(rows) {
     let pts = [], passes = [], km = 0;
     if (moving) { try { const leg = dkRoute(from, to); pts = leg.pts || []; passes = leg.passes || []; km = leg.km || 0; if (!h) h = leg.h || 0; } catch (e) { pts = [DK_TOWNS[from], DK_TOWNS[to]].filter(Boolean); } }
     else { const t = DK_TOWNS[night || from]; pts = t ? [t] : []; }
-    days.push({ day: r.day, from, to: moving ? to : null, night: night || (moving ? to : from), hotel, moving, h, km, pts, passes, acts });
+    days.push({ day: r.day, from, to: moving ? to : null, night: night || (moving ? to : from), hotel, moving, h, km, pts, passes, acts, raw: text });
     prevNight = night || (moving ? to : from);
   }
   if (days.length === 0 || !days.some((d) => d.night)) return null;
@@ -9244,7 +9278,7 @@ function ItineraryBuilder({ trip, canEdit, onChanged, embedded }) {
 
       {mapPlan && (
         <div className="mb-3">
-          <DkReliefMap plan={mapPlan} selected={mapSel} onSelect={setMapSel} />
+          <DkItinMap plan={mapPlan} selected={mapSel} onSelect={setMapSel} />
         </div>
       )}
 
@@ -9313,7 +9347,7 @@ function ItineraryBuilder({ trip, canEdit, onChanged, embedded }) {
                 <div className="mt-2.5 pt-2.5" style={{ borderTop: `1px solid ${C.line}` }}>
                   <button type="button" onClick={() => setIdeasFor(open ? null : it.day)} aria-expanded={open}
                     className="tap inline-flex items-center gap-1.5 text-[12.5px] font-semibold" style={{ color: C.goldText, background: "transparent", border: 0, padding: 0 }}>
-                    <DkSpark color={C.gold} /> {open ? "Hide Drukpah's ideas" : "Drukpah's ideas for this day"}
+                    <DkSpark color={C.gold} /> {canEdit ? (open ? "Hide Drukpah's ideas" : "Drukpah's ideas for this day") : (open ? "Hide insider tips" : "Insider tips for this day")}
                   </button>
                   {open && (ideas.length ? (
                     <ul className="mt-2 space-y-1.5">
@@ -10184,16 +10218,9 @@ function CrewBrief({ trip, user }) {
               <div className="text-[12px] font-semibold tracking-[.12em] uppercase mb-2" style={{ color: C.goldText }}>
                 The route · {(trip.itinerary || []).length} days
               </div>
-              <div className="rounded-xl overflow-hidden mb-3" style={{ border: `1px solid ${C.line}` }}>
-                {(trip.itinerary || []).map((it, i) => (
-                  <div key={it.day} className="px-3.5 py-2.5 flex items-start gap-2.5"
-                    style={{ background: C.bg, borderTop: i ? `1px solid ${C.line}` : "none" }}>
-                    <div className="w-6 h-6 rounded-md flex items-center justify-center shrink-0" style={{ background: C.pine }}>
-                      <span className="text-[11px] font-bold" style={{ color: C.goldSoft }}>{it.day}</span>
-                    </div>
-                    <span className="text-[13px] leading-snug" style={{ color: C.ink }}>{it.title}</span>
-                  </div>
-                ))}
+              <div className="mb-3">
+                {/* BUILD 59: the same itinerary the operator sees — map, days and tips — without any way to change it */}
+                <ItineraryBuilder trip={trip} canEdit={false} embedded />
               </div>
             </>
           )}
@@ -10972,7 +10999,7 @@ function DkLibreMap({ plan, selected, onSelect, onBack }) {
   if (day) {
     const townKey = day.night || day.to || day.from; const town = DK_TOWNS[townKey];
     const planned = (day.acts || []).map((a) => String(a).toLowerCase());
-    const ideas = (DK_SEE[townKey] || []).filter((x) => !planned.some((a) => a.includes(x.t.toLowerCase().split(",")[0]))).slice(0, 3);
+    const ideas = dkMapTips(day, townKey, planned);
     note = { town, ideas, passes: [], planned: (day.acts || []).length, profile: [] };
   }
   if (failed) return <DkReliefMap plan={plan} selected={selected} onSelect={onSelect} fallbackNote={notice || "Satellite imagery is not available on this connection — showing the relief model."} />;
@@ -11269,12 +11296,12 @@ function dkrRoad(pts) {
   return out.map((p) => { const s = { x: p.x, y: p.y * DKR.TILT - p.z * DKR.ZK }; return `${s.x.toFixed(2)},${s.y.toFixed(2)}`; }).join(" ");
 }
 const dkrEase = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
-function DkReliefMap({ plan, selected, onSelect, fallbackNote }) {
+function DkReliefMap({ plan, selected, onSelect, fallbackNote, tabs }) {
   const boxRef = useRef(null);
   const [box, setBox] = useState({ w: 360, h: 270 });
   const [img, setImg] = useState(null);
   const terrainOK = useMemo(() => dkTerrainCovers(plan), [plan]);   // BUILD 53: the real 3-D model covers the west of the country
-  const [mode, setMode] = useState(() => { if (fallbackNote) return "relief"; try { return localStorage.getItem(DK_TERRAIN_PREF) === "terrain" ? "terrain" : "relief"; } catch (_e) { return "relief"; } });   // relief | terrain | satellite
+  const [mode, setMode] = useState(() => { if (fallbackNote || tabs) return "relief"; try { return localStorage.getItem(DK_TERRAIN_PREF) === "terrain" ? "terrain" : "relief"; } catch (_e) { return "relief"; } });   // relief | terrain | satellite
   const pickMode = (m) => { setMode(m); try { if (m === "terrain") localStorage.setItem(DK_TERRAIN_PREF, "terrain"); else if (m === "relief") localStorage.removeItem(DK_TERRAIN_PREF); } catch (_e) {} };
   const day = selected ? plan.days.find((d) => d.day === selected) : null;
   const wide = box.w >= 560;
@@ -11338,7 +11365,7 @@ function DkReliefMap({ plan, selected, onSelect, fallbackNote }) {
   if (day) {
     const townKey = day.night || day.to || day.from; const town = DK_TOWNS[townKey];
     const planned = (day.acts || []).map((a) => String(a).toLowerCase());
-    const ideas = (DK_SEE[townKey] || []).filter((x) => !planned.some((a) => a.includes(x.t.toLowerCase().split(",")[0]))).slice(0, 3);
+    const ideas = dkMapTips(day, townKey, planned);
     note = { town, ideas, passes: [], planned: (day.acts || []).length, profile: [] };
   }
   if (mode === "satellite") return <DkLibreMap plan={plan} selected={selected} onSelect={onSelect} onBack={() => pickMode("relief")} />;
@@ -11387,9 +11414,9 @@ function DkReliefMap({ plan, selected, onSelect, fallbackNote }) {
         </svg>
         {!img && <div className="absolute inset-0 flex items-center justify-center" style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, color: C.muted }}>Drawing the relief…</div>}
         <div className="absolute left-2 top-2" style={{ position: "absolute", left: 8, top: 8, zIndex: 5, display: "inline-flex", borderRadius: 10, overflow: "hidden", background: "rgba(255,255,255,.92)", boxShadow: "0 1px 3px rgba(0,0,0,.25)" }} onClick={(e) => e.stopPropagation()}>
-          <span className="px-2.5 h-7 text-[11px] font-semibold" style={{ padding: "0 10px", height: 28, display: "inline-flex", alignItems: "center", fontSize: 11, fontWeight: 600, background: C.pine, color: "#fff" }}>Relief</span>
-          {!fallbackNote && terrainOK && <button type="button" onClick={() => pickMode("terrain")} className="tap px-2.5 h-7 text-[11px] font-semibold" style={{ padding: "0 10px", height: 28, fontSize: 11, fontWeight: 600, background: "transparent", color: C.ink, border: 0 }}>Terrain</button>}
-          {!fallbackNote && <button type="button" onClick={() => pickMode("satellite")} className="tap px-2.5 h-7 text-[11px] font-semibold" style={{ padding: "0 10px", height: 28, fontSize: 11, fontWeight: 600, background: "transparent", color: C.ink, border: 0 }}>Satellite</button>}
+          {tabs ? tabs : <span className="px-2.5 h-7 text-[11px] font-semibold" style={{ padding: "0 10px", height: 28, display: "inline-flex", alignItems: "center", fontSize: 11, fontWeight: 600, background: C.pine, color: "#fff" }}>Relief</span>}
+          {!tabs && !fallbackNote && terrainOK && <button type="button" onClick={() => pickMode("terrain")} className="tap px-2.5 h-7 text-[11px] font-semibold" style={{ padding: "0 10px", height: 28, fontSize: 11, fontWeight: 600, background: "transparent", color: C.ink, border: 0 }}>Terrain</button>}
+          {!tabs && !fallbackNote && <button type="button" onClick={() => pickMode("satellite")} className="tap px-2.5 h-7 text-[11px] font-semibold" style={{ padding: "0 10px", height: 28, fontSize: 11, fontWeight: 600, background: "transparent", color: C.ink, border: 0 }}>Satellite</button>}
         </div>
         {note && wide && (
           <div className="absolute right-2 top-2 dk-note-side" style={{ position: "absolute", right: 8, top: 8, width: 250, maxHeight: "calc(100% - 16px)", overflowY: "auto", zIndex: 5 }} onClick={(e) => e.stopPropagation()}>
@@ -11718,7 +11745,7 @@ function dkTerrainScene(THREE, D, el, labelsEl, cb) {
   return api;
 }
 
-function DkTerrainMap({ plan, selected, onSelect, onBack }) {
+function DkTerrainMap({ plan, selected, onSelect, onBack, tabs }) {
   const boxRef = useRef(null), sceneRef = useRef(null), labelsRef = useRef(null), apiRef = useRef(null);
   const [box, setBox] = useState({ w: 360, h: 270 });
   const [status, setStatus] = useState("loading");   // loading | ready | failed
@@ -11770,10 +11797,10 @@ function DkTerrainMap({ plan, selected, onSelect, onBack }) {
   if (day) {
     const townKey = day.night || day.to || day.from; const town = DK_TOWNS[townKey];
     const planned = (day.acts || []).map((a) => String(a).toLowerCase());
-    const ideas = (DK_SEE[townKey] || []).filter((x) => !planned.some((a) => a.includes(x.t.toLowerCase().split(",")[0]))).slice(0, 3);
+    const ideas = dkMapTips(day, townKey, planned);
     note = { town, ideas, passes: [], planned: (day.acts || []).length, profile: [] };
   }
-  if (status === "failed") return <DkReliefMap plan={plan} selected={selected} onSelect={onSelect} fallbackNote={notice} />;
+  if (status === "failed") return <DkReliefMap plan={plan} selected={selected} onSelect={onSelect} fallbackNote={notice} tabs={tabs} />;
 
   const btn = { width: 30, height: 30, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15, fontWeight: 600, background: "transparent", border: 0, color: C.ink, cursor: "pointer" };
   return (
@@ -11789,8 +11816,10 @@ function DkTerrainMap({ plan, selected, onSelect, onBack }) {
           </div>
         )}
         <div className="absolute left-2 top-2" style={{ position: "absolute", left: 8, top: 8, zIndex: 5, display: "inline-flex", borderRadius: 10, overflow: "hidden", background: "rgba(255,255,255,.92)", boxShadow: "0 1px 3px rgba(0,0,0,.25)" }} onClick={(e) => e.stopPropagation()}>
+          {tabs ? tabs : <>
           <button type="button" onClick={onBack} className="tap px-2.5 h-7 text-[11px] font-semibold" style={{ padding: "0 10px", height: 28, fontSize: 11, fontWeight: 600, background: "transparent", color: C.ink, border: 0 }}>Relief</button>
           <span className="px-2.5 h-7 text-[11px] font-semibold" style={{ padding: "0 10px", height: 28, display: "inline-flex", alignItems: "center", fontSize: 11, fontWeight: 600, background: C.pine, color: "#fff" }}>Terrain</span>
+          </>}
         </div>
         {status === "ready" && (wide || !selected) && (
           <div style={wide ? { position: "absolute", left: 8, top: 44, zIndex: 5, display: "flex", flexDirection: "column", borderRadius: 10, overflow: "hidden", background: "rgba(255,255,255,.92)", boxShadow: "0 1px 3px rgba(0,0,0,.25)" } : { position: "absolute", right: 8, bottom: 28, zIndex: 5, display: "flex", flexDirection: "column", borderRadius: 10, overflow: "hidden", background: "rgba(255,255,255,.92)", boxShadow: "0 1px 3px rgba(0,0,0,.25)" }} onClick={(e) => e.stopPropagation()}>
@@ -11839,6 +11868,266 @@ function DkPlanMap({ plan, selected, onSelect }) {
   return <DkReliefMap plan={plan} selected={selected} onSelect={onSelect} />;
 }
 
+/* BUILD 59: insider tips for a day on the map — the road first (passes), then the place's local touches and sights
+   not already planned. Taken from what the app already knows (DK_PASSES, DK_NICHE, DK_SEE). */
+function dkMapTips(day, townKey, planned) {
+  const done = (planned || []).map((a) => dkNorm(a));
+  const out = [];
+  if (day && day.moving) {
+    for (const pk of day.passes || []) {
+      const P = DK_PASSES[pk]; if (!P) continue;
+      if (!done.some((a) => a.includes(dkNorm(P.n)))) out.push({ t: pk === "dochula" ? "Stop at Dochula: 108 chortens and, on a clear day, the Himalaya" : `Cross ${P.n} (${P.alt.toLocaleString("en")} m)`, why: "on the way" });
+    }
+  }
+  for (const x of DK_NICHE[townKey] || []) {
+    if (x.arrive && !(day && day.moving && day.to === townKey)) continue;
+    if (!done.some((a) => x.re.test(a))) out.push({ t: x.t, why: x.note || (x.e === "moderate" ? "local tip · moderate walk" : "local tip") });
+  }
+  for (const x of DK_SEE[townKey] || []) {
+    if (!done.some((a) => a.includes(dkNorm(x.t.split(",")[0])))) out.push({ t: x.t, why: x.e === "moderate" ? "moderate walk" : "" });
+  }
+  const seen = new Set();
+  return out.filter((x) => { const k = dkNorm(x.t); if (seen.has(k)) return false; seen.add(k); return true; }).slice(0, 5);
+}
+
+/* BUILD 59: hikes and treks the app recognises in a plan, with the town they start from and the names they carry
+   on OpenStreetMap. Only names are kept here — every coordinate comes from OpenStreetMap when the map opens. */
+const DK_TRAILS = [
+  { k: "taktsang", n: "Tiger's Nest (Taktsang)", re: /tiger'?s nest|taktsang/i, town: "paro", osm: "Taktsang|Tiger.?s Nest", db: /tiger.?s? nest/i },
+  { k: "bumdra", n: "Bumdra trail", re: /bumdra/i, town: "paro", osm: "Bumdra", db: /bumdra/i },
+  { k: "zuri", n: "Zuri Dzong hike", re: /\bzuri\b/i, town: "paro", osm: "Zuri" },
+  { k: "cheri", n: "Cheri Monastery", re: /\bcheri\b|chagri/i, town: "thimphu", osm: "Cheri|Chagri" },
+  { k: "tango", n: "Tango Monastery", re: /\btango\b/i, town: "thimphu", osm: "Tango" },
+  { k: "phajoding", n: "Phajoding", re: /phajoding/i, town: "thimphu", osm: "Phajoding", db: /phajoding/i },
+  { k: "khamsum", n: "Khamsum Yulley Namgyal Chorten", re: /khamsum/i, town: "punakha", osm: "Khamsum" },
+  { k: "chimi", n: "Walk to Chimi Lhakhang", re: /chimi/i, town: "punakha", osm: "Chimi" },
+  { k: "gangtey", n: "Gangtey Nature Trail", re: /nature trail|gangtey trail/i, town: "gangtey", osm: "Gangtey", db: /gangtey.*nature trail/i },
+  { k: "drukpath", n: "Druk Path trek", re: /druk path/i, town: "paro", osm: "Druk Path", trek: true, db: /^druk path/i },
+  { k: "jomolhari", n: "Jomolhari trek", re: /jomolhari|jhomolhari|chomolhari/i, town: "paro", osm: "Jomolhari|Jhomolhari|Chomolhari|Jangothang", trek: true },
+];
+/* BUILD 60: Bhutan's trails from OpenStreetMap, refreshed every Sunday in the database (public.trails).
+   Read once per session; the last copy is kept on the phone for treks without signal. */
+let _trailIndexP = null;
+const DK_TRAIL_INDEX_KEY = "bth_trail_index_v1";
+function loadTrailIndex() {
+  if (_trailIndexP) return _trailIndexP;
+  const kept = () => { try { const c = JSON.parse(localStorage.getItem(DK_TRAIL_INDEX_KEY) || "null"); return c && Array.isArray(c.rows) ? c.rows : []; } catch (e) { return []; } };
+  if (!CLOUD) return Promise.resolve([]);
+  _trailIndexP = supabase.from("trails").select("key,kind,name,search,km,bbox").eq("active", true).limit(2000).then(({ data, error }) => {
+    if (error || !Array.isArray(data)) { _trailIndexP = null; return kept(); }   // not set up yet, or offline: what this phone has
+    try { localStorage.setItem(DK_TRAIL_INDEX_KEY, JSON.stringify({ at: Date.now(), rows: data })); } catch (e) {}
+    return data;
+  }, () => { _trailIndexP = null; return kept(); });
+  return _trailIndexP;
+}
+function useTrailIndex() {
+  const [rows, setRows] = useState([]);
+  useEffect(() => { let on = true; loadTrailIndex().then((r) => { if (on) setRows(r || []); }); return () => { on = false; }; }, []);
+  return rows;
+}
+const dkTrailText = (s) => " " + String(s || "").toLowerCase().replace(/['’`]/g, "").replace(/[^a-z0-9]+/g, " ").trim() + " ";
+const DK_TRAIL_GENERIC = /\b(path|paths|trail|trails|trek|trekking|hike|hiking|route|foot|footpath|walking|walk|track|circuit|lam|to|the|from|b c|bc)\b/g;
+/** The words that name a trail on the list, without "path", "trek", "to"… — only names long enough to be specific. */
+function dkTrailCore(name) {
+  const full = dkTrailText(name);
+  const core = full.replace(DK_TRAIL_GENERIC, " ").replace(/\s+/g, " ").trim();
+  return { full: full.trim(), core: core.length >= 6 ? core : null };
+}
+function dkTrailsIn(plan, index) {
+  const out = [], seen = new Set(), used = new Set();
+  const list = (index || []).filter((r) => r && r.key && r.name);
+  for (const d of (plan && plan.days) || []) {
+    const raw = [d.raw || "", ...(d.acts || [])].join(" · ");
+    const text = dkTrailText(raw);
+    // the hand-made ones first: they know other spellings, and which names on the list are theirs
+    for (const t of DK_TRAILS) {
+      if (seen.has(t.k) || !t.re.test(raw) || !DK_TOWNS[t.town]) continue;
+      const db = t.db ? list.filter((r) => t.db.test(r.name)) : [];
+      db.forEach((r) => used.add(r.key));
+      seen.add(t.k); out.push({ ...t, day: d.day, dbKeys: db.map((r) => r.key), km: db.reduce((a, r) => a + (Number(r.km) || 0), 0) || null });
+    }
+    // then any trail on the weekly list named in the day
+    for (const r of list) {
+      if (used.has(r.key) || seen.has("db:" + r.key)) continue;
+      const { full, core } = dkTrailCore(r.name);
+      // the full name anywhere, or its specific words on a day that is about walking
+      if (!(text.includes(" " + full + " ") || (core && text.includes(" " + core + " ") && /\b(trek|trekking|trail|hike|hiking|walk|walking|path)\b/.test(text)))) continue;
+      used.add(r.key); seen.add("db:" + r.key);
+      out.push({ k: "db:" + r.key, n: r.name, day: d.day, dbKeys: [r.key], km: Number(r.km) || null, bbox: Array.isArray(r.bbox) ? r.bbox : null });
+    }
+  }
+  return out;
+}
+const DK_OVERPASS = ["https://overpass-api.de/api/interpreter", "https://overpass.kumi.systems/api/interpreter"];
+function dkTrailQuery(t) {
+  const c = DK_TOWNS[t.town]; const r = t.trek ? 0.7 : 0.3;
+  const bb = `${(c.lat - r).toFixed(3)},${(c.lng - r).toFixed(3)},${(c.lat + r).toFixed(3)},${(c.lng + r).toFixed(3)}`;
+  const nm = `[~"^(name|name:en|alt_name|official_name)$"~"${t.osm}",i]`;
+  return `[out:json][timeout:25];(relation["route"~"hiking|foot"]${nm}(${bb});way["highway"~"path|footway|track|steps|bridleway"]${nm}(${bb});`
+    + `nwr${nm}["amenity"="place_of_worship"](${bb});nwr${nm}["tourism"](${bb});nwr${nm}["historic"](${bb});node${nm}["natural"~"peak|saddle"](${bb}););out geom;`;
+}
+function dkTrailParse(json) {
+  const lines = [], points = [];
+  let budget = 30000;
+  const line = (geom) => { if (!Array.isArray(geom) || geom.length < 2 || budget <= 0) return; const l = geom.filter((g) => g && isFinite(g.lat) && isFinite(g.lon)).map((g) => [g.lon, g.lat]); if (l.length > 1) { lines.push(l); budget -= l.length; } };
+  for (const el of (json && json.elements) || []) {
+    const tg = el.tags || {};
+    if (el.type === "relation" && tg.route) { for (const m of el.members || []) if (m.type === "way") line(m.geometry); continue; }
+    if (el.type === "way" && tg.highway) { line(el.geometry); continue; }
+    let lat = el.lat, lon = el.lon;
+    if ((lat == null || lon == null) && el.bounds) { lat = (el.bounds.minlat + el.bounds.maxlat) / 2; lon = (el.bounds.minlon + el.bounds.maxlon) / 2; }
+    if (isFinite(lat) && isFinite(lon)) {
+      const n = tg["name:en"] || tg.name || "";
+      if (!points.some((q) => Math.abs(q.lat - lat) < 0.002 && Math.abs(q.lon - lon) < 0.002)) points.push({ lat, lon, n });
+    }
+  }
+  return { lines, points: points.slice(0, 10) };
+}
+async function dkTrailFetch(t) {
+  const key = "bth_trail_v1_" + t.k;
+  try { const c = JSON.parse(localStorage.getItem(key) || "null"); if (c && c.d && Date.now() - c.at < (c.d.lines.length || c.d.points.length ? 30 : 3) * 864e5) return c.d; } catch (e) {}
+  let last = null;
+  for (const url of DK_OVERPASS) {
+    try {
+      const ctl = typeof AbortController !== "undefined" ? new AbortController() : null;
+      const tm = setTimeout(() => ctl && ctl.abort(), 25000);
+      const r = await fetch(url, { method: "POST", body: "data=" + encodeURIComponent(dkTrailQuery(t)), headers: { "Content-Type": "application/x-www-form-urlencoded" }, signal: ctl ? ctl.signal : undefined });
+      clearTimeout(tm);
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      const d = dkTrailParse(await r.json());
+      try { localStorage.setItem(key, JSON.stringify({ at: Date.now(), d })); } catch (e) {}
+      return d;
+    } catch (e) { last = e; }
+  }
+  throw last || new Error("no answer");
+}
+
+/** The itinerary map: Terrain, and Trail Routes when the plan has a hike or trek. */
+function DkItinMap({ plan, selected, onSelect }) {
+  const index = useTrailIndex();
+  const trails = useMemo(() => dkTrailsIn(plan, index), [plan, index]);
+  const [view, setView] = useState("terrain");
+  const terrainOK = useMemo(() => dkTerrainCovers(plan), [plan]);
+  const tab = (k, label) => {
+    const on = view === k;
+    return <button key={k} type="button" aria-pressed={on} onClick={(e) => { e.stopPropagation(); setView(k); }} className="tap px-2.5 h-7 text-[11px] font-semibold"
+      style={{ padding: "0 10px", height: 28, fontSize: 11, fontWeight: 600, background: on ? C.pine : "transparent", color: on ? "#fff" : C.ink, border: 0 }}>{label}</button>;
+  };
+  const tabs = <>{tab("terrain", "Terrain")}{trails.length > 0 && tab("trails", "Trail Routes")}</>;
+  if (view === "trails" && trails.length) return <DkTrailMap trails={trails} selected={selected} onSelect={onSelect} tabs={tabs} />;
+  if (terrainOK) return <DkTerrainMap plan={plan} selected={selected} onSelect={onSelect} tabs={tabs} />;
+  return <DkReliefMap plan={plan} selected={selected} onSelect={onSelect} tabs={tabs} />;
+}
+
+/** Trail Routes: OpenTopoMap (footpaths and contours from OpenStreetMap), zoomed onto the trail, with the trail as
+ *  mapped on OpenStreetMap highlighted. Nothing is drawn that OpenStreetMap does not have. */
+function DkTrailMap({ trails, selected, onSelect, tabs }) {
+  const boxRef = useRef(null), mapRef = useRef(null), markersRef = useRef([]);
+  const [ready, setReady] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const [tilesBad, setTilesBad] = useState(false);
+  const tilesRef = useRef({ ok: 0 });
+  const [active, setActive] = useState(() => ((selected && trails.find((t) => t.day === selected)) || trails[0]).k);
+  useEffect(() => { const t = selected && trails.find((x) => x.day === selected); if (t) setActive(t.k); }, [selected]);
+  const tr = trails.find((t) => t.k === active) || trails[0];
+  const [res, setRes] = useState({ k: null, status: "loading", d: null });
+  // where the trail is: its town, or the middle of its area on the list
+  const town = DK_TOWNS[tr.town] || (tr.bbox ? { n: tr.n, lng: (tr.bbox[0] + tr.bbox[2]) / 2, lat: (tr.bbox[1] + tr.bbox[3]) / 2 } : { n: "Bhutan", lng: 90.4, lat: 27.45 });
+
+  useEffect(() => {
+    let on = true;
+    setRes({ k: tr.k, status: "loading", d: null });
+    const live = () => dkTrailFetch(tr).then((d) => { if (on) setRes({ k: tr.k, status: d.lines.length ? "line" : d.points.length ? "points" : "empty", d }); });
+    const fromList = (tr.dbKeys && tr.dbKeys.length && CLOUD)
+      ? supabase.from("trails").select("key,geom").in("key", tr.dbKeys).then(({ data, error }) => {
+          const lines = []; for (const r of (!error && data) || []) for (const l of Array.isArray(r.geom) ? r.geom : []) if (Array.isArray(l) && l.length > 1) lines.push(l);
+          if (!lines.length) throw new Error("no line");
+          if (on) setRes({ k: tr.k, status: "line", d: { lines, points: [], weekly: true } });
+        })
+      : Promise.reject(new Error("not on the list"));
+    fromList.catch(() => (tr.town ? live() : Promise.reject(new Error("no town"))))
+      .catch(() => { if (on) setRes({ k: tr.k, status: "failed", d: null }); });
+    return () => { on = false; };
+  }, [tr.k]);
+
+  useEffect(() => {
+    let on = true;
+    loadMapLibre().then((ml) => {
+      if (!on || !boxRef.current) return;
+      const map = new ml.Map({ container: boxRef.current, style: LIBRE_STYLES.topo, center: [town.lng, town.lat], zoom: 12, attributionControl: { compact: true }, cooperativeGestures: true, pitchWithRotate: false, dragRotate: false, touchPitch: false });
+      map.addControl(new ml.NavigationControl({ showCompass: false }), "bottom-right");
+      map.on("data", (e) => { if (e && e.tile && e.dataType === "source") tilesRef.current.ok += 1; });
+      map.on("load", () => {
+        if (!on) return;
+        mapRef.current = map; setReady(true);
+        try { map.resize(); } catch (e) {}
+        setTimeout(() => { try { map.resize(); } catch (e) {} }, 400);
+      });
+    }).catch(() => { if (on) setFailed(true); });
+    return () => { on = false; markersRef.current.forEach((m) => m.remove()); markersRef.current = []; if (mapRef.current) { mapRef.current.remove(); mapRef.current = null; } };
+  }, []);
+  useEffect(() => {   // no tile at all after 8 s: say so (the trail and pins still show)
+    if (!ready) return;
+    const t = setTimeout(() => { if (tilesRef.current.ok === 0) setTilesBad(true); }, 8000);
+    return () => clearTimeout(t);
+  }, [ready]);
+
+  // draw the trail and its places, then fly to them
+  useEffect(() => {
+    const map = mapRef.current; if (!ready || !map || res.k !== tr.k || res.status === "loading") return;
+    const ml = window.maplibregl;
+    const lines = (res.d && res.d.lines) || [], points = (res.d && res.d.points) || [];
+    const fc = { type: "FeatureCollection", features: lines.map((l) => ({ type: "Feature", geometry: { type: "LineString", coordinates: l }, properties: {} })) };
+    if (map.getSource("trail")) map.getSource("trail").setData(fc);
+    else {
+      map.addSource("trail", { type: "geojson", data: fc });
+      map.addLayer({ id: "trail-casing", type: "line", source: "trail", layout: { "line-join": "round", "line-cap": "round" }, paint: { "line-color": "#FFFFFF", "line-width": 7, "line-opacity": 0.9 } });
+      map.addLayer({ id: "trail-line", type: "line", source: "trail", layout: { "line-join": "round", "line-cap": "round" }, paint: { "line-color": "#7A2E2E", "line-width": 3.5 } });
+    }
+    markersRef.current.forEach((m) => m.remove());
+    markersRef.current = points.map((pt) => new ml.Marker({ element: dkMarkerEl(`<div style="display:flex;flex-direction:column;align-items:center;pointer-events:none"><span class="dk-gm-label" style="color:#fff;font-size:11px;font-weight:600;background:rgba(122,46,46,.92);padding:2px 6px;border-radius:6px;white-space:nowrap">${String(pt.n || tr.n).replace(/[<>&"]/g, "")}</span><svg width="12" height="12" viewBox="0 0 12 12"><circle cx="6" cy="6" r="5" fill="#7A2E2E" stroke="#fff" stroke-width="2"/></svg></div>`), anchor: "bottom" }).setLngLat([pt.lon, pt.lat]).addTo(map));
+    const b = new ml.LngLatBounds(); let any = false;
+    lines.forEach((l) => l.forEach((c) => { b.extend(c); any = true; }));
+    points.forEach((pt) => { b.extend([pt.lon, pt.lat]); any = true; });
+    const reduce = typeof matchMedia !== "undefined" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (any) map.fitBounds(b, { padding: 48, maxZoom: lines.length ? 15 : 14, duration: reduce ? 0 : 800, essential: true });
+    else map.flyTo({ center: [town.lng, town.lat], zoom: 12, duration: reduce ? 0 : 800, essential: true });
+  }, [ready, res]);
+
+  const status = res.k !== tr.k ? "loading" : res.status;
+  const say = {
+    loading: "Finding the trail on OpenStreetMap…",
+    line: `Highlighted: the trail as mapped on OpenStreetMap${res.d && res.d.weekly ? " (refreshed weekly)" : ""}${tr.km ? ` · about ${Math.round(tr.km * 10) / 10} km` : ""}. Contours and other footpaths from OpenTopoMap.`,
+    points: `The path itself isn't drawn on OpenStreetMap yet — the footpaths around the pinned place show on the map.`,
+    empty: `${tr.n} isn't mapped in detail on OpenStreetMap yet — showing the footpaths around ${town.n}.`,
+    failed: `Couldn't reach OpenStreetMap just now — showing the area around ${town.n}. Open the tab again later.`,
+  }[status];
+  return (
+    <div className="dk-map-sticky">
+      <div className="relative rounded-2xl overflow-hidden" style={{ border: `1px solid ${C.line}`, background: "#e7eee6", aspectRatio: "4 / 3" }}>
+        <div ref={boxRef} className="absolute inset-0 dk-libre" aria-label={`Trail map: ${tr.n}`} />
+        {!ready && !failed && <div className="absolute inset-0 flex items-center justify-center text-[12px]" style={{ color: C.muted }}><Loader2 size={16} className="animate-spin mr-2" /> Loading the trail map…</div>}
+        {failed && <div className="absolute inset-0 flex items-center justify-center text-center px-6 text-[12.5px]" style={{ color: C.muted }}>The trail map couldn't load on this connection. The Terrain tab still works.</div>}
+        <div className="absolute left-2 top-2" style={{ position: "absolute", left: 8, top: 8, zIndex: 5, display: "inline-flex", borderRadius: 10, overflow: "hidden", background: "rgba(255,255,255,.92)", boxShadow: "0 1px 3px rgba(0,0,0,.25)" }} onClick={(e) => e.stopPropagation()}>
+          {tabs}
+        </div>
+      </div>
+      <div className="text-[11.5px] mt-1.5 leading-snug" style={{ color: status === "failed" ? C.goldText : C.muted }}>
+        {status === "loading" && <Loader2 size={11} className="animate-spin inline mr-1" />}{say}{tilesBad ? " The map background isn't loading on this network." : ""}
+      </div>
+      <div className="flex flex-wrap gap-1.5 mt-2">
+        {trails.map((t) => { const on = t.k === tr.k;
+          return (
+            <button key={t.k} type="button" aria-pressed={on} onClick={() => { setActive(t.k); onSelect && onSelect(t.day); }} className="tap inline-flex items-center gap-1.5 rounded-full pl-1 pr-2.5 py-0.5 text-[12px]"
+              style={{ background: on ? C.pineSoft : C.card, border: `1px solid ${on ? C.pine : C.line}`, color: on ? C.pine : C.muted }}>
+              <span className="h-5 px-1.5 rounded-full flex items-center justify-center text-[10px] font-bold" style={{ background: on ? C.pine : C.grey, color: on ? "#fff" : C.ink }}>Day {t.day}</span>{t.n}
+            </button>
+          ); })}
+      </div>
+    </div>
+  );
+}
+
 function DkNoteBody({ note, day, onClose }) {
   return (
     <div className="rounded-xl p-3" style={{ background: "rgba(255,255,255,.97)", border: `1px solid ${C.line}`, boxShadow: "0 6px 20px -10px rgba(0,0,0,.25)" }}>
@@ -11851,9 +12140,9 @@ function DkNoteBody({ note, day, onClose }) {
       </div>
       {note.ideas.length > 0 ? (
         <div className="mt-2">
-          <div className="text-[10.5px] font-semibold tracking-[.06em] uppercase" style={{ color: C.goldText }}>Also worth it here</div>
+          <div className="text-[10.5px] font-semibold tracking-[.06em] uppercase" style={{ color: C.goldText }}>Insider tips · here and on the way</div>
           <ul className="mt-1 space-y-0.5">
-            {note.ideas.map((x) => <li key={x.t} className="text-[12.5px] leading-snug flex gap-1.5" style={{ color: C.ink }}><span className="mt-[7px] w-1 h-1 rounded-full shrink-0" style={{ background: C.gold }} /><span>{x.t}{x.e === "moderate" ? <span style={{ color: C.muted }}> · moderate walk</span> : null}</span></li>)}
+            {note.ideas.map((x) => <li key={x.t} className="text-[12.5px] leading-snug flex gap-1.5" style={{ color: C.ink }}><span className="mt-[7px] w-1 h-1 rounded-full shrink-0" style={{ background: C.gold }} /><span>{x.t}{x.why ? <span style={{ color: C.muted }}> · {x.why}</span> : null}</span></li>)}
           </ul>
         </div>
       ) : note.planned > 0 ? <div className="text-[12px] mt-1.5" style={{ color: C.muted }}>All of Drukpah's picks here are already in this day.</div> : null}
@@ -12357,7 +12646,7 @@ function DrukpahEngine({ user, trips, actions, onApplied, presetTemplateId }) {
             </div>
           )}
 
-          <DkPlanMap plan={plan} selected={mapSel} onSelect={(n) => selectDay(n, true)} />
+          <DkItinMap plan={plan} selected={mapSel} onSelect={(n) => selectDay(n, true)} />
 
           {plan.notes.length > 0 && (
             <div className="mt-4 space-y-2">
@@ -12533,6 +12822,170 @@ function ReadinessList({ readiness }) {
   );
 }
 
+/* ========================================================================== */
+/*  LICENCE PHOTO — camera or gallery, read on the phone (BUILD 58)            */
+/*  The phone reads the card with Tesseract.js (loaded once from jsDelivr; the  */
+/*  photo is not sent anywhere to be read). The reading only helps: it checks   */
+/*  the typed number is on the card and finds the expiry date. It never blocks  */
+/*  saving, and only the admin's Verify gives the tick.                         */
+/* ========================================================================== */
+const TESSERACT_URL = "https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js";
+let tesseractLoading = null;
+function loadTesseract() {
+  if (typeof window !== "undefined" && window.Tesseract) return Promise.resolve(window.Tesseract);
+  if (tesseractLoading) return tesseractLoading;
+  tesseractLoading = new Promise((res, rej) => {
+    const el = document.createElement("script");
+    el.src = TESSERACT_URL; el.async = true; el.crossOrigin = "anonymous";
+    el.onload = () => (window.Tesseract ? res(window.Tesseract) : rej(new Error("reader missing")));
+    el.onerror = () => { tesseractLoading = null; el.remove(); rej(new Error("reader didn't load")); };
+    document.head.appendChild(el);
+  });
+  return tesseractLoading;
+}
+const licTimeout = (pr, ms) => Promise.race([pr, new Promise((_, rej) => setTimeout(() => rej(new Error("timed out")), ms))]);
+async function readLicenceText(dataUrl) {
+  const T = await licTimeout(loadTesseract(), 30000);
+  const small = await shrinkImage(dataUrl, 1800, 0.92);
+  const worker = await licTimeout(T.createWorker("eng"), 45000);
+  try { const { data } = await licTimeout(worker.recognize(small), 60000); return String((data && data.text) || ""); }
+  finally { try { worker.terminate(); } catch (e) {} }
+}
+// letters a reader confuses with digits, and the reverse — compared the same way on both sides
+const LIC_SAME = { O: "0", Q: "0", D: "0", I: "1", L: "1", T: "1", "|": "1", S: "5", B: "8", Z: "2", G: "6" };
+const licKey = (x) => String(x || "").toUpperCase().split("").map((ch) => LIC_SAME[ch] || ch).join("").replace(/[^0-9A-Z]/g, "");
+const LIC_MONTHS = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, sept: 9, oct: 10, nov: 11, dec: 12 };
+function licDate(y, m, d) {
+  y = +y; m = +m; d = +d;
+  if (!(y >= 1990 && y <= 2100 && m >= 1 && m <= 12 && d >= 1 && d <= 31)) return null;
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  if (dt.getUTCMonth() !== m - 1) return null;
+  return `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+}
+/** Every date printed on the card, with where it sits in the text. Numbers are read day first (as in Bhutan). */
+function licDatesIn(text) {
+  // inside number-like words, read O as 0 and I/l as 1 (the reader's usual slips)
+  const t = String(text || "").replace(/[0-9OoIl|]+(?:[\/\-.][0-9OoIl|]+)+/g, (w) => (/\d/.test(w) ? w.replace(/[Oo]/g, "0").replace(/[Il|]/g, "1") : w));
+  const out = [];
+  const push = (iso, at) => { if (iso) out.push({ iso, at }); };
+  let m;
+  const dmy = /(\d{1,2})\s?[\/\-.]\s?(\d{1,2})\s?[\/\-.]\s?(\d{4})/g;
+  while ((m = dmy.exec(t))) { const a = +m[1], b = +m[2]; push(a <= 12 && b > 12 ? licDate(m[3], a, b) : licDate(m[3], b, a), m.index); }
+  const ymd = /(\d{4})\s?[\/\-.]\s?(\d{1,2})\s?[\/\-.]\s?(\d{1,2})/g;
+  while ((m = ymd.exec(t))) push(licDate(m[1], m[2], m[3]), m.index);
+  const dMy = /(\d{1,2})(?:st|nd|rd|th)?[\s\-\/.,]*([A-Za-z]{3,9})[\s\-\/.,]*(\d{4})/g;
+  while ((m = dMy.exec(t))) { const mo = LIC_MONTHS[m[2].toLowerCase().slice(0, m[2].toLowerCase().startsWith("sept") ? 4 : 3)]; if (mo) push(licDate(m[3], mo, m[1]), m.index); }
+  const Mdy = /([A-Za-z]{3,9})[\s.]+(\d{1,2}),?\s+(\d{4})/g;
+  while ((m = Mdy.exec(t))) { const mo = LIC_MONTHS[m[1].toLowerCase().slice(0, 3)]; if (mo) push(licDate(m[3], mo, m[2]), m.index); }
+  return out.sort((a, b) => a.at - b.at);
+}
+/** The "valid until" date: the first date after a validity word, otherwise the latest date on the card. */
+function licExpiryIn(text) {
+  const dates = licDatesIn(text);
+  if (!dates.length) return null;
+  const kw = /valid|validity|expir|exp\b|exp\.|up ?to|upto|till|until/gi;
+  let k;
+  while ((k = kw.exec(String(text)))) {
+    const after = dates.find((d) => d.at >= k.index && d.at - k.index <= 60);
+    if (after) return after.iso;
+  }
+  return dates.map((d) => d.iso).sort().pop();
+}
+/** Compare what the card says with what was typed. */
+function licCompare(text, typedNumber, typedExpiry) {
+  const hasText = String(text || "").replace(/\s/g, "").length >= 12;
+  const key = licKey(typedNumber);
+  const number = !hasText ? null : key.length < 3 ? null : licKey(text).includes(key) ? "match" : "not_found";
+  const read = hasText ? licExpiryIn(text) : null;
+  const expiry = !read ? null : !typedExpiry ? "unset" : read === typedExpiry ? "match" : "differs";
+  return { hasText, number, expiryRead: read, expiry };
+}
+/** Where the photo came from — the admin sees this next to the photo. */
+function licSource(file, how) {
+  const name = String((file && file.name) || "");
+  if (/screen ?shot|screen_?capture/i.test(name)) return "screenshot";
+  const age = file && file.lastModified ? Date.now() - file.lastModified : null;
+  if (how === "camera" && (age === null || age < 15 * 60e3)) return "camera";
+  if (age !== null && age > 15 * 60e3) return "older";
+  return how === "camera" ? "camera" : "gallery";
+}
+/** Reads the chosen photo once; `text` is null while reading, "" when it couldn't be read. */
+function useLicenceReader(dataUrl) {
+  const [st, setSt] = useState({ src: null, text: null, failed: null });
+  useEffect(() => {
+    if (!dataUrl) { setSt({ src: null, text: null, failed: null }); return; }
+    let on = true;
+    setSt({ src: dataUrl, text: null, failed: null });
+    readLicenceText(dataUrl)
+      .then((text) => { if (on) setSt({ src: dataUrl, text, failed: null }); })
+      .catch((e) => { if (on) setSt({ src: dataUrl, text: "", failed: navigator.onLine === false ? "offline" : "error" }); });
+    return () => { on = false; };
+  }, [dataUrl]);
+  const reading = !!dataUrl && (st.src !== dataUrl || st.text === null);
+  return { reading, text: reading ? null : st.text, failed: reading ? null : st.failed };
+}
+/** The record saved with the profile for the admin (null when there is no new photo). */
+function licCheckRecord(reader, typedNumber, typedExpiry, source) {
+  if (!source) return null;
+  if (reader.reading) return { at: new Date().toISOString(), source, read: "unfinished" };
+  const c = licCompare(reader.text, typedNumber, typedExpiry);
+  return { at: new Date().toISOString(), source, read: c.hasText ? "ok" : (reader.failed || "unreadable"),
+           number: c.number, expiry_read: c.expiryRead, expiry: c.expiry };
+}
+/** Two ways to add the photo. "Take a photo" opens the camera on phones (a file picker on computers). */
+function LicencePhotoPick({ onPick, has }) {
+  const camRef = useRef(null), galRef = useRef(null);
+  const take = (how) => (e) => {
+    const file = e.target.files && e.target.files[0]; e.target.value = "";
+    onPick(file || null, how);
+  };
+  const btn = "tap flex-1 h-12 rounded-xl text-[14px] font-semibold inline-flex items-center justify-center gap-2";
+  return (
+    <div className="flex gap-2 mb-1">
+      <input ref={camRef} type="file" accept="image/*" capture="environment" onChange={take("camera")} className="hidden" aria-hidden="true" tabIndex={-1} />
+      <input ref={galRef} type="file" accept="image/*" onChange={take("gallery")} className="hidden" aria-hidden="true" tabIndex={-1} />
+      <button type="button" onClick={() => camRef.current && camRef.current.click()} className={btn} style={{ background: C.pine, color: "#fff" }}>
+        <Camera size={17} /> {has ? "Retake photo" : "Take a photo"}
+      </button>
+      <button type="button" onClick={() => galRef.current && galRef.current.click()} className={btn} style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }}>
+        <Upload size={16} /> Gallery
+      </button>
+    </div>
+  );
+}
+/** What the phone read, in plain words. Never blocks: it helps fix a typo or retake a blurry photo. */
+function LicenceReadout({ reader, number, expiry, onUseExpiry, role }) {
+  if (!reader.reading && reader.text === null) return null;
+  const box = (bg, fg, Icon, children, key) => (
+    <div key={key} className="rounded-xl px-3 py-2.5 mb-2 flex items-start gap-2.5 text-[13px] leading-snug" style={{ background: bg, color: fg }}>
+      <Icon size={16} className="shrink-0 mt-0.5" /><div className="flex-1 min-w-0">{children}</div>
+    </div>
+  );
+  if (reader.reading) return box(C.bg, C.muted, Loader2, <span>Reading your licence… <span className="opacity-80">(the first time takes a few seconds)</span></span>);
+  const c = licCompare(reader.text, number, expiry);
+  if (!c.hasText) return box(C.goldSoft, C.goldText, ShieldAlert,
+    reader.failed === "offline" ? "Couldn't read the photo without a connection. You can still save — our team checks it."
+      : "Couldn't read the writing on this photo. Retake it flat, sharp and in good light — or save anyway, our team checks it.");
+  const today = isoDay(0);
+  const out = [];
+  if (c.number === "match") out.push(box(C.pineSoft, C.pine, BadgeCheck, "Licence number matches the photo.", "n"));
+  else if (c.number === "not_found") out.push(box(C.goldSoft, C.goldText, ShieldAlert,
+    <>We couldn't find <b>{String(number).toUpperCase()}</b> on the photo. Check the number, or retake the photo closer and in better light.</>, "n"));
+  if (c.expiryRead) {
+    const past = c.expiryRead < today;
+    if (past) out.push(box(C.maroonSoft, C.maroon, ShieldAlert, <>The photo shows this licence expired on <b>{fmtDateLong(c.expiryRead)}</b>. Renew it with the {role === "driver" ? "RSTA" : "Department of Tourism"} first.</>, "e"));
+    else if (c.expiry === "match") out.push(box(C.pineSoft, C.pine, BadgeCheck, "Valid-until date matches the photo.", "e"));
+    else out.push(box(C.goldSoft, C.goldText, CalendarDays, (
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className="flex-1 min-w-[140px]">{c.expiry === "differs" ? "The photo shows valid until" : "Valid until"} <b>{fmtDateLong(c.expiryRead)}</b>{c.expiry === "differs" ? " — different from the date you entered." : "?"}</span>
+        {onUseExpiry && <button type="button" onClick={() => onUseExpiry(c.expiryRead)} className="tap rounded-lg px-3 h-8 text-[13px] font-semibold shrink-0" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }}>Use this date</button>}
+      </div>), "e"));
+  }
+  return <div className="mb-2">{out}</div>;
+}
+const fmtDateLong = (d) => new Date(d + "T00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+const LIC_SOURCE_WORDS = { camera: "Taken with the camera", gallery: "Chosen from the gallery", older: "An older photo from the gallery", screenshot: "A screenshot" };
+
 /* ── the profile editor: licence, specialities, languages, vehicle, about ── */
 function ProfileEditor({ talent, onClose, onSaved }) {
   const t = talent || {};
@@ -12543,6 +12996,8 @@ function ProfileEditor({ talent, onClose, onSaved }) {
     tags: t.tags || [], langs: (t.languages || []).map((x) => (typeof x === "string" ? { n: x, l: "Fluent" } : x)).filter((x) => x && x.n), vehicle: t.vehicle || "",
   });
   const [photo, setPhoto] = useState(null);
+  const [photoFrom, setPhotoFrom] = useState(null);   // BUILD 58: camera | gallery | older | screenshot
+  const reader = useLicenceReader(photo);
   const [face, setFace] = useState(null);   // BUILD 55: a new profile photo, chosen but not saved yet
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
@@ -12563,11 +13018,12 @@ function ProfileEditor({ talent, onClose, onSaved }) {
                    verified: ["Verified", C.pine], rejected: ["Not approved — upload a clearer photo", C.maroon] }[t.licenseStatus || "none"]
                  || ["Not added yet", C.muted];
 
-  const pick = (e) => {
-    const file = e.target.files && e.target.files[0]; e.target.value = "";
-    if (!file || !file.type.startsWith("image/")) { setErr("Please choose a photo of your licence."); return; }
+  const pick = (file, how) => {
+    if (!file) return;
+    if (!file.type.startsWith("image/")) { setErr("Please choose a photo of your licence."); return; }
     setErr(null);
-    const r = new FileReader(); r.onload = () => setPhoto(r.result); r.readAsDataURL(file);
+    const from = licSource(file, how);
+    const r = new FileReader(); r.onload = () => { setPhoto(r.result); setPhotoFrom(from); }; r.readAsDataURL(file);
   };
 
   const pickFace = (e) => {
@@ -12610,7 +13066,14 @@ function ProfileEditor({ talent, onClose, onSaved }) {
       // a new photo, or a changed number on a verified licence, goes back to our team to check
       if (licensePath) { patch.license_path = licensePath; patch.license_status = "submitted"; }
       else if (number !== (t.licenseNumber || null) && t.licenseStatus === "verified") patch.license_status = "submitted";
+      // BUILD 58: what the phone read on the new photo, for the admin (left out if the column isn't there yet)
+      const check = licensePath ? licCheckRecord(reader, number, f.licExpiry || null, photoFrom) : null;
+      if (check) patch.license_check = check;
       let res = await supabase.from("profiles").update(patch).eq("id", t.id);
+      if (res.error && check && /license_check/.test(res.error.message || "")) {
+        delete patch.license_check;
+        res = await supabase.from("profiles").update(patch).eq("id", t.id);
+      }
       if (res.error && patch.license_status) {
         // if the database reserves the status for admins, save everything else
         const { license_status, ...rest } = patch;
@@ -12684,20 +13147,18 @@ function ProfileEditor({ talent, onClose, onSaved }) {
             <input type="date" value={f.licExpiry} onChange={(e) => set("licExpiry", e.target.value)}
               className="w-full h-12 px-3.5 rounded-xl text-[14px]" style={field} />
           </label>
-          <input ref={fileRef} type="file" accept="image/*" onChange={pick} className="hidden" />
           {photo ? (
             <div className="rounded-xl overflow-hidden mb-2" style={{ border: `1px solid ${C.line}` }}>
               <img src={photo} alt="Your licence" className="w-full block" style={{ maxHeight: 240, objectFit: "contain", background: C.bg }} />
             </div>
           ) : null}
-          <button type="button" onClick={() => fileRef.current && fileRef.current.click()}
-            className="tap w-full h-11 rounded-xl text-[14px] font-semibold inline-flex items-center justify-center gap-2 mb-1"
-            style={{ background: C.card, border: `1px dashed ${C.line}`, color: C.ink }}>
-            <Camera size={16} /> {photo ? "Choose a different photo" : t.licensePhoto ? "Replace the licence photo" : "Add a photo of your licence"}
-          </button>
-          <p className="text-[12px] mb-5" style={{ color: C.muted }}>
-            {t.licensePhoto && !photo ? "A photo is on file. " : ""}Hold the phone flat above the licence with all four corners in frame.
+          <div className="text-[13px] font-medium mb-1.5" style={{ color: C.ink }}>{photo ? "Licence photo" : t.licensePhoto ? "Replace the licence photo" : "Photo of your licence card"}</div>
+          <LicencePhotoPick onPick={pick} has={!!photo} />
+          <p className="text-[12px] mb-3" style={{ color: C.muted }}>
+            {t.licensePhoto && !photo ? "A photo is on file. " : ""}Photograph the card itself: hold the phone flat above it, all four corners in frame, in good light.
           </p>
+          <LicenceReadout reader={reader} number={f.licNumber} expiry={f.licExpiry} role={t.role} onUseExpiry={(d) => set("licExpiry", d)} />
+          <div className="mb-3" />
 
           <div className="text-[11px] font-semibold tracking-[.14em] uppercase mb-2" style={{ color: C.goldText }}>{isDriver ? "Driving" : "Specialities"}</div>
           <div className="flex flex-wrap gap-2 mb-5">
@@ -13586,6 +14047,27 @@ async function dkReleaseCredits({ adminId, operatorId, amount, reason, requestId
   return { ok: true };
 }
 
+/** BUILD 60: the weekly trail list from OpenStreetMap — when it last ran, and what came in. */
+function AdminTrailStatus() {
+  const [st, setSt] = useState(null);
+  useEffect(() => {
+    let on = true;
+    if (!CLOUD) return;
+    supabase.from("trail_refresh_log").select("status,finished_at,started_at,total,new_count,retired,note").order("id", { ascending: false }).limit(5)
+      .then(({ data, error }) => { if (on) setSt(error ? { off: true } : { rows: data || [] }); });
+    return () => { on = false; };
+  }, []);
+  if (!st || st.off) return null;   // not set up yet: nothing to show
+  const last = st.rows.find((r) => r.status === "done");
+  const failed = st.rows[0] && st.rows[0].status === "failed" ? st.rows[0] : null;
+  return (
+    <div className="rounded-xl px-3.5 py-2.5 mb-3 text-[12.5px] leading-snug" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.muted }}>
+      <b style={{ color: C.ink }}>Trail list</b>{" · "}
+      {last ? <>updated {fmtDate(String(last.finished_at).slice(0, 10))} · {last.total} trails{last.new_count ? ` · ${last.new_count} new` : ""}</> : "first refresh on its way"}
+      {failed && <span style={{ color: C.goldText }}> · last refresh didn't finish ({failed.note || "no answer"}); it tries again next Sunday</span>}
+    </div>
+  );
+}
 function AdminDraftsPanel({ adminId, onChanged }) {
   const [reqs, setReqs] = useState(null);
   const [settings, setSettings] = useState(null);
