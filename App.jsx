@@ -66,7 +66,7 @@ const CLOUD = Boolean(supabase);
   } catch (e) {}
 })();
 const DEMO_MODE = false;   // set true only for local demos without a database
-const BUILD = "BUILD 60 — 12 Oct";   // bump every deploy; shown at the top of the welcome screen
+const BUILD = "BUILD 61 — 12 Oct";   // bump every deploy; shown at the top of the welcome screen
 // which device someone is on — shown beside the build so a screenshot tells us both
 const DEVICE = (() => {
   try {
@@ -11006,7 +11006,7 @@ function DkLibreMap({ plan, selected, onSelect, onBack }) {
   return (
     <div className="dk-map-sticky">
       <div className="relative rounded-2xl overflow-hidden" style={{ border: `1px solid ${C.line}`, background: "#0b1a12", aspectRatio: wide ? "2 / 1" : "4 / 3" }}>
-        <div ref={boxRef} className="absolute inset-0 dk-libre" />
+        <div ref={boxRef} className="dk-libre" style={{ position: "absolute", top: 0, right: 0, bottom: 0, left: 0 }} />
         {!ready && <div className="absolute inset-0 flex items-center justify-center text-[12px]" style={{ color: "#fff", opacity: .8 }}><Loader2 size={16} className="animate-spin mr-2" /> Loading satellite map…</div>}
         {ready && (
           <div className="absolute left-2 top-2 inline-flex rounded-lg overflow-hidden" style={{ background: "rgba(255,255,255,.92)", boxShadow: "0 1px 3px rgba(0,0,0,.25)", zIndex: 5 }} onClick={(e) => e.stopPropagation()}>
@@ -12105,7 +12105,7 @@ function DkTrailMap({ trails, selected, onSelect, tabs }) {
   return (
     <div className="dk-map-sticky">
       <div className="relative rounded-2xl overflow-hidden" style={{ border: `1px solid ${C.line}`, background: "#e7eee6", aspectRatio: "4 / 3" }}>
-        <div ref={boxRef} className="absolute inset-0 dk-libre" aria-label={`Trail map: ${tr.n}`} />
+        <div ref={boxRef} className="dk-libre" style={{ position: "absolute", top: 0, right: 0, bottom: 0, left: 0 }} aria-label={`Trail map: ${tr.n}`} />
         {!ready && !failed && <div className="absolute inset-0 flex items-center justify-center text-[12px]" style={{ color: C.muted }}><Loader2 size={16} className="animate-spin mr-2" /> Loading the trail map…</div>}
         {failed && <div className="absolute inset-0 flex items-center justify-center text-center px-6 text-[12.5px]" style={{ color: C.muted }}>The trail map couldn't load on this connection. The Terrain tab still works.</div>}
         <div className="absolute left-2 top-2" style={{ position: "absolute", left: 8, top: 8, zIndex: 5, display: "inline-flex", borderRadius: 10, overflow: "hidden", background: "rgba(255,255,255,.92)", boxShadow: "0 1px 3px rgba(0,0,0,.25)" }} onClick={(e) => e.stopPropagation()}>
