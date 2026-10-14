@@ -66,7 +66,7 @@ const CLOUD = Boolean(supabase);
   } catch (e) {}
 })();
 const DEMO_MODE = false;   // set true only for local demos without a database
-const BUILD = "BUILD 66 — 15 Oct";   // bump every deploy; shown at the top of the welcome screen
+const BUILD = "BUILD 67 — 15 Oct";   // bump every deploy; shown at the top of the welcome screen
 // which device someone is on — shown beside the build so a screenshot tells us both
 const DEVICE = (() => {
   try {
@@ -372,6 +372,15 @@ function tabForOpen(target, kind) {
   })[target] || null;
   return tab && (NAV[kind] || []).some((n) => n.id === tab) ? tab : null;
 }
+// BUILD 67: links people share, and where Google sends a guest back after signing in, always use the real address —
+// never a preview copy of the site (Supabase only sends guests back to the address it knows).
+const SITE_ORIGIN = () => {
+  try {
+    const h = window.location.hostname;
+    if (/(^|\.)bhutantourismhub\.com$|\.workers\.dev$|\.pages\.dev$/i.test(h)) return "https://bhutantourismhub.com";
+    return window.location.origin;   // a local copy for testing
+  } catch (e) { return "https://bhutantourismhub.com"; }
+};
 const openTargetOf = (url) => { try { return new URL(url, window.location.origin).searchParams.get("open"); } catch (e) { return null; } };
 // The pushes kept on this phone belong to whoever was signed in when they came: when someone else signs in here,
 // they start with an empty list. (A phone with no owner recorded yet keeps what it has.)
@@ -1123,7 +1132,7 @@ export default function App() {
     if (error) { console.error("createInvite failed:", error.message); return { ok: false, reason: error.message }; }
     fetchInvites();
     const invite = rowToInvite({ ...row, id: "new", created_at: new Date().toISOString() });
-    return { ok: true, token: row.token, link: `${window.location.origin}/?invite=${row.token}`, invite };
+    return { ok: true, token: row.token, link: `${SITE_ORIGIN()}/?invite=${row.token}`, invite };
   };
   const cancelInvite = async (id) => {
     if (!CLOUD) return;
@@ -3843,6 +3852,14 @@ function TripHub({ user, meId, trip, actions, onBack, openSheet }) {
   const gradeWindow = gradeWindowOf(trip);
   const canGrade = Boolean(trip.operatorId && trip.operatorId === meId && gradeWindow.open);
   const grades = useTripGrades(trip, meId, canGrade);
+  // BUILD 67: one review link per trip — who sent it (for the guide's and driver's card)
+  const [linkInfo, setLinkInfo] = useState(null);
+  useEffect(() => {
+    if (!CLOUD || !canAsk) return;
+    let on = true;
+    supabase.rpc("trip_review_link", { p_trip: trip.id }).then(({ data, error }) => { if (on && !error && data && typeof data === "object") setLinkInfo(data); }).catch(() => {});
+    return () => { on = false; };
+  }, [trip.id, canAsk, inviting]);
   // BUILD 55: a notification about this trip's reviews (or, BUILD 56, its grading) opens it straight away
   useEffect(() => {
     if (!openSheet) return;
@@ -3948,7 +3965,7 @@ function TripHub({ user, meId, trip, actions, onBack, openSheet }) {
               <div className="flex-1 min-w-0">
                 <div className="text-[14px] font-semibold" style={{ color: tone }}>Guest reviews</div>
                 <div className="text-[13px] mt-0.5 leading-snug" style={{ color: tone, opacity: .85 }}>
-                  {waiting ? `${waiting} waiting for you to publish` : live ? `${live} published · ask more guests` : "Ask your guests. One link covers the whole crew."}
+                  {waiting ? `${waiting} waiting for you to attest` : live ? `${live} attested` : "Ask your guests. One link covers the crew and your company."}
                 </div>
               </div>
               {waiting > 0 && (
@@ -3974,6 +3991,8 @@ function TripHub({ user, meId, trip, actions, onBack, openSheet }) {
                 <div className="text-[13px] mt-0.5 leading-snug" style={{ color: C.goldText, opacity: .85 }}>
                   {mine.length
                     ? `${mine.length} ${mine.length === 1 ? "review" : "reviews"} of you${live ? ` · ${live} on your profile` : ""}${waiting ? ` · ${waiting} waiting for ${trip.operator || "the operator"}` : ""}`
+                    : linkInfo && linkInfo.sent && !linkInfo.mine ? `${String(linkInfo.by_name || "A team member").split(" ")[0]} sent the review link · waiting for reviews`
+                    : linkInfo && linkInfo.sent ? "You sent the review link · waiting for reviews"
                     : "One link for the whole group. Guests sign in with Google."}
                 </div>
               </div>
@@ -4823,7 +4842,7 @@ function PostEngagement({ post, eng }) {
   const [sharing, setSharing] = useState(false);
   const shareExternal = async () => {
     const line = `${actorName(post.talentId)} on Bhutan Tourism Hub${post.text ? `: “${post.text}”` : ""}`;
-    const url = window.location.origin;
+    const url = SITE_ORIGIN();
     try {
       if (navigator.share) { await navigator.share({ title: "Bhutan Tourism Hub", text: line, url }); }
       else { await navigator.clipboard.writeText(`${line}\n${url}`); setNote("Link copied"); setTimeout(() => setNote(null), 2000); }
@@ -7155,7 +7174,7 @@ function Tutorial({ user, nav, setTab, onDone }) {
     { kind: "tab", tab: "discover", title: "Crew", body: "Every verified guide and driver, filtered by speciality, language and who's available right now. Phone numbers are visible to you — that's an operator feature." },
     { kind: "tab", tab: "requests", title: "Jobs", body: "Post a job and let qualified people apply, or send a request directly to someone you want." },
     { kind: "tab", tab: "chats", title: "Messages", body: "A chat channel per trip, plus direct messages with any guide or driver." },
-    { kind: "outro", title: "The one that pays for itself", body: "After a trip ends, open it and ask your guests for a review — your guides and drivers can send the link too. Guests sign in with Google, and nothing appears until you publish it." },
+    { kind: "outro", title: "The one that pays for itself", body: "After a trip ends, open it and ask your guests for a review — your guides and drivers can send the link too. Guests sign in with Google; you attest each review of your crew before it shows." },
   ];
 
   const HOTEL_STEPS = [
@@ -7895,7 +7914,7 @@ function GuestReview({ token }) {
     // Google brings the guest straight back to this link, signed in
     const { error } = await supabase.auth.signInWithOAuth({
       provider: "google",
-      options: { redirectTo: `${window.location.origin}/?review=${encodeURIComponent(token)}`, queryParams: { prompt: "select_account" } },
+      options: { redirectTo: `${SITE_ORIGIN()}/?review=${encodeURIComponent(token)}`, queryParams: { prompt: "select_account" } },
     });
     if (!alive.current) return;
     if (error) {
@@ -8025,7 +8044,7 @@ function GuestReview({ token }) {
             <button type="button" className="tap mt-2.5 h-9 px-3.5 rounded-lg text-[13px] font-semibold"
               style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }}
               onClick={async () => {
-                const u = `${window.location.origin}/?review=${encodeURIComponent(token)}`;
+                const u = `${SITE_ORIGIN()}/?review=${encodeURIComponent(token)}`;
                 try { await navigator.clipboard.writeText(u); setCopiedLink(true); } catch (e) { setErr(u); }
               }}>{copiedLink ? "Link copied" : "Copy link"}</button>
           </div>
@@ -8357,6 +8376,9 @@ function ReviewInvite({ user, trip, reviews, onClose, onOpenCrew }) {
   const meId = user.talentId || user.id;
   const isOp = user.kind === "operator" || user.kind === "admin";
   const [link, setLink] = useState(null);            // { url, expires } — this person's link for this trip
+  const [sentBy, setSentBy] = useState(null);        // BUILD 67: someone else sent the trip's link: { name, at }
+  const [canSend, setCanSend] = useState(false);     // BUILD 67: no link yet — offer to send it
+  const [sending, setSending] = useState(false);
   const [linkState, setLinkState] = useState("loading");   // loading | ready | error
   const [deciding, setDeciding] = useState(null);
   const [err, setErr] = useState(null);
@@ -8372,34 +8394,57 @@ function ReviewInvite({ user, trip, reviews, onClose, onOpenCrew }) {
   const people = crew.map((m) => personOf(m.id));
   const names = joinNames(people.map((p) => String(p.name).split(" ")[0]));
   const who = crewPhrase(people);
-  const linkFor = (token) => `${window.location.origin}/?review=${token}`;
+  const linkFor = (token) => `${SITE_ORIGIN()}/?review=${token}`;
   const opName = trip.operator || "the tour operator";
 
-  // the link this person already made for the trip (open for 30 days), or a new one
+  // BUILD 67: ONE link per trip. Whoever sends it first; the others see who sent it and when.
   const getLink = async () => {
     if (!CLOUD) { setLinkState("error"); return; }
-    setLinkState("loading"); setErr(null);
+    setLinkState("loading"); setErr(null); setSentBy(null); setCanSend(false);
+    const { data: st, error: se } = await supabase.rpc("trip_review_link", { p_trip: trip.id });
+    if (!se && st && typeof st === "object" && "sent" in st) {
+      if (st.sent && st.mine && st.token) { setLink({ url: linkFor(st.token), expires: st.expires_at }); setLinkState("ready"); return; }
+      if (st.sent) { setLink(null); setSentBy({ name: st.by_name || "A team member", at: st.sent_at || null }); setLinkState("ready"); return; }
+      setLink(null); setCanSend(true); setLinkState("ready"); return;
+    }
+    return legacyLink();   // a database without BUILD 67: as in BUILD 66
+  };
+  const sendFirst = async () => {
+    setSending(true); setErr(null);
+    const ok = await createLink();
+    setSending(false);
+    if (ok || ok === "taken") getLink();
+  };
+  // the database stamps who made it, checks they're this trip's crew or operator, sets the 30 days — and refuses a
+  // second open link for the trip
+  const createLink = async () => {
+    const token = makeReviewToken();
+    const { error: e2 } = await supabase.from("review_tokens").insert({
+      token, trip_id: trip.id, trip_label: trip.title, multi: true,
+      issued_by: meId, issuer_role: user.kind === "admin" ? "admin" : user.kind === "operator" ? "operator" : user.kind,
+    });
+    if (e2) {
+      if (/already been sent/i.test(e2.message || "")) return "taken";
+      console.error("review_tokens.insert failed:", e2.message);
+      setErr(/too many/i.test(e2.message) ? "This trip has too many review links. Please ask the admin."
+        : /not started/i.test(e2.message) ? "Reviews open once the trip has started."
+        : /row-level security|crew of this trip|tour operator can ask/i.test(e2.message) ? "Only this trip's guides, drivers and tour operator can ask its guests."
+        : failText("make the review link"));
+      return false;
+    }
+    return token;
+  };
+  // BUILD 66 behaviour, for a database without BUILD 67: this person's own link, made on opening
+  const legacyLink = async () => {
+    if (!CLOUD) { setLinkState("error"); return; }
     // reused while it has at least a week left; otherwise a fresh 30 days
     const { data, error } = await supabase.from("review_tokens").select("token,expires_at")
       .eq("trip_id", trip.id).eq("issued_by", meId).eq("multi", true).gt("expires_at", new Date(Date.now() + 7 * DAY).toISOString())
       .order("created_at", { ascending: false }).limit(1);
     if (error) { console.warn("review_tokens load:", error.message); setLinkState("error"); setErr(failText("get the review link")); return; }
     if (data && data[0]) { setLink({ url: linkFor(data[0].token), expires: data[0].expires_at }); setLinkState("ready"); return; }
-    const token = makeReviewToken();
-    // the database stamps who made it, checks they're this trip's crew or operator, and sets the 30 days
-    const { error: e2 } = await supabase.from("review_tokens").insert({
-      token, trip_id: trip.id, trip_label: trip.title, multi: true,
-      issued_by: meId, issuer_role: user.kind === "admin" ? "admin" : user.kind === "operator" ? "operator" : user.kind,
-    });
-    if (e2) {
-      console.error("review_tokens.insert failed:", e2.message);
-      setLinkState("error");
-      setErr(/too many/i.test(e2.message) ? "This trip has too many review links. Please ask the admin."
-        : /not started/i.test(e2.message) ? "Reviews open once the trip has started."
-        : /row-level security|crew of this trip|tour operator can ask/i.test(e2.message) ? "Only this trip's guides, drivers and tour operator can ask its guests."
-        : failText("make the review link"));
-      return;
-    }
+    const token = await createLink();
+    if (!token || token === "taken") { setLinkState("error"); return; }
     setLink({ url: linkFor(token), expires: new Date(Date.now() + 30 * DAY).toISOString() });
     setLinkState("ready");
   };
@@ -8409,8 +8454,8 @@ function ReviewInvite({ user, trip, reviews, onClose, onOpenCrew }) {
     setDeciding(id);
     const { error } = await supabase.from("guest_reviews").update({ status }).eq("id", id);
     setDeciding(null);
-    if (error) { console.error("guest_reviews.update failed:", error.message); toast(failText(status === "published" ? "publish that review" : "hide that review")); return; }
-    toast(status === "published" ? "Published — it's on their profile now." : "Hidden. It won't appear anywhere.", "ok");
+    if (error) { console.error("guest_reviews.update failed:", error.message); toast(failText(status === "published" ? "attest that review" : "hide that review")); return; }
+    toast(status === "published" ? "Attested — it's on their profile now." : "Hidden. It won't appear anywhere.", "ok");
     reviews && reviews.reload();
   };
 
@@ -8466,7 +8511,7 @@ ${url}`;
           {/* ---- waiting for the operator ---- */}
           {isOp && pending.length > 0 && (
             <div className="mb-6">
-              <div className={label} style={{ color: C.maroon }}>Waiting for you · {pending.length}</div>
+              <div className={label} style={{ color: C.maroon }}>To attest · {pending.length}</div>
               <div className="space-y-2.5">
                 {pending.map((r) => {
                   const p = personOf(r.talent_id);
@@ -8495,7 +8540,7 @@ ${url}`;
                           className="tap flex-1 h-10 rounded-xl text-[13px] font-semibold" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.muted }}>Hide</button>
                         <button type="button" disabled={deciding === r.id} onClick={() => decide(r.id, "published")}
                           className="tap flex-[1.6] h-10 rounded-xl text-[14px] font-semibold inline-flex items-center justify-center gap-1.5" style={{ background: C.pine, color: "#FFFFFF", border: 0 }}>
-                          {deciding === r.id ? <Loader2 size={15} className="animate-spin" /> : <><Check size={15} /> Publish</>}
+                          {deciding === r.id ? <Loader2 size={15} className="animate-spin" /> : <><Check size={15} /> Attest</>}
                         </button>
                       </div>
                     </div>
@@ -8503,7 +8548,7 @@ ${url}`;
                 })}
               </div>
               <p className="text-[12px] leading-snug mt-2.5" style={{ color: C.muted }}>
-                Publishing puts the review on their profile and into their rating. Hide anything that didn't come from a real guest of this trip.
+                Attesting puts the review on their profile and into their rating, marked “Attested by” your company. Hide anything that didn't come from a real guest of this trip.
               </p>
             </div>
           )}
@@ -8516,7 +8561,7 @@ ${url}`;
                 <Star size={18} color={C.pine} fill={C.pine} className="shrink-0" />
                 <p className="text-[13px] leading-snug" style={{ color: C.pine }}>
                   <b>{mine.length} {mine.length === 1 ? "guest has" : "guests have"} reviewed you</b>
-                  {live ? ` · ${live} on your profile` : ""}{waiting ? ` · ${waiting} waiting for ${opName} to publish` : ""}
+                  {live ? ` · ${live} on your profile` : ""}{waiting ? ` · ${waiting} waiting for ${opName} to attest` : ""}
                 </p>
               </div>
             );
@@ -8547,6 +8592,29 @@ ${url}`;
               {linkState === "loading" ? (
                 <div className="flex items-center justify-center gap-2 py-6 text-[13px]" style={{ color: C.muted }}>
                   <Loader2 size={16} className="animate-spin" /> Getting your link…
+                </div>
+              ) : sentBy ? (
+                <div className="rounded-2xl p-4 mb-5 flex gap-3" style={{ background: C.goldSoft }} role="status">
+                  <Clock size={18} color={C.goldText} className="shrink-0 mt-0.5" />
+                  <div className="min-w-0">
+                    <div className="text-[14px] font-semibold leading-snug" style={{ color: C.goldText }}>
+                      {sentBy.name} sent the review link{sentBy.at ? ` on ${fmtDate(String(sentBy.at).slice(0, 10))}` : ""}.
+                    </div>
+                    <p className="text-[13px] mt-0.5 leading-snug" style={{ color: C.goldText, opacity: .85 }}>
+                      Please wait for the guests' reviews. There's one link per trip, so guests aren't asked twice.
+                    </p>
+                  </div>
+                </div>
+              ) : canSend && !link ? (
+                <div className="mb-5">
+                  {err && <p role="alert" className="text-[13px] mb-2.5" style={{ color: C.maroon }}>{err}</p>}
+                  <button type="button" onClick={sendFirst} disabled={sending}
+                    className="tap w-full h-12 rounded-xl text-[15px] font-semibold inline-flex items-center justify-center gap-2" style={{ background: C.pine, color: "#FFFFFF", border: 0 }}>
+                    {sending ? <Loader2 size={17} className="animate-spin" /> : <><Send size={16} /> Get the review link</>}
+                  </button>
+                  <p className="text-[12px] mt-2 leading-snug" style={{ color: C.muted }}>
+                    One link per trip: once you have it, the rest of the team see that you've asked the guests.
+                  </p>
                 </div>
               ) : linkState === "error" || !link ? (
                 <div className="mb-5">
@@ -8582,7 +8650,7 @@ ${url}`;
           {/* ---- published (operator) ---- */}
           {isOp && published.length > 0 && (
             <div className="mb-5">
-              <div className={label} style={{ color: C.goldText }}>Published · {published.length}</div>
+              <div className={label} style={{ color: C.goldText }}>Attested · {published.length}</div>
               <div className="rounded-2xl overflow-hidden" style={{ border: `1px solid ${C.line}` }}>
                 {published.map((r, i) => {
                   const p = personOf(r.talent_id);
@@ -8603,7 +8671,7 @@ ${url}`;
             <p className="text-[12px] leading-snug" style={{ color: C.muted }}>
               Guests sign in with Google, so each Google account reviews each of the crew, and the company, once — and no more guests than the trip had.
               Reviews show the guest's first name, last initial and country, never their email.
-              {isOp ? " Crew reviews appear once you publish them, marked “Attested by” your company. Reviews of your company appear at once; you can report one to the hub." : ` Nothing appears on your profile until ${opName} publishes it.`}
+              {isOp ? " Crew reviews appear once you attest them, marked “Attested by” your company. Reviews of your company appear at once; you can report one to the hub." : ` Nothing appears on your profile until ${opName} attests it.`}
             </p>
           </div>
         </div>
@@ -8798,6 +8866,106 @@ function TripCompanyReviews({ trip }) {
 }
 
 /* ========================================================================== */
+/*  REVIEWS TO ATTEST (BUILD 67) — the operator's one place for every guest   */
+/*  review of their guides and drivers, across all trips, waiting to be       */
+/*  attested. Attested reviews go on the person's profile, marked "Attested   */
+/*  by <company>". Reviews of the company itself don't come here: they        */
+/*  publish at once.                                                          */
+/* ========================================================================== */
+function AttestQueue({ user, trips }) {
+  const meId = user.talentId || user.id;
+  const mine = (trips || []).filter((tr) => tr && tr.operatorId === meId);
+  const ids = mine.map((tr) => tr.id);
+  const key = ids.join(",");
+  const [rows, setRows] = useState([]);
+  const [emails, setEmails] = useState({});
+  const [open, setOpen] = useState(false);
+  const [deciding, setDeciding] = useState(null);
+  const load = async () => {
+    if (!CLOUD || !ids.length) { setRows([]); return; }
+    const cols = "id,talent_id,trip_id,guest_name,guest_country,rating,body,status,created_at";
+    let { data, error } = await supabase.from("guest_reviews").select(cols + ",verified").in("trip_id", ids).eq("status", "pending").order("created_at", { ascending: true });
+    if (error && /verified/i.test(error.message || "")) ({ data, error } = await supabase.from("guest_reviews").select(cols).in("trip_id", ids).eq("status", "pending").order("created_at", { ascending: true }));
+    const list = error ? [] : data || [];
+    setRows(list);
+    if (list.length) {
+      const { data: P } = await supabase.from("guest_review_private").select("review_id,email_masked").in("review_id", list.map((r) => r.id));
+      const m = {}; (P || []).forEach((x) => { if (x && x.email_masked) m[x.review_id] = x.email_masked; }); setEmails(m);
+    }
+  };
+  useEffect(() => { load(); }, [key]);
+  useEffect(() => {
+    if (!CLOUD || !ids.length) return;
+    const ch = supabase.channel("attest-queue-" + meId)
+      .on("postgres_changes", { event: "*", schema: "public", table: "guest_reviews" }, load).subscribe();
+    return () => { supabase.removeChannel(ch); };
+  }, [key]);
+  if (!rows.length) return null;
+  const decide = async (id, status) => {
+    setDeciding(id);
+    const { error } = await supabase.from("guest_reviews").update({ status }).eq("id", id);
+    setDeciding(null);
+    if (error) { console.error("guest_reviews.update failed:", error.message); toast(failText(status === "published" ? "attest that review" : "hide that review")); return; }
+    toast(status === "published" ? "Attested — it's on their profile now." : "Hidden. It won't appear anywhere.", "ok");
+    load();
+  };
+  const tripOf = (id) => mine.find((tr) => tr.id === id);
+  return (
+    <>
+      <button type="button" onClick={() => setOpen(true)} className="tap w-full rounded-2xl p-3.5 mb-4 flex items-center gap-3 text-left"
+        style={{ background: C.maroonSoft, border: `1px solid ${C.maroon}33` }}>
+        <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0" style={{ background: C.maroon }}>
+          <Star size={18} color="#FFFFFF" fill="#FFFFFF" />
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="text-[14px] font-semibold" style={{ color: C.maroon }}>Reviews to attest · {rows.length}</div>
+          <div className="text-[12.5px] leading-snug" style={{ color: C.maroon, opacity: .85 }}>Guests reviewed your guides and drivers. Attest the real ones.</div>
+        </div>
+        <ChevronLeft size={17} color={C.maroon} style={{ transform: "rotate(180deg)" }} />
+      </button>
+      {open && (
+        <Sheet onClose={() => setOpen(false)}>
+          <div className="text-[18px] font-bold mb-1" style={{ color: C.ink }}>Reviews to attest</div>
+          <p className="text-[13px] mb-4 leading-snug" style={{ color: C.muted }}>
+            Attest a review only if it came from a real guest of that trip. It then shows on their profile, marked “Attested by” your company. Hide anything that didn't.
+          </p>
+          <div className="space-y-2.5">
+            {rows.map((r) => {
+              const t = talentById(r.talent_id), tr = tripOf(r.trip_id);
+              const name = (t && t.name) || "Crew";
+              return (
+                <div key={r.id} className="rounded-2xl p-3.5" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+                  <div className="flex items-center gap-3">
+                    <Avatar initials={(t && t.initials) || initialsOf(name)} src={(t && t.photo) || null} size={40} />
+                    <div className="flex-1 min-w-0">
+                      <div className="text-[14px] font-semibold truncate" style={{ color: C.ink }}>{name} <span className="font-normal" style={{ color: C.muted }}>· {roleWord((t && t.role) || "")}</span></div>
+                      <div className="text-[12px] truncate" style={{ color: C.muted }}>{tr ? tr.title : "A trip"} · {relTime(new Date(r.created_at).getTime())}</div>
+                    </div>
+                    <Stars score={r.rating} />
+                  </div>
+                  <div className="text-[12px] mt-2" style={{ color: C.muted }}>
+                    From {shortGuest(r.guest_name) || "a guest"}{r.guest_country ? ` · ${r.guest_country}` : ""}{emails[r.id] ? ` · ${emails[r.id]}` : ""}{r.verified === "google" ? " · Google" : ""}
+                  </div>
+                  {r.body && <p className="text-[14px] leading-snug mt-2" style={{ color: C.ink }}>“{r.body}”</p>}
+                  <div className="flex gap-2 mt-3">
+                    <button type="button" disabled={deciding === r.id} onClick={() => decide(r.id, "hidden")}
+                      className="tap flex-1 h-10 rounded-xl text-[13px] font-semibold" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.muted }}>Hide</button>
+                    <button type="button" disabled={deciding === r.id} onClick={() => decide(r.id, "published")}
+                      className="tap flex-[1.6] h-10 rounded-xl text-[14px] font-semibold inline-flex items-center justify-center gap-1.5" style={{ background: C.pine, color: "#FFFFFF", border: 0 }}>
+                      {deciding === r.id ? <Loader2 size={15} className="animate-spin" /> : <><Check size={15} /> Attest</>}
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </Sheet>
+      )}
+    </>
+  );
+}
+
+/* ========================================================================== */
 function GuestReviews({ talentId, isAdmin, isSelf, onAskOperator, onCount }) {
   const [rows, setRows] = useState(null);
   const [busyId, setBusyId] = useState(null);
@@ -8846,7 +9014,7 @@ function GuestReviews({ talentId, isAdmin, isSelf, onAskOperator, onCount }) {
         <div className="text-[15px] font-semibold" style={{ color: C.ink }}>No guest reviews yet</div>
         <p className="text-[13px] leading-snug mt-1.5 mb-3" style={{ color: C.muted }}>
           {isSelf
-            ? "After a trip ends, open it and tap “Ask your guests for a review”. The trip's tour operator publishes each one."
+            ? "After a trip ends, open it and tap “Ask your guests for a review”. The trip's tour operator attests each one."
             : "Guest reviews appear here once guests of a trip with this person review them."}
         </p>
         {isSelf && onAskOperator && (
@@ -8970,7 +9138,7 @@ function OperatorInvite({ user, trip, onClose }) {
   const [note, setNote] = useState(null);
 
   const first = String(user.name || "").split(" ")[0] || "your guide";
-  const joinLink = `${window.location.origin}/?invited_by=${encodeURIComponent(user.talentId || user.id)}`;
+  const joinLink = `${SITE_ORIGIN()}/?invited_by=${encodeURIComponent(user.talentId || user.id)}`;
 
   // Deliberately short. WhatsApp truncates long pre-filled messages on some phones,
   // and the link is placed on its own line so it is detected and previewed properly.
@@ -9971,6 +10139,7 @@ function BookingsTab({ user, enquiries, trips, actions, onOpenProfile, focus, on
 
   return (
     <div className="px-5 py-4">
+      <AttestQueue user={user} trips={myTrips} />
       {/* the pipeline, always visible — you can see where everything stands */}
       <div className="section-head flex items-end justify-between mb-3">
         <div className="section-head-text text-[12px] font-semibold tracking-[.14em] uppercase" style={{ color: C.goldText }}>Bookings</div>
@@ -13763,7 +13932,7 @@ function ProfileSetupCard({ talent, onSaved }) {
 }
 
 /* ── operator: invite crew to a confirmed trip ── */
-function crewInviteLink(token) { return `${window.location.origin}/?invite=${token}`; }
+function crewInviteLink(token) { return `${SITE_ORIGIN()}/?invite=${token}`; }
 function crewInviteMessage(inv, link) {
   const dates = inv.tripStart ? ` (${fmtDate(inv.tripStart)}${inv.tripEnd ? ` – ${fmtDate(inv.tripEnd)}` : ""})` : "";
   return `Kuzu Zangpo la ${inv.name},\n\n${inv.operatorName || "We"} would like you as ${inv.role} for “${inv.tripTitle}”${dates}.\n\nJoin Bhutan Tourism Hub with this link to see the trip and accept:\n${link}`;
@@ -15239,7 +15408,7 @@ function Sheet({ onClose, children }) {
 /* ========================================================================== */
 const MONTHS_LONG = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 const attestWhen = (a) => `${a.month ? MONTHS_LONG[a.month - 1] + " " : ""}${a.year}`;
-const attestLink = (token) => `${window.location.origin}/?attest=${token}`;
+const attestLink = (token) => `${SITE_ORIGIN()}/?attest=${token}`;
 function attestMessage(a, fromName, papers) {
   const verb = a.role === "driver" ? "drove for" : "guided";
   const n = papers || 0;
