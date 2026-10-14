@@ -66,7 +66,7 @@ const CLOUD = Boolean(supabase);
   } catch (e) {}
 })();
 const DEMO_MODE = false;   // set true only for local demos without a database
-const BUILD = "BUILD 63 — 12 Oct";   // bump every deploy; shown at the top of the welcome screen
+const BUILD = "BUILD 65 — 13 Oct";   // bump every deploy; shown at the top of the welcome screen
 // which device someone is on — shown beside the build so a screenshot tells us both
 const DEVICE = (() => {
   try {
@@ -528,8 +528,12 @@ export default function App() {
   const reviewToken = useMemo(() => {
     try {
       const t = new URLSearchParams(window.location.search).get("review");
-      // BUILD 50: once read, the one-time link leaves the address bar so it is not kept in history or screenshots
-      if (t && window.history && window.history.replaceState) window.history.replaceState(null, "", window.location.pathname);
+      // BUILD 50: once read, the one-time link leaves the address bar so it is not kept in history or screenshots.
+      // BUILD 64: what Google's sign-in brings back (#access_token=… or ?code=…) stays, for the sign-in to finish.
+      if (t && window.history && window.history.replaceState) {
+        const code = new URLSearchParams(window.location.search).get("code");
+        window.history.replaceState(null, "", window.location.pathname + (code ? `?code=${encodeURIComponent(code)}` : "") + (window.location.hash || ""));
+      }
       return t;
     } catch (e) { return null; }
   }, []);
@@ -734,7 +738,7 @@ export default function App() {
       forgetLocalTraces(leaving);
       PROFILE_DIR = {};
       setLiveFor(null); setListsFor(null);
-      try { localStorage.removeItem("bth_invite"); localStorage.removeItem("bth_attest"); } catch (e) {}
+      try { localStorage.removeItem("bth_invite"); localStorage.removeItem("bth_attest"); localStorage.removeItem(ATTEST_YES_KEY); } catch (e) {}
       setAccountId(null);
       setSignedOut((n) => n + 1);
     } finally { clearTimeout(slow); loggingOutRef.current = false; }
@@ -957,6 +961,16 @@ export default function App() {
       });
     return () => { on = false; };
   }, [session, profileTick]);
+  // BUILD 64: guests sign in with Google only to leave a review. If one comes back to the main site still signed in,
+  // they're signed out here (on this phone only) — guests are not members and never see sign-up.
+  useEffect(() => {
+    if (!CLOUD || reviewToken || authBusy || !session || myProfile !== false) return;
+    const u = session.user || {}, am = u.app_metadata || {};
+    const provs = Array.isArray(am.providers) && am.providers.length ? am.providers
+      : (u.identities || []).map((i) => i && i.provider).filter(Boolean);
+    const googleOnly = provs.length ? provs.every((x) => x === "google") : am.provider === "google";
+    if (googleOnly) { try { supabase.auth.signOut({ scope: "local" }).catch(() => {}); } catch (e) {} }
+  }, [session, myProfile, reviewToken, authBusy]);
 
   const online = useOnline();
   // offline with an expired sign-in (or while a slow renewal is still trying): the account this phone last used,
@@ -1021,7 +1035,7 @@ export default function App() {
     } catch (e) { return null; }
   });
   const [attestPreview, setAttestPreview] = useState(null);
-  const forgetAttest = () => { try { localStorage.removeItem("bth_attest"); } catch (e) {} setAttestToken(null); setAttestPreview(null); };
+  const forgetAttest = () => { try { localStorage.removeItem("bth_attest"); localStorage.removeItem(ATTEST_YES_KEY); } catch (e) {} setAttestToken(null); setAttestPreview(null); };
   useEffect(() => {
     if (!CLOUD || !attestToken || !online) return;
     supabase.rpc("preview_attestation", { p_token: attestToken }).then(({ data, error }) => {
@@ -1685,7 +1699,7 @@ export default function App() {
 
       <div className={`app-shell flex flex-col${user ? " signed-in" : ""}`} style={{ color: C.ink }}>
         {!user ? (
-          <Login onPick={setAccountId} session={session} myProfile={myProfile} onAuthed={reloadMe} onBusy={setAuthBusy} invitePreview={invitePreview} attestPreview={attestPreview} />
+          <Login onPick={setAccountId} session={session} myProfile={myProfile} onAuthed={reloadMe} onBusy={setAuthBusy} invitePreview={invitePreview} attestPreview={attestPreview} attestToken={attestToken} />
         ) : !NAV[user.kind] ? (
           <RoleComingSoon user={user} onLogout={logout} />
         ) : (
@@ -1703,13 +1717,13 @@ export default function App() {
 }
 
 /* ================================ Welcome ================================= */
-function Login({ onPick, session, myProfile, onAuthed, onBusy, invitePreview, attestPreview }) {
+function Login({ onPick, session, myProfile, onAuthed, onBusy, invitePreview, attestPreview, attestToken }) {
   const [authView, setAuthView] = useState(null);
   useEffect(() => { onBusy && onBusy(!!authView); return () => onBusy && onBusy(false); }, [authView]);
   if (authView) {
     return (
       <div className="flex-1 overflow-y-auto hidescroll fade" style={{ scrollbarWidth: "none" }}>
-        <Onboard mode={authView} session={session} invite={invitePreview || (attestPreview ? { role: "operator", name: "" } : null)}
+        <Onboard mode={authView} session={session} invite={invitePreview || (attestPreview ? { role: "operator", name: "", company: attestPreview.operator || "" } : null)}
           onBack={() => { setAuthView(null); onBusy && onBusy(false); }}
           onDone={() => { onBusy && onBusy(false); setAuthView(null); onAuthed(); }} />
       </div>
@@ -1729,15 +1743,55 @@ function Login({ onPick, session, myProfile, onAuthed, onBusy, invitePreview, at
           </div>
         </div>
 
-        {attestPreview && !invitePreview && (
-          <div className="mt-5 rounded-2xl p-4" style={{ background: C.goldSoft, border: `1px solid ${C.gold}33` }}>
-            <div className="text-[11px] font-semibold tracking-[.12em] uppercase" style={{ color: C.goldText }}>A past trip to confirm</div>
-            <div className="text-[15px] font-semibold mt-1 leading-snug" style={{ color: C.ink }}>
-              {attestPreview.talent} asks {attestPreview.operator} to confirm “{attestPreview.trip}”{attestPreview.year ? ` (${attestPreview.year})` : ""}
+        {attestPreview && !invitePreview && (() => {   // BUILD 65: the whole trip and the guests' words before joining
+          const P = Array.isArray(attestPreview.papers) ? attestPreview.papers : [];
+          const open = !attestPreview.status || attestPreview.status === "pending";
+          return (
+            <div className="mt-5 rounded-2xl p-4" style={{ background: C.goldSoft, border: `1px solid ${C.gold}33` }}>
+              <div className="text-[11px] font-semibold tracking-[.12em] uppercase" style={{ color: C.goldText }}>A past trip to confirm</div>
+              <div className="text-[15px] font-semibold mt-1 leading-snug" style={{ color: C.ink }}>
+                {attestPreview.talent} says {attestPreview.role === "driver" ? "they drove for" : "they guided"} “{attestPreview.trip}” for {attestPreview.operator}
+              </div>
+              <div className="text-[13px] mt-0.5" style={{ color: C.goldText }}>
+                {attestPreview.month ? MONTHS_LONG[attestPreview.month - 1] + " " : ""}{attestPreview.year || ""}{attestPreview.nights ? ` · ${attestPreview.nights} nights` : ""}
+              </div>
+              {open && P.length > 0 && (
+                <div className="mt-3">
+                  <div className="text-[11px] font-semibold tracking-[.1em] uppercase mb-1.5" style={{ color: C.goldText }}>Guest feedback, written on paper · {P.length}</div>
+                  <div className="space-y-2">
+                    {P.slice(0, 3).map((p) => (
+                      <div key={p.id} className="rounded-xl px-3 py-2.5" style={{ background: C.card }}>
+                        <p className="text-[13px] leading-snug whitespace-pre-line" style={{ color: C.ink }}>“{p.body}”</p>
+                        {(p.guest_name || p.guest_country) && <div className="text-[11.5px] mt-0.5" style={{ color: C.muted }}>— {[p.guest_name, p.guest_country].filter(Boolean).join(", ")}</div>}
+                      </div>
+                    ))}
+                    {P.length > 3 && <div className="text-[12px]" style={{ color: C.goldText }}>and {P.length - 3} more — with the photos, once you're in</div>}
+                  </div>
+                </div>
+              )}
+              {open ? (
+                <>
+                  <button type="button" onClick={() => {
+                      // remember the "Yes" and exactly what they saw — sent after joining only if they saw every note and nothing changed
+                      try { localStorage.setItem(ATTEST_YES_KEY, JSON.stringify({ token: attestToken || "", at: Date.now(), seen: P.length <= 3 ? seenOf(P) : null })); } catch (e) {}
+                      setAuthView("signup");
+                    }}
+                    className="tap w-full h-12 rounded-xl text-[15px] font-semibold inline-flex items-center justify-center gap-2 mt-3.5" style={{ background: C.pine, color: "#FFFFFF", border: 0 }}>
+                    <Check size={17} strokeWidth={2.6} /> Yes, that's right — join to confirm
+                  </button>
+                  <button type="button" onClick={() => setAuthView("signin")} className="tap w-full h-10 rounded-xl text-[13px] font-semibold mt-1.5" style={{ background: "transparent", color: C.goldText, border: 0 }}>
+                    Already on the hub? Sign in
+                  </button>
+                  <div className="text-[12px] leading-snug" style={{ color: C.goldText }}>
+                    Joining is free, as a tour operator. {P.length > 3 ? "Once you're in, you'll see all the feedback with its photos and confirm." : "Your confirmation is sent as soon as you're in."} If something's wrong, sign in and choose “Not accurate”.
+                  </div>
+                </>
+              ) : (
+                <div className="text-[13px] mt-2 leading-snug" style={{ color: C.goldText }}>This request has already been answered.</div>
+              )}
             </div>
-            <div className="text-[13px] mt-2 leading-snug" style={{ color: C.goldText }}>Sign in, or join as a tour operator, and you can answer in one tap.</div>
-          </div>
-        )}
+          );
+        })()}
         {invitePreview && (
           <div className="mt-5 rounded-2xl p-4" style={{ background: C.pineSoft, border: `1px solid ${C.pine}22` }}>
             <div className="text-[11px] font-semibold tracking-[.12em] uppercase" style={{ color: C.pine }}>You've been invited</div>
@@ -2114,10 +2168,12 @@ function Shell({ user, posts, jobs, trips, listings, enquiries, actions, engagem
       }
     });
 
-    // a trip has ended and nobody has been asked for a review yet
-    if (user.kind === "operator") {
+    // a trip has ended and nobody has been asked for a review yet (BUILD 64: its guides and drivers too)
+    if (user.kind === "operator" || user.kind === "guide" || user.kind === "driver") {
       (trips || []).forEach((tr) => {
-        if (!tr || !tr.end || tr.operatorId !== actorId) return;
+        if (!tr || !tr.end) return;
+        if (user.kind === "operator" ? tr.operatorId !== actorId
+          : !(tr.members || []).some((m) => m && m.id === actorId && !["operator", "moderator", "manager"].includes(m.roleInTrip))) return;
         const ended = new Date(tr.end + "T23:59") < new Date();
         const endedRecently = Date.now() - new Date(tr.end + "T23:59") < 21 * DAY;
         if (ended && endedRecently) {
@@ -3453,6 +3509,7 @@ function TalentProfile({ talent, posts, canRequest, self, contactOnly, eng, onRe
           cv={
             <>
               <GuestReviews talentId={t.id} isAdmin={eng?.isAdmin} isSelf={self} onAskOperator={() => setAskOperator(true)} />
+              {(t.role === "guide" || t.role === "driver") && <GoogleReviewsCard talent={t} self={!!self} />}
 
               <div className="mt-6" />
 
@@ -3779,7 +3836,8 @@ function TripHub({ user, meId, trip, actions, onBack, openSheet }) {
   const [grading, setGrading] = useState(false);   // BUILD 56
   const [askingOperator, setAskingOperator] = useState(false);
   const [section, setSection] = useState(null);   // tasks | hotels | guests | crew | itinerary | details
-  const reviews = useTripReviews(trip, canInvite);   // BUILD 55: what guests sent, for the operator to publish
+  const canAsk = tripDone && (canInvite || isTalent);   // BUILD 64: the trip's guides and drivers ask their guests too
+  const reviews = useTripReviews(trip, canAsk);   // BUILD 55: what guests sent, for the operator to publish
   // BUILD 56: the trip's own operator grades the crew once the trip has ended (for 90 days)
   const gradeWindow = gradeWindowOf(trip);
   const canGrade = Boolean(trip.operatorId && trip.operatorId === meId && gradeWindow.open);
@@ -3787,7 +3845,7 @@ function TripHub({ user, meId, trip, actions, onBack, openSheet }) {
   // BUILD 55: a notification about this trip's reviews (or, BUILD 56, its grading) opens it straight away
   useEffect(() => {
     if (!openSheet) return;
-    if (openSheet.sheet === "reviews" && canInvite) setInviting(true);
+    if (openSheet.sheet === "reviews" && canAsk) setInviting(true);
     if (openSheet.sheet === "grade" && canGrade) setGrading(true);
   }, [openSheet && openSheet.n]);
   if (chatOpen) return <TripChatView user={user} meId={meId} trip={trip} actions={actions} onBack={() => setChatOpen(false)} />;
@@ -3900,22 +3958,28 @@ function TripHub({ user, meId, trip, actions, onBack, openSheet }) {
           );
         })()}
 
-        {isTalent && tripDone && (
-          <button onClick={() => setAskingOperator(true)}
-            className="tap w-full rounded-2xl p-4 mb-4 flex items-center gap-3 text-left"
-            style={{ background: C.goldSoft, border: `1px solid ${C.gold}33` }}>
-            <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0" style={{ background: C.gold }}>
-              <Star size={18} color="#fff" fill="#fff" />
-            </div>
-            <div className="flex-1">
-              <div className="text-[14px] font-semibold" style={{ color: C.goldText }}>Get a review for this trip</div>
-              <div className="text-[13px] mt-0.5 leading-snug" style={{ color: C.goldText, opacity: .85 }}>
-                Ask {trip.operator || "your operator"} to send your guests a review link.
+        {isTalent && tripDone && (() => {   // BUILD 64: the guide or driver sends the link themselves
+          const mine = (reviews.rows || []).filter((r) => r.talent_id === meId);
+          const live = mine.filter((r) => r.status === "published").length, waiting = mine.filter((r) => r.status === "pending").length;
+          return (
+            <button type="button" onClick={() => setInviting(true)}
+              className="tap w-full rounded-2xl p-4 mb-4 flex items-center gap-3 text-left"
+              style={{ background: C.goldSoft, border: `1px solid ${C.gold}33` }}>
+              <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0" style={{ background: C.gold }}>
+                <Star size={18} color="#fff" fill="#fff" />
               </div>
-            </div>
-            <ChevronLeft size={17} color={C.goldText} style={{ transform: "rotate(180deg)" }} />
-          </button>
-        )}
+              <div className="flex-1 min-w-0">
+                <div className="text-[14px] font-semibold" style={{ color: C.goldText }}>Ask your guests for a review</div>
+                <div className="text-[13px] mt-0.5 leading-snug" style={{ color: C.goldText, opacity: .85 }}>
+                  {mine.length
+                    ? `${mine.length} ${mine.length === 1 ? "review" : "reviews"} of you${live ? ` · ${live} on your profile` : ""}${waiting ? ` · ${waiting} waiting for ${trip.operator || "the operator"}` : ""}`
+                    : "One link for the whole group. Guests sign in with Google."}
+                </div>
+              </div>
+              <ChevronLeft size={17} color={C.goldText} style={{ transform: "rotate(180deg)" }} />
+            </button>
+          );
+        })()}
 
         {canGrade && !grades.off && (() => {   // hidden until the database has grading
           const crew = gradableCrew(trip, meId);
@@ -5183,6 +5247,7 @@ function AdminUsers({ onChanged, currentAdminId }) {
 
       <AdminDraftsPanel adminId={currentAdminId} onChanged={onChanged} />
       <AdminTrailStatus />
+      <AdminGoogleReviews />
 
       {rows === null ? (
         <div className="flex items-center gap-2 text-[14px] py-6 justify-center" style={{ color: C.muted }}><Loader2 size={17} className="animate-spin" /> Loading…</div>
@@ -5388,7 +5453,7 @@ function Onboard({ mode: initialMode, session, onBack, onDone, invite }) {
   const [name, setName] = useState((invite && invite.name) || "");
   const [phone, setPhone] = useState("");
   const [base, setBase] = useState("");
-  const [company, setCompany] = useState("");
+  const [company, setCompany] = useState((invite && invite.company) || "");   // BUILD 65: an operator joining from a past-trip link
   const [years, setYears] = useState(4);
   const [pitch, setPitch] = useState("");
   const [langs, setLangs] = useState([]);
@@ -7088,7 +7153,7 @@ function Tutorial({ user, nav, setTab, onDone }) {
     { kind: "tab", tab: "discover", title: "Crew", body: "Every verified guide and driver, filtered by speciality, language and who's available right now. Phone numbers are visible to you — that's an operator feature." },
     { kind: "tab", tab: "requests", title: "Jobs", body: "Post a job and let qualified people apply, or send a request directly to someone you want." },
     { kind: "tab", tab: "chats", title: "Messages", body: "A chat channel per trip, plus direct messages with any guide or driver." },
-    { kind: "outro", title: "The one that pays for itself", body: "After a trip ends, open it and ask your guests for a review. Only you can request them — that's what makes the ratings on this platform worth trusting." },
+    { kind: "outro", title: "The one that pays for itself", body: "After a trip ends, open it and ask your guests for a review — your guides and drivers can send the link too. Guests sign in with Google, and nothing appears until you publish it." },
   ];
 
   const HOTEL_STEPS = [
@@ -7576,7 +7641,7 @@ function CropEditor({ slides, initialRatio, onDone, onClose }) {
 }
 
 /* ========================================================================== */
-/*  GUEST REVIEW — opened from a one-time link. No account, no sign-in.       */
+/*  GUEST REVIEW — opened from a review link. BUILD 64: Google sign-in first.  */
 /*  BUILD 55: one link covers the trip's crew. Each guide and driver has their */
 /*  own section, side by side, with their photo, and each review is separate: */
 /*  the guest rates whom they choose and leaves out anyone they would rather   */
@@ -7735,22 +7800,64 @@ function crewPhrase(crew) {
 }
 const joinNames = (names) => names.length <= 1 ? (names[0] || "") : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
 
+// BUILD 64: the guest signs in with Google before reviewing, so every review comes from a real person, once per
+// guest per trip. Google is used for nothing else: no account here, no profile, and they're signed out once sent.
+const GoogleG = ({ size = 18 }) => (
+  <svg width={size} height={size} viewBox="0 0 48 48" aria-hidden="true" style={{ flexShrink: 0 }}>
+    <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z" />
+    <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z" />
+    <path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z" />
+    <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z" />
+  </svg>
+);
+// Google sends a guest who cancels back with #error=… — read once, at load, before the sign-in library tidies it away
+const REVIEW_OAUTH_CANCELLED = (() => {
+  try { return /[#&?]error(_description)?=/.test(String(window.location.hash || "") + String(window.location.search || "")); } catch (e) { return false; }
+})();
+// Google refuses to sign in inside some apps' built-in browsers (Instagram, Facebook, Messenger, LINE, WeChat…)
+const IN_APP_BROWSER = (() => {
+  try { return /FBAN|FBAV|FB_IAB|Instagram|Line\/|MicroMessenger|Snapchat|musical_ly|BytedanceWebview|TikTok/i.test(navigator.userAgent || ""); } catch (e) { return false; }
+})();
+// "Sarah Jane Thompson" → "Sarah T." — the same rule as the database (review_short_name)
+const shortGuest = (n) => {
+  const w = String(n || "").trim().split(/\s+/).filter(Boolean);
+  if (!w.length) return "";
+  return w.length === 1 ? w[0].slice(0, 40) : `${w[0].slice(0, 40)} ${w[w.length - 1].charAt(0).toUpperCase()}.`;
+};
+// Is Google sign-in switched on in Supabase? Asked before leaving for Google, so a guest never lands on an error
+// page. If the question itself can't be answered, the sign-in is simply tried.
+async function googleSignInReady() {
+  try {
+    const url = supabase && supabase.supabaseUrl, key = supabase && supabase.supabaseKey;
+    if (typeof url !== "string" || !url || !key) return true;
+    const r = await fetch(`${url.replace(/\/+$/, "")}/auth/v1/settings`, { headers: { apikey: key } });
+    if (!r.ok) return true;
+    const j = await r.json();
+    return !(j && j.external && j.external.google === false);
+  } catch (e) { return true; }
+}
+
 function GuestReview({ token }) {
-  const [state, setState] = useState("loading");   // loading | form | done | invalid | used | expired | offline
-  const [info, setInfo] = useState(null);          // what the link is for (trip, guest's name)
+  // loading | gate (sign in with Google) | member | form | done | alldone | invalid | used | expired | full | offline
+  const [state, setState] = useState("loading");
+  const [info, setInfo] = useState(null);          // what the link is for (trip)
+  const [me, setMe] = useState(null);              // the Google guest signed in here: { name: "Sarah T.", email: "s•••@gmail.com" }
+  const [legacy, setLegacy] = useState(false);     // a database without BUILD 64: the review is sent without Google, as before
   const [crew, setCrew] = useState([]);            // the people this guest may review
   const [drafts, setDrafts] = useState({});        // person id → { rating, body, knowledge, care, comms, open }
   const [country, setCountry] = useState("");
   const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState(null);
+  const [err, setErr] = useState(REVIEW_OAUTH_CANCELLED ? "Google sign-in didn't finish. Tap below to try again." : null);
   const [sentTo, setSentTo] = useState([]);
+  const [copiedLink, setCopiedLink] = useState(false);
   const alive = useRef(true);
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
 
   const load = async () => {
     if (!CLOUD) { setState("invalid"); return; }
     setState("loading");
-    // One database function says what this link is for. It never returns the guest's email or phone.
+    // One database function says what this link is for, and who is signed in here. It never returns an email or phone
+    // (only the guest's own, masked).
     const { data, error } = await supabase.rpc("review_token_peek", { p_token: token });
     if (!alive.current) return;
     if (error) { setState(navigator.onLine === false || /fetch|network|load failed/i.test(error.message || "") ? "offline" : "invalid"); return; }
@@ -7761,9 +7868,41 @@ function GuestReview({ token }) {
     if (people.length === 0) { setState("invalid"); return; }
     setInfo(data.token || {});
     setCrew(people);
-    setState(people.every((p) => p.done) ? "used" : "form");
+    const old = !Object.prototype.hasOwnProperty.call(data, "me");
+    setLegacy(old);
+    const m = data.me || null;
+    if (!old && m && m.member) { setMe(null); setState("member"); return; }
+    if (!old && !(m && m.google)) { setMe(null); setState("gate"); return; }
+    setMe(m && m.google ? { name: m.name || "", email: m.email || "" } : null);
+    setState(people.every((p) => p.done) ? (old ? "used" : "alldone") : "form");
   };
   useEffect(() => { load(); }, [token]);
+
+  const signIn = async () => {
+    setBusy(true); setErr(null);
+    if (!(await googleSignInReady())) {
+      if (!alive.current) return;
+      setBusy(false); setErr("Google sign-in isn't switched on yet. Please try again a little later.");
+      return;
+    }
+    // Google brings the guest straight back to this link, signed in
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider: "google",
+      options: { redirectTo: `${window.location.origin}/?review=${encodeURIComponent(token)}`, queryParams: { prompt: "select_account" } },
+    });
+    if (!alive.current) return;
+    if (error) {
+      setBusy(false);
+      setErr(navigator.onLine === false ? "You're offline. Connect to Wi-Fi or mobile data, then try again." : "Couldn't open Google sign-in. Please try again.");
+    }
+  };
+  const notMe = async () => {
+    setBusy(true);
+    try { await supabase.auth.signOut({ scope: "local" }); } catch (e) {}
+    if (!alive.current) return;
+    setBusy(false); setDrafts({}); setErr(null);
+    load();
+  };
 
   const open = crew.filter((p) => !p.done);
   const rated = open.filter((p) => (drafts[p.id] || {}).rating > 0);
@@ -7775,7 +7914,7 @@ function GuestReview({ token }) {
       const d = drafts[p.id] || {};
       return { talent_id: p.id, rating: d.rating, knowledge: d.knowledge || null, care: d.care || null, communication: d.comms || null, body: String(d.body || "").trim() || null };
     });
-    // All of this guest's reviews are saved together, then the link is spent (one database step).
+    // All of this guest's reviews are saved together (one database step)
     const { data, error } = await supabase.rpc("submit_guest_reviews", { p_token: token, p_reviews: reviews, p_country: country.trim() || null });
     if (!alive.current) return;
     setBusy(false);
@@ -7786,12 +7925,20 @@ function GuestReview({ token }) {
       return;
     }
     if (!data || !data.ok) {
-      if (data && (data.state === "used" || data.state === "expired")) { setState(data.state); return; }
-      setErr(data && data.state === "empty" ? "Tap the stars under someone's photo to rate them." : "We couldn't send your reviews. Please try again in a moment.");
+      const st = data && data.state;
+      if (st === "used" || st === "expired" || st === "full" || st === "notyet") { setState(st); return; }
+      if (st === "done") { setState("alldone"); return; }
+      if (st === "member") { setState("member"); return; }
+      if (st === "signin") { setMe(null); setState("gate"); setErr("Please sign in with Google to send your review."); return; }
+      setErr(st === "empty" ? "Tap the stars under someone's photo to rate them." : "We couldn't send your reviews. Please try again in a moment.");
       return;
     }
-    setSentTo(rated.map((p) => String(p.name).split(" ")[0]));
+    // the database says whom it saved (anyone already reviewed by this guest through another link is left out)
+    const savedIds = Array.isArray(data.saved) ? data.saved.map(String) : null;
+    setSentTo(rated.filter((p) => !savedIds || savedIds.includes(p.id)).map((p) => String(p.name).split(" ")[0]));
     setState("done");
+    // the guest isn't kept signed in: the review is all they came for
+    if (!legacy) { try { await supabase.auth.signOut({ scope: "local" }); } catch (e) {} }
   };
 
   if (state === "loading") return (
@@ -7803,20 +7950,87 @@ function GuestReview({ token }) {
     body="This page needs a connection to open your review. Connect to Wi-Fi or mobile data, then try again."
     action={{ label: "Try again", onClick: load }} />;
   if (state === "invalid") return <Message Icon={ShieldAlert} title="This link isn't valid"
-    body="Please check the link you were sent, or ask your tour operator for a new one." />;
+    body="Please check the link you were sent, or ask your guide or tour operator for a new one." />;
   if (state === "used") return <Message Icon={CheckCheck} title="Already sent — thank you"
-    body="Each review link works once. If you'd like to add something, ask your tour operator for a new link." tone="good" />;
-  if (state === "expired") return <Message Icon={Clock} title="This link has expired"
-    body="Review links stay open for 14 days. Ask your tour operator to send a new one — we'd be glad to hear from you." />;
+    body="This review link has been used. If you'd like to add something, ask your guide or tour operator for a new link." tone="good" />;
+  if (state === "alldone") return <Message Icon={CheckCheck} title="Already reviewed — thank you" tone="good"
+    body="You've reviewed everyone from this trip. Each guest reviews each guide and driver once." />;
+  if (state === "expired") return <Message Icon={Clock} title="This link has closed"
+    body="Ask your guide or tour operator for a new one — we'd be glad to hear from you." />;
+  if (state === "full") return <Message Icon={Clock} title="This link is full"
+    body="Ask your guide or tour operator for a new one — we'd be glad to hear from you." />;
+  if (state === "notyet") return <Message Icon={Clock} title="This trip hasn't started yet"
+    body="Reviews open once the trip begins. Please come back to this link after your trip." />;
+  if (state === "member") return <Message Icon={ShieldAlert} title="This phone is signed in to the hub"
+    body="Reviews come from guests. Please open this link on the guest's own phone." />;
   if (state === "done") {
-    const guestFirst = info && info.guest_name ? String(info.guest_name).split(" ")[0] : "";
+    const guestFirst = me && me.name ? String(me.name).split(" ")[0] : info && info.guest_name ? String(info.guest_name).split(" ")[0] : "";
+    const shownAs = me && me.name ? ` It will show as “${me.name}${country.trim() ? ` · ${country.trim()}` : ""}”.` : "";
     return <Message Icon={Check} title={guestFirst ? `Thank you, ${guestFirst}` : "Thank you"} tone="good"
-      body={`Your ${sentTo.length > 1 ? "reviews" : "review"} of ${joinNames(sentTo)} ${sentTo.length > 1 ? "go" : "goes"} to your tour operator to confirm, then ${sentTo.length > 1 ? "appear on their profiles" : "appears on their profile"} as part of their professional record.`} />;
+      body={`Your ${sentTo.length > 1 ? "reviews" : "review"} of ${joinNames(sentTo)} ${sentTo.length > 1 ? "go" : "goes"} to your tour operator to confirm, then ${sentTo.length > 1 ? "appear on their profiles" : "appears on their profile"} as part of their professional record.${shownAs}`} />;
   }
 
-  const guestFirst = info && info.guest_name ? String(info.guest_name).split(" ")[0] : "";
   const who = crewPhrase(crew);
   const plural = /s\b|and/.test(who);
+  const tripPill = info && info.trip_label ? (
+    <div className="inline-block mt-2.5 text-[13px] rounded-full px-3 py-1" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.muted }}>
+      {info.trip_label}
+    </div>
+  ) : null;
+
+  if (state === "gate") return (
+    <ReviewPage>
+      <div className="text-center mb-5">
+        <div className="text-[22px] font-semibold tracking-[-0.01em] leading-tight" style={{ color: C.ink }}>
+          How {plural ? "were" : "was"} your {who}?
+        </div>
+        <p className="text-[14px] mt-1.5 leading-snug max-w-[440px] mx-auto" style={{ color: C.muted }}>
+          Sign in with Google, then tap the stars. It takes about a minute.
+        </p>
+        {tripPill}
+      </div>
+      <div className="flex justify-center flex-wrap gap-4 mb-6" aria-label="Who you can review">
+        {crew.map((p) => (
+          <div key={p.id} className="flex flex-col items-center text-center" style={{ width: 112 }}>
+            <CrewPhoto person={p} size={64} />
+            <div className="text-[13px] font-semibold leading-tight mt-2 w-full" style={{ color: C.ink, overflowWrap: "anywhere" }}>{p.name}</div>
+            <div className="text-[10px] font-semibold tracking-[.12em] uppercase mt-0.5" style={{ color: C.goldText }}>{roleWord(p.role)}</div>
+          </div>
+        ))}
+      </div>
+      <div className="max-w-[420px] mx-auto">
+        {IN_APP_BROWSER && (
+          <div className="rounded-xl p-3.5 mb-3" style={{ background: C.goldSoft }}>
+            <p className="text-[13px] leading-snug" style={{ color: C.goldText }}>
+              Google sign-in doesn't work inside this app. Tap <b>⋯</b> and choose <b>Open in browser</b> — or copy the
+              link and open it in Safari or Chrome.
+            </p>
+            <button type="button" className="tap mt-2.5 h-9 px-3.5 rounded-lg text-[13px] font-semibold"
+              style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }}
+              onClick={async () => {
+                const u = `${window.location.origin}/?review=${encodeURIComponent(token)}`;
+                try { await navigator.clipboard.writeText(u); setCopiedLink(true); } catch (e) { setErr(u); }
+              }}>{copiedLink ? "Link copied" : "Copy link"}</button>
+          </div>
+        )}
+        {err && <p role="alert" className="text-[13px] mb-3 text-center" style={{ color: C.maroon, overflowWrap: "anywhere" }}>{err}</p>}
+        <button type="button" onClick={signIn} disabled={busy}
+          className="tap w-full rounded-2xl flex items-center justify-center gap-3 text-[16px] font-semibold"
+          style={{ height: 54, background: "#FFFFFF", border: "1px solid #DADCE0", color: "#1F1F1F", boxShadow: "0 1px 3px rgba(0,0,0,.08)" }}>
+          {busy ? <Loader2 size={18} className="animate-spin" /> : <><GoogleG size={20} /> Continue with Google</>}
+        </button>
+        <div className="rounded-xl p-3.5 mt-4 flex gap-2.5" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+          <ShieldCheck size={16} color={C.gold} className="shrink-0 mt-0.5" />
+          <p className="text-[12.5px] leading-snug" style={{ color: C.muted }}>
+            Google confirms it's you, so each guest reviews once. Your review shows your first name, last initial and
+            country — never your email. There's nothing to sign up for.
+          </p>
+        </div>
+      </div>
+    </ReviewPage>
+  );
+
+  const guestFirst = me && me.name ? String(me.name).split(" ")[0] : info && info.guest_name ? String(info.guest_name).split(" ")[0] : "";
   const sendLabel = rated.length > 1 ? `Send ${rated.length} reviews` : rated.length === 1 ? `Send my review of ${String(rated[0].name).split(" ")[0]}` : "Send my review";
   return (
     <ReviewPage>
@@ -7827,9 +8041,14 @@ function GuestReview({ token }) {
         <p className="text-[14px] mt-1.5 leading-snug max-w-[440px] mx-auto" style={{ color: C.muted }}>
           {open.length > 1 ? "Rate each of them on their own. Leave out anyone you'd rather not review." : "Tap a star to begin."}
         </p>
-        {info && info.trip_label && (
-          <div className="inline-block mt-2.5 text-[13px] rounded-full px-3 py-1" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.muted }}>
-            {info.trip_label}
+        {tripPill}
+        {me && (
+          <div className="flex items-center justify-center flex-wrap gap-x-2 gap-y-1 mt-2.5 text-[12.5px]" style={{ color: C.muted }}>
+            <span className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 min-w-0" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+              <GoogleG size={13} /><span className="truncate">{me.name || "Signed in"}{me.email ? ` · ${me.email}` : ""}</span>
+            </span>
+            <button type="button" onClick={notMe} disabled={busy} className="tap font-semibold"
+              style={{ color: C.pine, background: "transparent", border: 0, padding: "4px 2px" }}>Not you?</button>
           </div>
         )}
       </div>
@@ -7859,7 +8078,7 @@ function GuestReview({ token }) {
         </button>
         <p className="text-[12px] text-center leading-snug mt-3.5" style={{ color: C.muted }}>
           Each review goes to your tour operator to confirm, then appears on that person's profile as part of their
-          professional record. Please be honest — that is what makes it worth something.
+          professional record{me && me.name ? `, as “${me.name}” with your country` : ""}. Please be honest — that is what makes it worth something.
         </p>
       </div>
     </ReviewPage>
@@ -7879,14 +8098,26 @@ function GuestReview({ token }) {
 /* ========================================================================== */
 function useTripReviews(trip, enabled) {
   const [rows, setRows] = useState(null);
+  const [senders, setSenders] = useState({});   // BUILD 64: review id → the guest's masked email (the trip's operator and admins only)
   const tripId = trip && trip.id;
   const load = async () => {
     if (!CLOUD || !enabled || !tripId) { setRows([]); return; }
-    const { data, error } = await supabase.from("guest_reviews")
-      .select("id,talent_id,guest_name,guest_country,rating,knowledge,care,communication,body,status,created_at")
+    const cols = "id,talent_id,guest_name,guest_country,rating,knowledge,care,communication,body,status,created_at";
+    let { data, error } = await supabase.from("guest_reviews").select(cols + ",verified")
       .eq("trip_id", tripId).order("created_at", { ascending: false });
+    if (error && /verified/i.test(error.message || "")) {   // a database without BUILD 64
+      ({ data, error } = await supabase.from("guest_reviews").select(cols).eq("trip_id", tripId).order("created_at", { ascending: false }));
+    }
     if (error) { console.warn("trip reviews:", error.message); setRows((r) => r || []); return; }
     setRows(data || []);
+    // who sent each (masked) — the database only answers the trip's operator and admins; anyone else gets nothing
+    const ids = (data || []).map((r) => r.id);
+    if (!ids.length) { setSenders({}); return; }
+    const { data: P, error: pe } = await supabase.from("guest_review_private").select("review_id,email_masked").in("review_id", ids);
+    if (pe || !P) { setSenders({}); return; }
+    const m = {};
+    P.forEach((x) => { if (x && x.review_id && x.email_masked) m[x.review_id] = x.email_masked; });
+    setSenders(m);
   };
   useEffect(() => {
     load();
@@ -7896,7 +8127,7 @@ function useTripReviews(trip, enabled) {
       .subscribe();
     return () => { supabase.removeChannel(ch); };
   }, [tripId, enabled]);
-  return { rows, reload: load };
+  return { rows, senders, reload: load };
 }
 
 /* ========================================================================== */
@@ -8104,20 +8335,18 @@ function OperatorGrades({ talent, show, self }) {
 }
 
 function ReviewInvite({ user, trip, reviews, onClose, onOpenCrew }) {
-  const [guestName, setGuestName] = useState("");
-  const [guestEmail, setGuestEmail] = useState("");
-  const [guestPhone, setGuestPhone] = useState("");
-  const [issued, setIssued] = useState([]);
-  const [made, setMade] = useState(null);           // { link, phone, email } of the link just created
-  const [busy, setBusy] = useState(false);
+  // BUILD 64: one link for the whole group, sent by the trip's guide or driver or by its operator. Each guest signs
+  // in with Google and reviews each crew member once; every review waits for the trip's operator to publish it.
+  const meId = user.talentId || user.id;
+  const isOp = user.kind === "operator" || user.kind === "admin";
+  const [link, setLink] = useState(null);            // { url, expires } — this person's link for this trip
+  const [linkState, setLinkState] = useState("loading");   // loading | ready | error
   const [deciding, setDeciding] = useState(null);
   const [err, setErr] = useState(null);
   const [copied, setCopied] = useState(false);
 
-  const meId = user.talentId || user.id;
-  const MAX_PER_TRIP = 12;   // the database holds the same limit (cap_review_tokens)
-  // who a guest reviews: the trip's crew, never the person issuing the link
-  const crew = (trip.members || []).filter((m) => m.roleInTrip !== "operator" && m.id !== meId);
+  // who guests review: the trip's guides and drivers — the person sending the link included — never its operator
+  const crew = (trip.members || []).filter((m) => !["operator", "moderator", "manager"].includes(m.roleInTrip) && m.id !== trip.operatorId);
   const personOf = (id) => {
     const m = (trip.members || []).find((x) => x.id === id), t = talentById(id);
     return { id, name: (t && t.name) || (m && m.name) || "Crew", role: (m && m.roleInTrip) || (t && t.role) || "", photo: (t && t.photo) || null,
@@ -8127,40 +8356,37 @@ function ReviewInvite({ user, trip, reviews, onClose, onOpenCrew }) {
   const names = joinNames(people.map((p) => String(p.name).split(" ")[0]));
   const who = crewPhrase(people);
   const linkFor = (token) => `${window.location.origin}/?review=${token}`;
+  const opName = trip.operator || "the tour operator";
 
-  const load = async () => {
-    if (!CLOUD) return;
-    const { data, error } = await supabase.from("review_tokens")
-      .select("token,guest_name,guest_email,guest_phone,used_at,expires_at,created_at")
-      .eq("trip_id", trip.id).order("created_at", { ascending: false });
-    if (error) { console.warn("review_tokens load:", error.message); return; }
-    setIssued(data || []);
-  };
-  useEffect(() => { load(); }, [trip.id]);
-
-  const create = async () => {
-    if (people.length === 0) { setErr("Add the guide and driver to the trip first."); return; }
-    if (!/\S+@\S+\.\S+/.test(guestEmail)) { setErr("Enter the guest's email — it records who the review came from."); return; }
-    if (issued.length >= MAX_PER_TRIP) { setErr(`Up to ${MAX_PER_TRIP} guests per trip.`); return; }
-    setBusy(true); setErr(null);
+  // the link this person already made for the trip (open for 30 days), or a new one
+  const getLink = async () => {
+    if (!CLOUD) { setLinkState("error"); return; }
+    setLinkState("loading"); setErr(null);
+    // reused while it has at least a week left; otherwise a fresh 30 days
+    const { data, error } = await supabase.from("review_tokens").select("token,expires_at")
+      .eq("trip_id", trip.id).eq("issued_by", meId).eq("multi", true).gt("expires_at", new Date(Date.now() + 7 * DAY).toISOString())
+      .order("created_at", { ascending: false }).limit(1);
+    if (error) { console.warn("review_tokens load:", error.message); setLinkState("error"); setErr(failText("get the review link")); return; }
+    if (data && data[0]) { setLink({ url: linkFor(data[0].token), expires: data[0].expires_at }); setLinkState("ready"); return; }
     const token = makeReviewToken();
-    // one link for the whole crew: no talent_id. The database stamps who issued it and checks they may.
-    const { error } = await supabase.from("review_tokens").insert({
-      token, trip_id: trip.id, trip_label: trip.title,
-      guest_name: guestName.trim() || null, guest_email: guestEmail.trim(), guest_phone: guestPhone.trim() || null,
-      issued_by: meId, issuer_role: user.kind === "admin" ? "admin" : "operator",
+    // the database stamps who made it, checks they're this trip's crew or operator, and sets the 30 days
+    const { error: e2 } = await supabase.from("review_tokens").insert({
+      token, trip_id: trip.id, trip_label: trip.title, multi: true,
+      issued_by: meId, issuer_role: user.kind === "admin" ? "admin" : user.kind === "operator" ? "operator" : user.kind,
     });
-    setBusy(false);
-    if (error) {
-      console.error("review_tokens.insert failed:", error.message);
-      setErr(/row-level security/i.test(error.message) ? "Only the trip's tour operator, or an admin, can ask for reviews."
-        : /too many/i.test(error.message) ? `Up to ${MAX_PER_TRIP} guests per trip.` : failText("create the link"));
+    if (e2) {
+      console.error("review_tokens.insert failed:", e2.message);
+      setLinkState("error");
+      setErr(/too many/i.test(e2.message) ? "This trip has too many review links. Please ask the admin."
+        : /not started/i.test(e2.message) ? "Reviews open once the trip has started."
+        : /row-level security|crew of this trip|tour operator can ask/i.test(e2.message) ? "Only this trip's guides, drivers and tour operator can ask its guests."
+        : failText("make the review link"));
       return;
     }
-    setMade({ link: linkFor(token), phone: guestPhone.trim(), email: guestEmail.trim() });
-    setGuestName(""); setGuestEmail(""); setGuestPhone("");
-    load();
+    setLink({ url: linkFor(token), expires: new Date(Date.now() + 30 * DAY).toISOString() });
+    setLinkState("ready");
   };
+  useEffect(() => { if (people.length) getLink(); else setLinkState("ready"); }, [trip.id, people.length]);
 
   const decide = async (id, status) => {
     setDeciding(id);
@@ -8173,46 +8399,35 @@ function ReviewInvite({ user, trip, reviews, onClose, onOpenCrew }) {
 
   // Kept short on purpose: WhatsApp truncates long pre-filled messages on some phones,
   // and the link must sit on its own line so it is detected and previewed correctly.
-  const askText = (link) =>
-`Thank you for travelling with us in Bhutan.
+  const askText = (url) =>
+`Thank you for travelling with us in Bhutan!
 
-Would you leave a short review of your ${who}, ${names}? It becomes part of their verified record on Bhutan Tourism Hub, and it genuinely helps them.
+Would you leave a short review of your ${who}, ${names}? It becomes part of their verified record on Bhutan Tourism Hub, and it genuinely helps.
 
-It takes about a minute:
+Sign in with Google, then tap the stars:
 
-${link}`;
-  const remindText = (link) =>
-`A gentle reminder from your trip in Bhutan: if you have a minute, we'd love your review of your ${who}, ${names}.
-
-${link}`;
-  const copy = async (link) => {
-    try { await navigator.clipboard.writeText(link); setCopied(true); setTimeout(() => setCopied(false), 2200); return true; }
+${url}`;
+  const copy = async (url) => {
+    try { await navigator.clipboard.writeText(url); setCopied(true); setTimeout(() => setCopied(false), 2200); return true; }
     catch (e) { setErr("Couldn't copy — press and hold the link instead."); return false; }
   };
-  const whatsApp = (phone, text) => {
-    const digits = String(phone || "").replace(/[^\d]/g, "");
-    window.open(digits.length >= 8 ? `https://wa.me/${digits}?text=${encodeURIComponent(text)}` : `https://wa.me/?text=${encodeURIComponent(text)}`, "_blank", "noopener");
-  };
-  const share = async (text, link) => {
-    try { if (navigator.share) await navigator.share({ title: "Review your trip", text }); else if (await copy(link)) toast("Link copied.", "ok"); } catch (e) {}
-  };
-  const email = (to, subject, text) => {
-    window.location.href = `mailto:${to || ""}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(text)}`;
-  };
-  // a guest who hasn't answered yet: the same link again, with a kind word
-  const remind = (t) => {
-    const link = linkFor(t.token);
-    if (t.guest_phone) return whatsApp(t.guest_phone, remindText(link));
-    if (t.guest_email) return email(t.guest_email, `A quick review of your ${who}?`, remindText(link));
-    return share(remindText(link), link);
+  const whatsApp = (text) => window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, "_blank", "noopener");
+  const share = async (text, url) => {
+    try { if (navigator.share) await navigator.share({ title: "Review your trip", text }); else if (await copy(url)) toast("Link copied.", "ok"); } catch (e) {}
   };
 
   const rows = (reviews && reviews.rows) || [];
+  const senders = (reviews && reviews.senders) || {};
   const pending = rows.filter((r) => r.status === "pending");
   const published = rows.filter((r) => r.status === "published");
-  const field = { background: C.bg, border: `1px solid ${C.line}`, color: C.ink };
+  const mine = rows.filter((r) => r.talent_id === meId);
   const label = "text-[12px] font-semibold tracking-[.12em] uppercase mb-2";
-  const full = issued.length >= MAX_PER_TRIP;
+  const fromLine = (r) => `${shortGuest(r.guest_name) || "A guest"}${r.guest_country ? ` · ${r.guest_country}` : ""}`;
+  const GoogleChip = () => (
+    <span className="inline-flex items-center gap-1 text-[11px] font-semibold rounded-full px-2 py-0.5" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.muted }}>
+      <GoogleG size={10} /> Verified
+    </span>
+  );
 
   return createPortal((
     <div className="fixed inset-0 flex items-end" style={{ background: "rgba(8,10,8,.55)", zIndex: 230 }} onClick={onClose}>
@@ -8231,13 +8446,14 @@ ${link}`;
         </div>
 
         <div className="flex-1 overflow-y-auto hidescroll px-5 pb-6" style={{ scrollbarWidth: "none" }}>
-          {/* ---- waiting for you ---- */}
-          {pending.length > 0 && (
+          {/* ---- waiting for the operator ---- */}
+          {isOp && pending.length > 0 && (
             <div className="mb-6">
               <div className={label} style={{ color: C.maroon }}>Waiting for you · {pending.length}</div>
               <div className="space-y-2.5">
                 {pending.map((r) => {
                   const p = personOf(r.talent_id);
+                  const email = senders[r.id];
                   return (
                     <div key={r.id} className="rounded-2xl p-3.5" style={{ background: C.card, border: `1px solid ${C.line}` }}>
                       <div className="flex items-center gap-3">
@@ -8245,11 +8461,17 @@ ${link}`;
                         <div className="flex-1 min-w-0">
                           <div className="text-[14px] font-semibold truncate" style={{ color: C.ink }}>{p.name} <span className="font-normal" style={{ color: C.muted }}>· {roleWord(p.role)}</span></div>
                           <div className="text-[12px] truncate" style={{ color: C.muted }}>
-                            From {r.guest_name || "a guest"}{r.guest_country ? `, ${r.guest_country}` : ""} · {relTime(new Date(r.created_at).getTime())}
+                            From {fromLine(r)} · {relTime(new Date(r.created_at).getTime())}
                           </div>
                         </div>
                         <Stars score={r.rating} />
                       </div>
+                      {(r.verified === "google" || email) && (
+                        <div className="flex items-center gap-1.5 flex-wrap mt-2">
+                          {r.verified === "google" && <GoogleChip />}
+                          {email && <span className="text-[12px]" style={{ color: C.muted }}>{email}</span>}
+                        </div>
+                      )}
                       {r.body && <p className="text-[14px] leading-snug mt-2.5" style={{ color: C.ink }}>“{r.body}”</p>}
                       <div className="flex gap-2 mt-3">
                         <button type="button" disabled={deciding === r.id} onClick={() => decide(r.id, "hidden")}
@@ -8269,8 +8491,22 @@ ${link}`;
             </div>
           )}
 
-          {/* ---- ask a guest ---- */}
-          <div className={label} style={{ color: C.goldText }}>Ask a guest</div>
+          {/* ---- a guide or driver: their reviews from this trip ---- */}
+          {!isOp && mine.length > 0 && (() => {
+            const waiting = mine.filter((r) => r.status === "pending").length, live = mine.filter((r) => r.status === "published").length;
+            return (
+              <div className="rounded-2xl p-3.5 mb-5 flex items-center gap-3" style={{ background: C.pineSoft }}>
+                <Star size={18} color={C.pine} fill={C.pine} className="shrink-0" />
+                <p className="text-[13px] leading-snug" style={{ color: C.pine }}>
+                  <b>{mine.length} {mine.length === 1 ? "guest has" : "guests have"} reviewed you</b>
+                  {live ? ` · ${live} on your profile` : ""}{waiting ? ` · ${waiting} waiting for ${opName} to publish` : ""}
+                </p>
+              </div>
+            );
+          })()}
+
+          {/* ---- ask the guests ---- */}
+          <div className={label} style={{ color: C.goldText }}>Ask your guests</div>
           {people.length === 0 ? (
             <>
               <Empty Icon={Users} title="No crew to review yet"
@@ -8282,96 +8518,49 @@ ${link}`;
             </>
           ) : (
             <>
-              <div className="rounded-2xl p-3 mb-4 flex items-center gap-3" style={{ background: C.bg }}>
+              <div className="rounded-2xl p-3 mb-3 flex items-center gap-3" style={{ background: C.bg }}>
                 <div className="flex -space-x-2 shrink-0">
                   {people.slice(0, 4).map((p) => <div key={p.id} className="rounded-full" style={{ boxShadow: `0 0 0 2px ${C.bg}` }}><Avatar initials={p.initials} src={p.photo} size={34} /></div>)}
                 </div>
                 <p className="text-[13px] leading-snug" style={{ color: C.ink }}>
-                  One link lets the guest review {people.length > 1 ? "each of " : ""}<b>{people.map((p) => `${String(p.name).split(" ")[0]} (${roleWord(p.role).toLowerCase()})`).join(", ")}</b>{people.length > 1 ? ", separately" : ""}.
+                  One link for the whole group. Each guest signs in with Google and reviews {people.length > 1 ? "each of " : ""}<b>{people.map((p) => `${String(p.name).split(" ")[0]} (${roleWord(p.role).toLowerCase()})`).join(", ")}</b>{people.length > 1 ? ", separately" : ""}.
                 </p>
               </div>
 
-              {made ? (
+              {linkState === "loading" ? (
+                <div className="flex items-center justify-center gap-2 py-6 text-[13px]" style={{ color: C.muted }}>
+                  <Loader2 size={16} className="animate-spin" /> Getting your link…
+                </div>
+              ) : linkState === "error" || !link ? (
+                <div className="mb-5">
+                  {err && <p role="alert" className="text-[13px] mb-2.5" style={{ color: C.maroon }}>{err}</p>}
+                  <button type="button" onClick={getLink} className="tap w-full h-11 rounded-xl text-[14px] font-semibold inline-flex items-center justify-center gap-2"
+                    style={{ background: C.pine, color: "#FFFFFF", border: 0 }}><RefreshCw size={15} /> Try again</button>
+                </div>
+              ) : (
                 <div className="rounded-2xl p-4 mb-5" style={{ background: C.pineSoft }}>
-                  <div className="text-[14px] font-semibold mb-1" style={{ color: C.pine }}>Link ready</div>
-                  <p className="text-[12px] mb-2.5" style={{ color: C.pine, opacity: .85 }}>Works once, for 14 days. Best shared with the guest in person on the last day.</p>
-                  <div className="rounded-lg px-3 py-2 mb-2.5 break-all text-[12px] font-mono" style={{ background: C.card, color: C.ink }}>{made.link}</div>
-                  <button type="button" onClick={() => whatsApp(made.phone, askText(made.link))}
+                  <div className="rounded-lg px-3 py-2 mb-2.5 break-all text-[12px] font-mono" style={{ background: C.card, color: C.ink }}>{link.url}</div>
+                  <button type="button" onClick={() => whatsApp(askText(link.url))}
                     className="tap w-full h-12 rounded-xl text-[15px] font-semibold inline-flex items-center justify-center gap-2 mb-2" style={{ background: "#25D366", color: "#FFFFFF", border: 0 }}>
                     <MessageCircle size={17} /> Send on WhatsApp
                   </button>
                   <div className="flex gap-2">
-                    <button type="button" onClick={() => email(made.email, `A quick review of your ${who}?`, askText(made.link))} className="tap flex-1 h-10 rounded-lg text-[13px] font-semibold inline-flex items-center justify-center gap-1.5"
-                      style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }}><Mail size={14} /> Email</button>
-                    <button type="button" onClick={() => share(askText(made.link), made.link)} className="tap flex-1 h-10 rounded-lg text-[13px] font-semibold inline-flex items-center justify-center gap-1.5"
+                    <button type="button" onClick={() => share(askText(link.url), link.url)} className="tap flex-1 h-10 rounded-lg text-[13px] font-semibold inline-flex items-center justify-center gap-1.5"
                       style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }}><Share2 size={14} /> Share</button>
-                    <button type="button" onClick={() => copy(made.link)} className="tap flex-1 h-10 rounded-lg text-[13px] font-semibold"
-                      style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }}>{copied ? "Copied" : "Copy"}</button>
+                    <button type="button" onClick={() => copy(link.url)} className="tap flex-1 h-10 rounded-lg text-[13px] font-semibold"
+                      style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }}>{copied ? "Copied" : "Copy link"}</button>
                   </div>
-                  {!full && (
-                    <button type="button" onClick={() => { setMade(null); setCopied(false); }} className="tap w-full h-9 rounded-lg text-[13px] font-medium mt-2" style={{ color: C.pine, background: "transparent", border: 0 }}>
-                      Create one for the next guest
-                    </button>
-                  )}
+                  {err && <p role="alert" className="text-[12px] mt-2" style={{ color: C.maroon }}>{err}</p>}
+                  <p className="text-[12px] mt-2.5" style={{ color: C.pine, opacity: .85 }}>
+                    Send it to the group chat, or to each guest. Open until {fmtDate(String(link.expires).slice(0, 10))}.
+                  </p>
                 </div>
-              ) : full ? (
-                <p className="text-[13px] rounded-xl px-3.5 py-3 mb-5" style={{ background: C.bg, color: C.muted }}>
-                  This trip has its {MAX_PER_TRIP} review links. Remind the guests below who haven't answered yet.
-                </p>
-              ) : (
-                <>
-                  <div className="text-[13px] font-medium mb-1.5" style={{ color: C.ink }}>Guest name</div>
-                  <input value={guestName} onChange={(e) => setGuestName(e.target.value)} maxLength={60} placeholder="e.g. Sarah Whitfield"
-                    className="w-full h-11 px-3.5 rounded-xl text-[14px] mb-3" style={field} />
-                  <div className="text-[13px] font-medium mb-1.5" style={{ color: C.ink }}>Guest email</div>
-                  <input value={guestEmail} onChange={(e) => setGuestEmail(e.target.value)} type="email" inputMode="email" autoCapitalize="none" placeholder="guest@email.com"
-                    className="w-full h-11 px-3.5 rounded-xl text-[14px] mb-1.5" style={field} />
-                  <p className="text-[12px] mb-3" style={{ color: C.muted }}>Kept private, never shown on a review. It lets a disputed review be traced.</p>
-                  <div className="text-[13px] font-medium mb-1.5" style={{ color: C.ink }}>Guest WhatsApp <span style={{ color: C.muted }}>· optional</span></div>
-                  <input value={guestPhone} onChange={(e) => setGuestPhone(e.target.value)} type="tel" inputMode="tel" placeholder="+61 4XX XXX XXX — with country code"
-                    className="w-full h-11 px-3.5 rounded-xl text-[14px] mb-1.5" style={field} />
-                  <p className="text-[12px] mb-4" style={{ color: C.muted }}>With a number, WhatsApp opens straight to their chat.</p>
-                  {err && <p role="alert" className="text-[13px] mb-2.5" style={{ color: C.maroon }}>{err}</p>}
-                  <button type="button" disabled={busy} onClick={create}
-                    className="tap w-full h-12 rounded-xl text-[15px] font-semibold inline-flex items-center justify-center gap-2 mb-5"
-                    style={{ background: C.pine, color: "#FFFFFF", border: 0 }}>
-                    {busy ? <Loader2 size={18} className="animate-spin" /> : <><Plus size={17} strokeWidth={3} /> Create review link</>}
-                  </button>
-                </>
               )}
             </>
           )}
 
-          {/* ---- links for this trip ---- */}
-          {issued.length > 0 && (
-            <div className="mb-5">
-              <div className={label} style={{ color: C.goldText }}>Links for this trip · {issued.length}/{MAX_PER_TRIP}</div>
-              <div className="rounded-2xl overflow-hidden" style={{ border: `1px solid ${C.line}` }}>
-                {issued.map((t, i) => {
-                  const used = Boolean(t.used_at), expired = !used && new Date(t.expires_at) < new Date();
-                  return (
-                    <div key={t.token} className="px-3.5 py-2.5 flex items-center gap-2.5" style={{ background: C.card, borderTop: i ? `1px solid ${C.lineSoft}` : "none" }}>
-                      <span className="w-7 h-7 rounded-full flex items-center justify-center shrink-0" style={{ background: used ? C.pineSoft : expired ? C.maroonSoft : C.goldSoft }}>
-                        {used ? <Check size={13} color={C.pine} /> : expired ? <X size={13} color={C.maroon} /> : <Clock size={13} color={C.gold} />}
-                      </span>
-                      <span className="flex-1 min-w-0 text-[13px] truncate" style={{ color: C.ink }}>{t.guest_name || t.guest_email || "Guest"}</span>
-                      {used || expired ? (
-                        <span className="text-[12px] shrink-0" style={{ color: C.muted }}>{used ? "Reviewed" : "Expired"}</span>
-                      ) : (
-                        <button type="button" onClick={() => remind(t)} className="tap shrink-0 h-8 px-3 rounded-lg text-[12px] font-semibold inline-flex items-center gap-1"
-                          style={{ background: C.goldSoft, color: C.goldText, border: 0 }} aria-label={`Remind ${t.guest_name || "this guest"}`}>
-                          <RefreshCw size={12} /> Remind
-                        </button>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
-          {/* ---- published ---- */}
-          {published.length > 0 && (
+          {/* ---- published (operator) ---- */}
+          {isOp && published.length > 0 && (
             <div className="mb-5">
               <div className={label} style={{ color: C.goldText }}>Published · {published.length}</div>
               <div className="rounded-2xl overflow-hidden" style={{ border: `1px solid ${C.line}` }}>
@@ -8380,7 +8569,7 @@ ${link}`;
                   return (
                     <div key={r.id} className="px-3.5 py-2.5 flex items-center gap-2.5" style={{ background: C.card, borderTop: i ? `1px solid ${C.lineSoft}` : "none" }}>
                       <Avatar initials={p.initials} src={p.photo} size={28} />
-                      <span className="flex-1 min-w-0 text-[13px] truncate" style={{ color: C.ink }}>{p.name} <span style={{ color: C.muted }}>· from {r.guest_name || "a guest"}</span></span>
+                      <span className="flex-1 min-w-0 text-[13px] truncate" style={{ color: C.ink }}>{p.name} <span style={{ color: C.muted }}>· from {fromLine(r)}</span></span>
                       <Stars score={r.rating} />
                     </div>
                   );
@@ -8392,8 +8581,9 @@ ${link}`;
           <div className="rounded-xl p-3.5 flex gap-2.5" style={{ background: C.bg, border: `1px solid ${C.line}` }}>
             <ShieldCheck size={16} color={C.gold} className="shrink-0 mt-0.5" />
             <p className="text-[12px] leading-snug" style={{ color: C.muted }}>
-              Guests don't sign up: the link is what shows they were on this trip, and it works once. Guides and drivers can't
-              review themselves, and every review waits here for you before it appears on a profile.
+              Guests sign in with Google, so each Google account reviews each of the crew once.
+              Reviews show the guest's first name, last initial and country, never their email.
+              {isOp ? " Nothing appears on a profile until you publish it." : ` Nothing appears on your profile until ${opName} publishes it.`}
             </p>
           </div>
         </div>
@@ -8411,10 +8601,14 @@ function GuestReviews({ talentId, isAdmin, isSelf, onAskOperator, onCount }) {
 
   const load = async () => {
     if (!CLOUD) { setRows([]); return; }
-    const { data, error } = await supabase
-      .from("guest_reviews").select("id,guest_name,guest_country,rating,knowledge,care,communication,body,trip_label,created_at")
+    const cols = "id,guest_name,guest_country,rating,knowledge,care,communication,body,trip_label,created_at";
+    let { data, error } = await supabase
+      .from("guest_reviews").select(cols + ",verified")
       .eq("talent_id", talentId).eq("status", "published")
       .order("created_at", { ascending: false });
+    if (error && /verified/i.test(error.message || "")) {   // a database without BUILD 64
+      ({ data, error } = await supabase.from("guest_reviews").select(cols).eq("talent_id", talentId).eq("status", "published").order("created_at", { ascending: false }));
+    }
     if (error) { console.error("guest_reviews load failed:", error.message); setRows([]); return; }
     setRows(data || []);
     onCount && onCount((data || []).length);
@@ -8446,13 +8640,13 @@ function GuestReviews({ talentId, isAdmin, isSelf, onAskOperator, onCount }) {
         <div className="text-[15px] font-semibold" style={{ color: C.ink }}>No guest reviews yet</div>
         <p className="text-[13px] leading-snug mt-1.5 mb-3" style={{ color: C.muted }}>
           {isSelf
-            ? "Reviews are sent by the tour operator who ran your trip. Ask them after your next trip ends."
-            : "Guest reviews appear here once an operator invites guests to review this person."}
+            ? "After a trip ends, open it and tap “Ask your guests for a review”. The trip's tour operator publishes each one."
+            : "Guest reviews appear here once guests of a trip with this person review them."}
         </p>
         {isSelf && onAskOperator && (
-          <button onClick={onAskOperator} className="tap h-10 px-4 rounded-xl text-[14px] font-semibold inline-flex items-center gap-1.5"
-            style={{ background: C.pine, color: "#fff" }}>
-            <Send size={14} /> Ask your operator
+          <button onClick={onAskOperator} className="tap h-9 px-3 rounded-xl text-[13px] font-semibold inline-flex items-center gap-1.5"
+            style={{ background: "transparent", color: C.pine, border: `1px solid ${C.line}` }}>
+            <Send size={13} /> Operator not on the hub yet? Invite them
           </button>
         )}
       </div>
@@ -8505,12 +8699,12 @@ function GuestReviews({ talentId, isAdmin, isSelf, onAskOperator, onCount }) {
             <div className="flex items-start gap-3">
               <div className="w-9 h-9 rounded-full flex items-center justify-center shrink-0" style={{ background: C.goldSoft }}>
                 <span className="text-[13px] font-semibold" style={{ color: C.goldText }}>
-                  {(r.guest_name || "G").charAt(0).toUpperCase()}
+                  {(shortGuest(r.guest_name) || "G").charAt(0).toUpperCase()}
                 </span>
               </div>
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2 flex-wrap">
-                  <span className="text-[14px] font-semibold" style={{ color: C.ink }}>{r.guest_name || "Guest"}</span>
+                  <span className="text-[14px] font-semibold" style={{ color: C.ink }}>{shortGuest(r.guest_name) || "Guest"}</span>
                   {r.guest_country && <span className="text-[12px]" style={{ color: C.muted }}>· {r.guest_country}</span>}
                 </div>
                 <div className="mt-1"><Stars score={Number(r.rating) || 0} /></div>
@@ -8537,6 +8731,12 @@ function GuestReviews({ talentId, isAdmin, isSelf, onAskOperator, onCount }) {
                 style={{ background: C.pineSoft, color: C.pine }}>
                 <ShieldCheck size={10} /> Guest of this trip
               </span>
+              {r.verified === "google" && (
+                <span className="inline-flex items-center gap-1 text-[11px] font-semibold rounded-full px-2 py-1"
+                  style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.muted }}>
+                  <GoogleG size={10} /> Verified with Google
+                </span>
+              )}
               <span className="text-[11px]" style={{ color: C.muted }}>{relTime(new Date(r.created_at).getTime())}</span>
             </div>
           </div>
@@ -8544,8 +8744,8 @@ function GuestReviews({ talentId, isAdmin, isSelf, onAskOperator, onCount }) {
       </div>
 
       <p className="text-[12px] text-center mt-4 leading-snug" style={{ color: C.muted }}>
-        Each review comes from a one-time link sent to a guest of that trip. Guests can only review the
-        guides and drivers they travelled with.
+        Guests sign in with Google to review the guides and drivers they travelled with — once per trip — and the
+        trip's tour operator confirms each review before it appears here.
       </p>
     </div>
   );
@@ -8553,9 +8753,9 @@ function GuestReviews({ talentId, isAdmin, isSelf, onAskOperator, onCount }) {
 
 /* ========================================================================== */
 /*  INVITE YOUR OPERATOR                                                      */
-/*  A guide cannot request their own reviews — so this is how they get one:   */
-/*  they invite the operator who ran the trip. That operator joins to issue   */
-/*  the review, and becomes a user of the platform in the process.            */
+/*  Reviews belong to trips in the hub, so a guide whose operator isn't here  */
+/*  yet invites them. BUILD 64: once the trip is in the hub, the guide sends  */
+/*  the review link to guests themselves; the operator publishes.             */
 /* ========================================================================== */
 function OperatorInvite({ user, trip, onClose }) {
   const [company, setCompany] = useState(trip?.operator || "");
@@ -8573,9 +8773,9 @@ function OperatorInvite({ user, trip, onClose }) {
 
 There's a new platform in Bhutan — Bhutan Tourism Hub — where licensed guides and drivers keep a verified professional record, and where guest reviews are stored permanently against real trips.
 
-What makes it different: a guide cannot write or request their own reviews. Only the tour operator who ran the trip can invite a guest to review. That's what keeps the ratings honest.
+What makes it different: guests sign in with Google to review, and the tour operator who ran the trip confirms each review before it appears. That's what keeps the ratings honest.
 
-${trip ? `Would you send our guests from "${trip.title}" a review link? ` : "Would you send my guests a review link after our trips? "}It takes a minute, and it builds a record that actually means something.
+${trip ? `Would you add "${trip.title}" there, so our guests can review it? ` : "Would you join and add our trips, so our guests can review them? "}It takes a minute, and it builds a record that actually means something.
 
 Free to join:
 ${joinLink}
@@ -14825,31 +15025,114 @@ function Sheet({ onClose, children }) {
 
 /* ========================================================================== */
 /*  PAST TRIPS, ATTESTED — a guide's history, confirmed by the operators who ran it */
+/*  BUILD 65: the operator's WhatsApp number (private to the guide), and photos */
+/*  of guest feedback written on paper — read by the phone, checked by the      */
+/*  guide, seen by the operator (photo and words) before confirming. After the  */
+/*  operator confirms, the words show on the profile and can't be changed; the  */
+/*  photos stay private (guide, operators, admin).                              */
 /* ========================================================================== */
 const MONTHS_LONG = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 const attestWhen = (a) => `${a.month ? MONTHS_LONG[a.month - 1] + " " : ""}${a.year}`;
 const attestLink = (token) => `${window.location.origin}/?attest=${token}`;
-function attestMessage(a, fromName) {
+function attestMessage(a, fromName, papers) {
   const verb = a.role === "driver" ? "drove for" : "guided";
-  return `Kuzu Zangpo la, could you confirm I ${verb} "${a.tripTitle}" for ${a.operatorName} in ${attestWhen(a)}? One tap here: ${attestLink(a.token)} — ${fromName}`;
+  const n = papers || 0;
+  const notes = n ? ` I've added ${n === 1 ? "a guest's" : `${n} guests'`} written feedback from it — you'll see the ${n === 1 ? "photo" : "photos"} before confirming.` : "";
+  return `Kuzu Zangpo la, could you confirm I ${verb} "${a.tripTitle}" for ${a.operatorName} in ${attestWhen(a)}?${notes} One tap here: ${attestLink(a.token)} — ${fromName}`;
 }
 const rowToAttest = (r) => ({
   id: r.id, talentId: r.talent_id, talentName: r.talent_name, role: r.role, operatorName: r.operator_name, operatorId: r.operator_id,
   tripTitle: r.trip_title, month: r.month, year: r.year, nights: r.nights, token: r.token, status: r.status,
   attestedBy: r.attested_by_name, operatorVerified: !!r.operator_verified, createdAt: r.created_at, decidedAt: r.decided_at,
 });
+// a WhatsApp number from what was typed: a bare 8-digit Bhutanese mobile gets +975
+const waDigits = (phone) => {
+  const d = String(phone || "").replace(/[^\d]/g, "").replace(/^00/, "");
+  return d.length === 8 ? `975${d}` : d;
+};
+// the same rule as the database (mask_contacts): emails and phone numbers hidden, dates left alone
+function maskContacts(text) {
+  let out = String(text || "").replace(/[ \t]+/g, " ").replace(/[A-Za-z0-9._%+-]+ ?@ ?[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, "[email hidden]");
+  out = out.replace(/\+?\d(?:[ ().\/-]?\d){7,}/g, (m) => {
+    const digits = m.replace(/\D/g, "").length;
+    if (digits < 8 || /^\d{1,2}[./-]\d{1,2}[./-](19|20)?\d{2}$/.test(m) || /^(19|20)\d{2}[./-]\d{1,2}[./-]\d{1,2}$/.test(m)
+        || /^(19|20)\d{2} ?- ?(19|20)\d{2}$/.test(m)) return m;
+    return "[number hidden]";
+  });
+  return out;
+}
+// what the phone read, tidied: joined lines, no stray symbols at the ends
+const tidyReadText = (t) => String(t || "").replace(/\r/g, "").split(/\n{2,}/).map((p) => p.replace(/\s*\n\s*/g, " ").replace(/[ \t]+/g, " ").trim())
+  .filter(Boolean).join("\n\n").replace(/^[^A-Za-z0-9“"']+/, "").trim().slice(0, 2000);
+
+// a private photo (papers bucket), shown through a short-lived link — only for those the database lets see it
+function PaperPhoto({ path, size = 64, onOpen }) {
+  const [url, setUrl] = useState(null);
+  useEffect(() => {
+    let on = true;
+    if (!CLOUD || !path) return;
+    supabase.storage.from("papers").createSignedUrl(path, 600).then(({ data }) => { if (on && data && data.signedUrl) setUrl(data.signedUrl); }).catch(() => {});
+    return () => { on = false; };
+  }, [path]);
+  if (!path) return null;
+  return (
+    <button type="button" onClick={() => url && onOpen && onOpen(url)} aria-label="See the feedback photo"
+      className="tap shrink-0 rounded-lg overflow-hidden flex items-center justify-center" style={{ width: size, height: size, background: C.bg, border: `1px solid ${C.line}`, padding: 0 }}>
+      {url ? <img src={url} alt="" className="w-full h-full object-cover" /> : <ImagePlus size={18} color={C.muted} />}
+    </button>
+  );
+}
+function PhotoViewer({ url, onClose }) {
+  if (!url) return null;
+  return createPortal((
+    <div className="fixed inset-0 flex items-center justify-center p-3" style={{ background: "rgba(0,0,0,.88)", zIndex: 400 }} onClick={onClose}>
+      <img src={url} alt="Guest feedback" style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain", borderRadius: 8 }} />
+      <button type="button" onClick={onClose} aria-label="Close" className="tap absolute top-4 right-4 w-10 h-10 rounded-full flex items-center justify-center" style={{ background: "rgba(255,255,255,.15)", border: 0 }}>
+        <X size={18} color="#FFFFFF" />
+      </button>
+    </div>
+  ), document.body);
+}
+const PaperQuote = ({ p, onOpen, small }) => (
+  <div className="flex gap-2.5 items-start">
+    {p.photo_path && onOpen && <PaperPhoto path={p.photo_path} size={small ? 44 : 56} onOpen={onOpen} />}
+    <div className="flex-1 min-w-0">
+      <p className={`${small ? "text-[13px]" : "text-[14px]"} leading-snug whitespace-pre-line`} style={{ color: C.ink }}>“{p.body}”</p>
+      {(p.guest_name || p.guest_country) && (
+        <div className="text-[12px] mt-0.5" style={{ color: C.muted }}>— {[p.guest_name, p.guest_country].filter(Boolean).join(", ")}</div>
+      )}
+    </div>
+  </div>
+);
 
 function useAttestations(talentId, self) {
   const [rows, setRows] = useState(null);
+  const [papers, setPapers] = useState({});     // attestation id → paper feedback rows
+  const [contacts, setContacts] = useState({}); // attestation id → operator's number (the guide's own rows only)
   const load = async () => {
     if (!CLOUD || !talentId) { setRows([]); return; }
     let q = supabase.from("trip_attestations").select("*").eq("talent_id", talentId).order("year", { ascending: false }).order("month", { ascending: false });
     if (!self) q = q.eq("status", "attested");
     const { data, error } = await q;
-    setRows(error ? [] : (data || []).map(rowToAttest));
+    const list = error ? [] : (data || []).map(rowToAttest);
+    setRows(list);
+    const ids = list.map((a) => a.id);
+    if (!ids.length) { setPapers({}); setContacts({}); return; }
+    // both answer nothing (not an error the guide sees) on a database without BUILD 65
+    const { data: P } = await supabase.from("attestation_papers").select("id,attestation_id,body,guest_name,guest_country,photo_path,created_at")
+      .in("attestation_id", ids).order("created_at", { ascending: true });
+    const m = {};
+    (P || []).forEach((p) => { (m[p.attestation_id] = m[p.attestation_id] || []).push(p); });
+    setPapers(m);
+    if (self) {
+      const { data: K } = await supabase.from("attestation_contacts").select("attestation_id,operator_phone").in("attestation_id", ids);
+      const k = {};
+      (K || []).forEach((x) => { k[x.attestation_id] = x.operator_phone; });
+      setContacts(k);
+    }
   };
   useEffect(() => { load(); }, [talentId, self]);
-  return { rows, reload: load };
+  return { rows, papers, contacts, reload: load };
 }
 
 function AttestedLine({ a }) {
@@ -14862,61 +15145,100 @@ function AttestedLine({ a }) {
 }
 
 function PastTrips({ talent, self }) {
-  const { rows, reload } = useAttestations(talent.id, self);
+  const { rows, papers, contacts, reload } = useAttestations(talent.id, self);
   const [adding, setAdding] = useState(false);
-  const [share, setShare] = useState(null);                 // the claim just created, to send
+  const [share, setShare] = useState(null);                 // the claim to send
+  const [feedbackFor, setFeedbackFor] = useState(null);     // the claim whose paper feedback is open
   const now = new Date();
-  const [f, setF] = useState({ operator: "", title: "", month: String(now.getMonth() + 1), year: String(now.getFullYear()), nights: "", role: talent.role === "driver" ? "driver" : "guide" });
+  const [f, setF] = useState({ operator: "", phone: "", title: "", month: String(now.getMonth() + 1), year: String(now.getFullYear()), nights: "", role: talent.role === "driver" ? "driver" : "guide" });
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
   const [confirmDel, setConfirmDel] = useState(null);
+  const [viewing, setViewing] = useState(null);
   const set = (k, v) => setF((x) => ({ ...x, [k]: v }));
   const field = { background: C.card, border: `1px solid ${C.line}`, color: C.ink };
   if (rows === null) return null;
   const attested = rows.filter((a) => a.status === "attested");
   const pending = self ? rows.filter((a) => a.status === "pending") : [];
+  const declined = self ? rows.filter((a) => a.status === "declined") : [];
   if (!self && attested.length === 0) return null;
 
   const add = async () => {
     if (f.operator.trim().length < 2 || f.title.trim().length < 3) { setErr("Name the operator and the trip."); return; }
+    const digits = waDigits(f.phone);
+    if (f.phone.trim() && (digits.length < 8 || digits.length > 15)) { setErr("Check the operator's WhatsApp number — with the country code if they're outside Bhutan."); return; }
     const year = Number(f.year); if (!(year >= 2000 && year <= now.getFullYear())) { setErr("Check the year."); return; }
     setBusy(true); setErr(null);
     const row = { talent_id: talent.id, talent_name: talent.name, role: f.role, operator_name: f.operator.trim(), trip_title: f.title.trim(),
                   month: Number(f.month) || null, year, nights: Number(f.nights) || null, token: makeReviewToken(), status: "pending" };
     const { data, error } = await supabase.from("trip_attestations").insert(row).select("*").single();
+    if (error) { setBusy(false); setErr(failText("save the trip")); console.error("trip_attestations.insert failed:", error.message); return; }
+    if (f.phone.trim()) {
+      const { error: ce } = await supabase.from("attestation_contacts").insert({ attestation_id: data.id, talent_id: talent.id, operator_phone: f.phone.trim() });
+      if (ce) console.warn("attestation_contacts.insert:", ce.message);
+    }
     setBusy(false);
-    if (error) { setErr("Couldn't save — " + error.message); return; }
-    setAdding(false); setF({ ...f, operator: "", title: "", nights: "" });
-    setShare(rowToAttest(data)); reload();
+    setAdding(false); setF({ ...f, operator: "", phone: "", title: "", nights: "" });
+    await reload();
+    setFeedbackFor(rowToAttest(data));   // next: the guests' written feedback (optional), then send
   };
-  const remove = async (id) => { await supabase.from("trip_attestations").delete().eq("id", id); setConfirmDel(null); reload(); };
+  const remove = async (id) => {
+    const paths = (papers[id] || []).map((p) => p.photo_path).filter(Boolean);
+    const { error } = await supabase.from("trip_attestations").delete().eq("id", id);
+    setConfirmDel(null);
+    if (error) { toast(failText("remove it")); return; }
+    if (paths.length) supabase.storage.from("papers").remove(paths).catch(() => {});
+    reload();
+  };
 
-  const Item = ({ a, muted }) => (
-    <div className="px-3.5 py-3 flex items-start gap-3" style={{ borderTop: `1px solid ${C.lineSoft}` }}>
-      <div className="flex-1 min-w-0">
-        <div className="text-[14px] font-semibold" style={{ color: muted ? C.muted : C.ink }}>{a.tripTitle}</div>
-        <div className="text-[12px]" style={{ color: C.muted }}>
-          {attestWhen(a)}{a.nights ? ` · ${a.nights} nights` : ""} · {a.role === "driver" ? "Driver" : "Guide"} · for {a.operatorName}
+  const Item = ({ a, muted }) => {   // called as Item({...}) — not <Item/> — so its photos aren't reloaded on every render
+    const P = papers[a.id] || [];
+    return (
+      <div key={a.id} className="px-3.5 py-3" style={{ borderTop: `1px solid ${C.lineSoft}` }}>
+        <div className="flex items-start gap-3">
+          <div className="flex-1 min-w-0">
+            <div className="text-[14px] font-semibold" style={{ color: muted ? C.muted : C.ink }}>{a.tripTitle}</div>
+            <div className="text-[12px]" style={{ color: C.muted }}>
+              {attestWhen(a)}{a.nights ? ` · ${a.nights} nights` : ""} · {a.role === "driver" ? "Driver" : "Guide"} · for {a.operatorName}
+            </div>
+            {a.status === "attested" ? <AttestedLine a={a} /> : a.status === "declined" ? (
+              <div className="text-[11px] mt-0.5 leading-snug" style={{ color: C.maroon }}>
+                {a.attestedBy || a.operatorName} marked this not accurate. Remove it and add it again with the right details.
+              </div>
+            ) : (
+              <div className="text-[11px] mt-0.5" style={{ color: C.goldText }}>
+                Waiting for {a.operatorName} to confirm{P.length ? ` · ${P.length} guest feedback ${P.length === 1 ? "note" : "notes"}` : ""}
+              </div>
+            )}
+          </div>
+          {self && (confirmDel === a.id ? (
+            <div className="flex gap-1 shrink-0">
+              <button type="button" onClick={() => setConfirmDel(null)} className="tap h-8 px-2 rounded-lg text-[12px]" style={{ background: C.bg, color: C.muted }}>Keep</button>
+              <button type="button" onClick={() => remove(a.id)} className="tap h-8 px-2 rounded-lg text-[12px] font-semibold" style={{ background: C.maroon, color: "#FFFFFF" }}>Remove</button>
+            </div>
+          ) : (
+            <div className="flex gap-1 shrink-0">
+              {a.status === "pending" && (
+                <>
+                  <button type="button" onClick={() => setFeedbackFor(a)} className="tap h-8 px-2.5 rounded-lg text-[12px] font-semibold" style={{ background: C.goldSoft, color: C.goldText }}>Feedback</button>
+                  <button type="button" onClick={() => setShare(a)} className="tap h-8 px-2.5 rounded-lg text-[12px] font-semibold" style={{ background: C.pineSoft, color: C.pine }}>Send</button>
+                </>
+              )}
+              <button type="button" onClick={() => setConfirmDel(a.id)} aria-label={`Remove ${a.tripTitle}`} className="tap w-8 h-8 rounded-lg flex items-center justify-center" style={{ background: C.bg }}><X size={13} color={C.muted} /></button>
+            </div>
+          ))}
         </div>
-        {a.status === "attested" ? <AttestedLine a={a} /> : (
-          <div className="text-[11px] mt-0.5" style={{ color: C.goldText }}>Waiting for {a.operatorName} to confirm</div>
+        {a.status === "attested" && P.length > 0 && (
+          <div className="mt-2.5 space-y-2.5 rounded-xl p-3" style={{ background: C.bg }}>
+            {P.map((p) => <PaperQuote key={p.id} p={p} small onOpen={self ? setViewing : null} />)}
+            <div className="text-[11px] inline-flex items-center gap-1" style={{ color: C.muted }}>
+              <ShieldCheck size={11} color={C.pine} /> Written by guests on paper · confirmed by {a.attestedBy || a.operatorName}
+            </div>
+          </div>
         )}
       </div>
-      {self && (confirmDel === a.id ? (
-        <div className="flex gap-1 shrink-0">
-          <button type="button" onClick={() => setConfirmDel(null)} className="tap h-8 px-2 rounded-lg text-[12px]" style={{ background: C.bg, color: C.muted }}>Keep</button>
-          <button type="button" onClick={() => remove(a.id)} className="tap h-8 px-2 rounded-lg text-[12px] font-semibold" style={{ background: C.maroon, color: "#FFFFFF" }}>Remove</button>
-        </div>
-      ) : (
-        <div className="flex gap-1 shrink-0">
-          {a.status === "pending" && (
-            <button type="button" onClick={() => setShare(a)} className="tap h-8 px-2.5 rounded-lg text-[12px] font-semibold" style={{ background: C.pineSoft, color: C.pine }}>Send again</button>
-          )}
-          <button type="button" onClick={() => setConfirmDel(a.id)} aria-label={`Remove ${a.tripTitle}`} className="tap w-8 h-8 rounded-lg flex items-center justify-center" style={{ background: C.bg }}><X size={13} color={C.muted} /></button>
-        </div>
-      ))}
-    </div>
-  );
+    );
+  };
 
   return (
     <div className="mb-4">
@@ -14934,10 +15256,11 @@ function PastTrips({ talent, self }) {
         )}
       </div>
 
-      {(attested.length > 0 || pending.length > 0) && (
+      {(attested.length > 0 || pending.length > 0 || declined.length > 0) && (
         <div className="rounded-xl overflow-hidden mb-2" style={{ background: C.card, border: `1px solid ${C.line}` }}>
-          {attested.map((a) => <Item key={a.id} a={a} />)}
-          {pending.map((a) => <Item key={a.id} a={a} muted />)}
+          {attested.map((a) => Item({ a }))}
+          {pending.map((a) => Item({ a, muted: true }))}
+          {declined.map((a) => Item({ a, muted: true }))}
         </div>
       )}
 
@@ -14945,6 +15268,9 @@ function PastTrips({ talent, self }) {
         <div className="rounded-xl p-3" style={{ background: C.bg, border: `1px solid ${C.line}` }}>
           <input value={f.operator} onChange={(e) => set("operator", e.target.value)} maxLength={80} placeholder="Tour operator you did the trip for" aria-label="Tour operator"
             className="w-full h-11 px-3 rounded-lg text-[14px] mb-2" style={field} />
+          <input value={f.phone} onChange={(e) => set("phone", e.target.value)} type="tel" inputMode="tel" maxLength={24} placeholder="Their WhatsApp number, e.g. 17 12 34 56" aria-label="Operator's WhatsApp number"
+            className="w-full h-11 px-3 rounded-lg text-[14px] mb-1" style={field} />
+          <p className="text-[11px] mb-2 leading-snug" style={{ color: C.muted }}>So the request goes straight to them. Only you see it. Add the country code if they're outside Bhutan.</p>
           <input value={f.title} onChange={(e) => set("title", e.target.value)} maxLength={100} placeholder="The trip, e.g. Whitfield family — 7 nights west" aria-label="Trip"
             className="w-full h-11 px-3 rounded-lg text-[14px] mb-2" style={field} />
           <div className="grid grid-cols-3 gap-2 mb-2">
@@ -14955,32 +15281,181 @@ function PastTrips({ talent, self }) {
             <input type="number" value={f.nights} onChange={(e) => set("nights", e.target.value)} min={1} max={60} placeholder="Nights" aria-label="Nights" className="h-11 px-2 rounded-lg text-[13px]" style={field} />
           </div>
           <Segmented value={f.role} onChange={(v) => set("role", v)} options={[["guide", "I was the guide"], ["driver", "I was the driver"]]} />
-          <p className="text-[11px] mt-2 mb-3 leading-snug" style={{ color: C.muted }}>Only the operator you name can confirm it, from their own account. It appears on your profile once they do.</p>
+          <p className="text-[11px] mt-2 mb-3 leading-snug" style={{ color: C.muted }}>Next you can add photos of feedback guests wrote on paper. A tour operator confirms the trip from their own account, using the link you send them. It appears on your profile once they do.</p>
           {err && <p className="text-[13px] mb-2" style={{ color: C.maroon }}>{err}</p>}
           <div className="flex gap-2">
             <button type="button" onClick={() => { setAdding(false); setErr(null); }} className="tap flex-1 h-10 rounded-lg text-[13px] font-semibold" style={{ background: C.card, color: C.muted }}>Cancel</button>
             <button type="button" onClick={add} disabled={busy} className="tap flex-[1.4] h-10 rounded-lg text-[13px] font-semibold inline-flex items-center justify-center" style={{ background: C.pine, color: "#FFFFFF" }}>
-              {busy ? <Loader2 size={14} className="animate-spin" /> : "Save and ask them"}
+              {busy ? <Loader2 size={14} className="animate-spin" /> : "Next"}
             </button>
           </div>
         </div>
       )}
 
-      {share && <AttestShareSheet a={share} fromName={talent.name} onClose={() => setShare(null)} />}
+      {feedbackFor && (
+        <PaperFeedbackSheet a={feedbackFor} talent={talent} papers={papers[feedbackFor.id] || []} onChanged={reload}
+          onClose={() => setFeedbackFor(null)} onSend={() => { const a = feedbackFor; setFeedbackFor(null); setShare(a); }} />
+      )}
+      {share && <AttestShareSheet a={share} fromName={talent.name} phone={contacts[share.id]} papers={(papers[share.id] || []).length} onClose={() => setShare(null)} />}
+      <PhotoViewer url={viewing} onClose={() => setViewing(null)} />
     </div>
   );
 }
 
-function AttestShareSheet({ a, fromName, onClose }) {
-  const msg = attestMessage(a, fromName);
+/* Guest feedback written on paper: a photo, the words the phone reads (the guide checks them), the guest's
+   first name and country. Up to 5 per trip; only while the operator hasn't answered. */
+function PaperFeedbackSheet({ a, talent, papers, onChanged, onClose, onSend }) {
+  const [photo, setPhoto] = useState(null);      // data URL of the photo being added
+  const reader = useLicenceReader(photo);        // the same on-phone reader as for licences
+  const [body, setBody] = useState("");
+  const [touched, setTouched] = useState(false); // the guide has edited the words: don't overwrite them
+  const [who, setWho] = useState("");
+  const [country, setCountry] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const [removing, setRemoving] = useState(null);
+  const [viewing, setViewing] = useState(null);
+  const field = { background: C.card, border: `1px solid ${C.line}`, color: C.ink };
+  // the words appear in the box once read — the guide checks them against the photo
+  useEffect(() => { if (photo && reader.text !== null && !touched) setBody(tidyReadText(reader.text)); }, [photo, reader.text]);
+
+  const pick = (file) => {
+    if (!file) return;
+    setErr(null); setTouched(false); setBody("");
+    const r = new FileReader(); r.onload = () => setPhoto(r.result); r.readAsDataURL(file);
+  };
+  const reset = () => { setPhoto(null); setBody(""); setTouched(false); setWho(""); setCountry(""); setErr(null); };
+  const save = async () => {
+    const words = body.trim();
+    if (!photo) { setErr("Add a photo of the feedback first."); return; }
+    if (words.length < 3) { setErr("Type or correct the guest's words, as written on the paper."); return; }
+    setBusy(true); setErr(null);
+    try {
+      const small = await shrinkImage(photo, 1600, 0.85);
+      const blob = await (await fetch(small)).blob();
+      const path = `${talent.id}/papers/${a.id}/${makeReviewToken().slice(0, 16)}.jpg`;
+      const { error: ue } = await supabase.storage.from("papers").upload(path, blob, { contentType: "image/jpeg" });
+      if (ue) throw ue;
+      const { error } = await supabase.from("attestation_papers").insert({
+        attestation_id: a.id, talent_id: talent.id, body: maskContacts(words).slice(0, 2000),
+        guest_name: who.trim() || null, guest_country: country.trim() || null, photo_path: path,
+        read_by: reader.text && reader.text.trim().length > 10 ? "phone" : "typed",
+      });
+      if (error) { supabase.storage.from("papers").remove([path]).catch(() => {}); throw error; }
+      reset();
+      onChanged && (await onChanged());
+      toast("Feedback added.", "ok");
+    } catch (e) {
+      console.error("paper feedback save failed:", e && e.message);
+      setErr(/up to 5/i.test((e && e.message) || "") ? "Up to 5 feedback photos per trip." : failText("save the feedback"));
+    }
+    setBusy(false);
+  };
+  const removePaper = async (p) => {
+    setRemoving(p.id);
+    const { error } = await supabase.from("attestation_papers").delete().eq("id", p.id);
+    if (!error && p.photo_path) supabase.storage.from("papers").remove([p.photo_path]).catch(() => {});
+    setRemoving(null);
+    if (error) { toast(failText("remove that feedback")); return; }
+    onChanged && onChanged();
+  };
+  const full = papers.length >= 5;
+  const masked = body && maskContacts(body) !== body;
+
+  return (
+    <Sheet onClose={onClose}>
+      <div className="text-[11px] font-semibold tracking-[.12em] uppercase mb-1" style={{ color: C.goldText }}>Guest feedback · optional</div>
+      <div className="text-[18px] font-bold leading-snug mb-1" style={{ color: C.ink }}>{a.tripTitle}</div>
+      <p className="text-[13px] mb-4 leading-snug" style={{ color: C.muted }}>
+        Photos of feedback your guests wrote on paper. The operator you send the link to sees each photo and its words before
+        confirming. Once confirmed, the words show on your profile; the photos are seen only by you, that operator and the hub.
+      </p>
+
+      {papers.length > 0 && (
+        <div className="space-y-2.5 mb-4">
+          {papers.map((p) => (
+            <div key={p.id} className="rounded-xl p-3 flex gap-2.5 items-start" style={{ background: C.bg }}>
+              <div className="flex-1 min-w-0"><PaperQuote p={p} small onOpen={setViewing} /></div>
+              <button type="button" onClick={() => removePaper(p)} disabled={removing === p.id} aria-label="Remove this feedback"
+                className="tap shrink-0 w-8 h-8 rounded-lg flex items-center justify-center" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+                {removing === p.id ? <Loader2 size={13} className="animate-spin" color={C.muted} /> : <Trash2 size={13} color={C.maroon} />}
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {!full && (
+        <div className="rounded-2xl p-3.5 mb-4" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+          <div className="text-[14px] font-semibold mb-2" style={{ color: C.ink }}>{papers.length ? "Add another" : "Add a feedback photo"}</div>
+          {!photo ? (
+            <>
+              <LicencePhotoPick onPick={pick} has={false} />
+              <p className="text-[11.5px] mt-1.5 leading-snug" style={{ color: C.muted }}>Lay the paper flat in good light, the whole page in the photo. The phone reads printed words well; handwriting you'll check and correct.</p>
+            </>
+          ) : (
+            <div className="fade">
+              <div className="flex gap-3 items-start mb-2.5">
+                <button type="button" onClick={() => setViewing(photo)} className="tap shrink-0 rounded-lg overflow-hidden" style={{ width: 84, height: 84, border: `1px solid ${C.line}`, padding: 0 }} aria-label="See the photo larger">
+                  <img src={photo} alt="Feedback photo" className="w-full h-full object-cover" />
+                </button>
+                <div className="flex-1 min-w-0 text-[12.5px] leading-snug" style={{ color: C.muted }}>
+                  {reader.reading ? (
+                    <span className="inline-flex items-center gap-1.5"><Loader2 size={13} className="animate-spin" /> Reading the words…</span>
+                  ) : reader.text && reader.text.trim().length > 10 ? (
+                    "Read by the phone. Check every word against the photo and fix anything it misread."
+                  ) : (
+                    "The phone couldn't read this one (handwriting often can't be). Type the words exactly as written."
+                  )}
+                  <button type="button" onClick={reset} className="tap block mt-1.5 font-semibold" style={{ color: C.pine, background: "transparent", border: 0, padding: 0 }}>Choose another photo</button>
+                </div>
+              </div>
+              <textarea value={body} onChange={(e) => { setBody(e.target.value); setTouched(true); }} rows={5} maxLength={2000} disabled={reader.reading}
+                placeholder={reader.reading ? "Reading…" : "The guest's words, as written"} aria-label="The guest's words"
+                className="w-full px-3 py-2.5 rounded-xl text-[14px] leading-snug resize-none mb-1" style={field} />
+              {masked && <p className="text-[11.5px] mb-1.5" style={{ color: C.goldText }}>Emails and phone numbers in the words will be hidden.</p>}
+              <div className="grid grid-cols-2 gap-2 mb-2.5">
+                <input value={who} onChange={(e) => setWho(e.target.value)} maxLength={60} placeholder="Guest's name (optional)" aria-label="Guest's name"
+                  className="h-11 px-3 rounded-lg text-[14px]" style={field} />
+                <input value={country} onChange={(e) => setCountry(e.target.value)} maxLength={60} placeholder="Country (optional)" aria-label="Guest's country"
+                  className="h-11 px-3 rounded-lg text-[14px]" style={field} />
+              </div>
+              <p className="text-[11px] mb-2.5" style={{ color: C.muted }}>Shown as first name and initial, e.g. “Sarah W.”</p>
+              {err && <p role="alert" className="text-[13px] mb-2" style={{ color: C.maroon }}>{err}</p>}
+              <button type="button" onClick={save} disabled={busy || reader.reading}
+                className="tap w-full h-11 rounded-xl text-[14px] font-semibold inline-flex items-center justify-center gap-2" style={{ background: C.pine, color: "#FFFFFF", border: 0 }}>
+                {busy ? <Loader2 size={16} className="animate-spin" /> : <><Check size={16} /> Save this feedback</>}
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+      {full && <p className="text-[13px] mb-4 rounded-xl px-3 py-2.5" style={{ background: C.bg, color: C.muted }}>This trip has its 5 feedback photos.</p>}
+
+      <button type="button" onClick={onSend}
+        className="tap w-full h-12 rounded-xl text-[15px] font-semibold inline-flex items-center justify-center gap-2 mb-2" style={{ background: C.goldSoft, color: C.goldText, border: 0 }}>
+        <Send size={16} /> {papers.length ? "Done — ask " : "Skip — ask "}{a.operatorName} to confirm
+      </button>
+      <button type="button" onClick={onClose} className="tap w-full h-10 rounded-lg text-[13px] font-semibold" style={{ color: C.muted, background: "transparent", border: 0 }}>Later</button>
+      <PhotoViewer url={viewing} onClose={() => setViewing(null)} />
+    </Sheet>
+  );
+}
+
+function AttestShareSheet({ a, fromName, phone, papers, onClose }) {
+  const msg = attestMessage(a, fromName, papers);
   const [copied, setCopied] = useState(false);
   const copy = async () => { try { await navigator.clipboard.writeText(attestLink(a.token)); setCopied(true); setTimeout(() => setCopied(false), 1500); } catch (e) {} };
+  const digits = waDigits(phone);
+  const wa = digits.length >= 8 ? `https://wa.me/${digits}?text=${encodeURIComponent(msg)}` : `https://wa.me/?text=${encodeURIComponent(msg)}`;
   return (
     <Sheet onClose={onClose}>
       <div className="text-[18px] font-bold mb-1" style={{ color: C.ink }}>Ask {a.operatorName} to confirm</div>
-      <p className="text-[14px] mb-3" style={{ color: C.muted }}>Send this to the person who ran the trip. If they aren't on the hub yet, the link brings them in as an operator first.</p>
+      <p className="text-[14px] mb-3" style={{ color: C.muted }}>
+        {digits.length >= 8 ? `WhatsApp opens straight to their number (${phone}).` : "Send this to the person who ran the trip."} They see the trip{papers ? " and the feedback" : ""} first; if they aren't on the hub yet, they join as an operator to confirm.
+      </p>
       <div className="rounded-xl p-3 text-[13px] leading-relaxed mb-3" style={{ background: C.bg, color: C.ink, border: `1px solid ${C.line}` }} data-testid="attest-message">{msg}</div>
-      <a href={`https://wa.me/?text=${encodeURIComponent(msg)}`} target="_blank" rel="noopener noreferrer"
+      <a href={wa} target="_blank" rel="noopener noreferrer"
         className="tap w-full h-12 rounded-xl text-[15px] font-semibold inline-flex items-center justify-center gap-2 mb-2" style={{ background: "#25D366", color: "#FFFFFF" }}>
         <MessageCircle size={17} /> Send on WhatsApp
       </a>
@@ -14991,17 +15466,55 @@ function AttestShareSheet({ a, fromName, onClose }) {
   );
 }
 
-/* the operator, arriving from the link */
-function AttestSheet({ user, token, preview, onDone }) {
+/* the operator, arriving from the link — BUILD 65: sees the guests' written feedback (photo and words) and confirms
+   exactly what they were shown (the database refuses if the guide changed it meanwhile). If they tapped "Yes" before
+   joining and saw every note then, it's sent once their operator account exists — within 30 minutes, once. */
+const ATTEST_YES_KEY = "bth_attest_yes";
+const seenOf = (papers) => (papers || []).map((p) => ({ id: String(p.id), body: p.body }));
+const sameSeen = (x, y) => JSON.stringify(x || null) === JSON.stringify(y || null);
+function readAttestYes(token) {
+  try {
+    const v = JSON.parse(localStorage.getItem(ATTEST_YES_KEY) || "null");
+    if (!v || v.token !== token || !Array.isArray(v.seen) || Date.now() - Number(v.at || 0) > 30 * 60e3) return null;
+    return v;
+  } catch (e) { return null; }
+}
+function AttestSheet({ user, token, preview: first, onDone }) {
+  const [preview, setPreview] = useState(first);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState(null);
   const [err, setErr] = useState(null);
+  const [viewing, setViewing] = useState(null);
+  const [photosOk, setPhotosOk] = useState(false);   // the database lets this operator see this trip's photos
+  const [fresh, setFresh] = useState(false);
   const isOperator = user.kind === "operator";
-  const answer = async (accept) => {
+  const papers = Array.isArray(preview.papers) ? preview.papers : [];
+  // what the guide has now (not what was fetched before signing in), and access to its photos
+  const refresh = async () => {
+    if (!CLOUD) { setFresh(true); return null; }
+    let latest = null;
+    try {
+      if (isOperator) { const { data } = await supabase.rpc("attest_open", { p_token: token }); setPhotosOk(Boolean(data)); }
+      const { data } = await supabase.rpc("preview_attestation", { p_token: token });
+      if (data) { latest = data; setPreview(data); }
+    } catch (e) {}
+    setFresh(true);
+    return latest;
+  };
+  const answer = async (accept, seenList) => {
     setBusy(true); setErr(null);
-    const { data, error } = await supabase.rpc("respond_attestation", { p_token: token, p_accept: accept });
+    const seen = seenList || seenOf(papers);
+    let { data, error } = await supabase.rpc("respond_attestation", { p_token: token, p_accept: accept, p_seen: seen });
+    if (error && /p_seen|could not find the function|function .* does not exist/i.test(error.message || "")) {
+      ({ data, error } = await supabase.rpc("respond_attestation", { p_token: token, p_accept: accept }));   // a database without BUILD 65
+    }
     setBusy(false);
-    if (error) { setErr(error.message); return; }
+    if (error) {
+      if (!/feedback changed/i.test(error.message || "")) console.error("respond_attestation failed:", error.message);
+      if (/feedback changed/i.test(error.message || "")) { await refresh(); setErr("The guide changed the feedback just now — please look through it again, then confirm."); return; }
+      setErr(/own trip|already been answered|not valid|tour operator account|sign in/i.test(error.message || "") ? error.message : failText("send your answer"));
+      return;
+    }
     setResult(data);
     if (accept && data && data.talent_id) {
       const me = user.talentId || user.id;
@@ -15011,6 +15524,24 @@ function AttestSheet({ user, token, preview, onDone }) {
       } catch (e) {}
     }
   };
+  const auto = useRef(false);
+  const [askLook, setAskLook] = useState(false);
+  useEffect(() => {
+    let on = true;
+    (async () => {
+      const latest = await refresh();
+      if (!on || auto.current) return;
+      const yes = readAttestYes(token);
+      if (!yes) return;
+      auto.current = true;
+      try { localStorage.removeItem(ATTEST_YES_KEY); } catch (e) {}   // used once, whatever happens next
+      const now = latest || preview;
+      const nowSeen = seenOf(Array.isArray(now.papers) ? now.papers : []);
+      if (isOperator && (now.status === "pending") && sameSeen(yes.seen, nowSeen)) answer(true, nowSeen);
+      else if (isOperator && now.status === "pending") setAskLook(true);
+    })();
+    return () => { on = false; };
+  }, [isOperator]);
   return (
     <Sheet onClose={onDone}>
       <div className="text-[11px] font-semibold tracking-[.12em] uppercase mb-1" style={{ color: C.goldText }}>A past trip to confirm</div>
@@ -15019,13 +15550,28 @@ function AttestSheet({ user, token, preview, onDone }) {
       </div>
       <div className="text-[14px] mb-4" style={{ color: C.muted }}>{preview.month ? MONTHS_LONG[preview.month - 1] + " " : ""}{preview.year}{preview.nights ? ` · ${preview.nights} nights` : ""}</div>
 
+      {askLook && !result && (
+        <p className="text-[13px] rounded-xl px-3 py-2.5 mb-3 leading-snug" style={{ background: C.goldSoft, color: C.goldText }}>
+          Please look through all the feedback below, then confirm.
+        </p>
+      )}
+      {!result && papers.length > 0 && (
+        <div className="mb-4">
+          <div className="text-[12px] font-semibold tracking-[.12em] uppercase mb-2" style={{ color: C.goldText }}>Guest feedback, written on paper · {papers.length}</div>
+          <div className="space-y-2.5 rounded-xl p-3" style={{ background: C.bg }}>
+            {papers.map((p) => <PaperQuote key={p.id} p={p} onOpen={photosOk ? setViewing : null} />)}
+          </div>
+          {photosOk && <p className="text-[12px] mt-1.5 leading-snug" style={{ color: C.muted }}>Tap a photo to compare it with the words.</p>}
+        </div>
+      )}
+
       {result ? (
         <div className="rounded-xl p-4 mb-3" style={{ background: result.status === "attested" ? C.pineSoft : C.bg, border: `1px solid ${C.line}` }}>
           <div className="text-[15px] font-semibold" style={{ color: result.status === "attested" ? C.pine : C.ink }}>
             {result.status === "attested" ? "Confirmed — thank you" : "Noted — nothing will show"}
           </div>
           <div className="text-[13px] mt-1" style={{ color: C.muted }}>
-            {result.status === "attested" ? `${preview.talent}'s profile now says “Attested by ${result.attested_by}”.` : `${preview.talent} can correct the details and ask again.`}
+            {result.status === "attested" ? `${preview.talent}'s profile now says “Attested by ${result.attested_by}”${papers.length ? ", with the guests' feedback" : ""}.` : `${preview.talent} can correct the details and ask again.`}
           </div>
         </div>
       ) : !isOperator ? (
@@ -15036,18 +15582,273 @@ function AttestSheet({ user, token, preview, onDone }) {
         <div className="rounded-xl p-4 mb-3 text-[14px]" style={{ background: C.bg, color: C.muted, border: `1px solid ${C.line}` }}>This request has already been answered.</div>
       ) : (
         <>
-          <p className="text-[13px] mb-3 leading-snug" style={{ color: C.muted }}>Confirm only if the details are right as written. If a date or the trip is wrong, choose “Not accurate” — {preview.talent} can fix it and ask again.</p>
-          {err && <p className="text-[13px] mb-2" style={{ color: C.maroon }}>{err}</p>}
+          <p className="text-[13px] mb-3 leading-snug" style={{ color: C.muted }}>
+            Confirm only if the trip is right as written{papers.length ? " and the feedback came from your guests on it" : ""}. If anything is wrong, choose “Not accurate” — {preview.talent} can fix it and ask again.
+          </p>
+          {err && <p role="alert" className="text-[13px] mb-2" style={{ color: C.maroon }}>{err}</p>}
           <div className="flex gap-2 mb-3">
             <button type="button" onClick={() => answer(false)} disabled={busy} className="tap flex-1 h-12 rounded-xl text-[14px] font-semibold" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }}>Not accurate</button>
-            <button type="button" onClick={() => answer(true)} disabled={busy} className="tap flex-[1.4] h-12 rounded-xl text-[15px] font-semibold inline-flex items-center justify-center gap-2" style={{ background: C.pine, color: "#FFFFFF" }}>
-              {busy ? <Loader2 size={16} className="animate-spin" /> : <><Check size={17} strokeWidth={2.6} /> Yes, that's right</>}
+            <button type="button" onClick={() => answer(true)} disabled={busy || !fresh} className="tap flex-[1.4] h-12 rounded-xl text-[15px] font-semibold inline-flex items-center justify-center gap-2" style={{ background: C.pine, color: "#FFFFFF" }}>
+              {busy || !fresh ? <Loader2 size={16} className="animate-spin" /> : <><Check size={17} strokeWidth={2.6} /> Yes, that's right</>}
             </button>
           </div>
         </>
       )}
       <button type="button" onClick={onDone} className="tap w-full h-10 rounded-lg text-[13px] font-semibold" style={{ color: C.muted }}>{result ? "Done" : "Later"}</button>
+      <PhotoViewer url={viewing} onClose={() => setViewing(null)} />
     </Sheet>
+  );
+}
+
+/* ========================================================================== */
+/*  GOOGLE REVIEWS THAT NAME A GUIDE OR DRIVER (BUILD 65)                     */
+/*  Guides rarely have a Google page of their own; their praise sits in        */
+/*  reviews of the operator's page. The guide adds the link to a review that   */
+/*  names them, a screenshot (read by the phone to fill in the words), the     */
+/*  business and the reviewer's first name. It shows on the profile, with "See */
+/*  on Google", only after an admin has opened the link and approved it. The   */
+/*  screenshot stays private; anything the guide changes is checked again.    */
+/*  These don't count towards the hub's guest rating.                          */
+/* ========================================================================== */
+// the same rule as the database: a real Google host (not google.evil.com, not user@host), no spaces
+const GOOGLE_REVIEW_URL = /^https:\/\/((www\.|maps\.)?google\.(com|[a-z]{2}|com?\.[a-z]{2})\/(maps|search)([/?#]|$)|maps\.google\.(com|[a-z]{2}|com?\.[a-z]{2})\/|maps\.app\.goo\.gl\/|goo\.gl\/maps\/|g\.co\/kgs\/|share\.google\/)/i;
+const isGoogleReviewUrl = (u) => {
+  if (!u || /[@\s]/.test(u) || u.length > 600 || !GOOGLE_REVIEW_URL.test(u)) return false;
+  try { const h = new URL(u).hostname.toLowerCase(); return /^((www\.|maps\.)?google\.(com|[a-z]{2}|com?\.[a-z]{2})|maps\.app\.goo\.gl|goo\.gl|g\.co|share\.google)$/.test(h); } catch (e) { return false; }
+};
+// the link out of whatever was pasted (Google's share sheet adds words around it)
+const googleLinkIn = (s) => { const m = String(s || "").match(/https:\/\/\S+/); return m ? m[0].replace(/[).,]+$/, "") : String(s || "").trim(); };
+const GR_COLS = "id,talent_id,url,place_name,reviewer_name,stars,quote,review_month,review_year,screenshot_path,status,created_at";
+
+function useGoogleReviews(talentId, self) {
+  const [rows, setRows] = useState(null);
+  const load = async () => {
+    if (!CLOUD || !talentId) { setRows([]); return; }
+    let q = supabase.from("google_review_links").select(GR_COLS).eq("talent_id", talentId).order("created_at", { ascending: false });
+    if (!self) q = q.eq("status", "approved");
+    const { data, error } = await q;
+    setRows(error ? [] : data || []);   // a database without BUILD 65: nothing shows
+  };
+  useEffect(() => { load(); }, [talentId, self]);
+  return { rows, reload: load };
+}
+
+const GoogleReviewItem = ({ r, children }) => (
+  <div className="rounded-2xl p-4" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+    <div className="flex items-center gap-2 flex-wrap">
+      <GoogleG size={14} />
+      <span className="text-[14px] font-semibold" style={{ color: C.ink }}>{r.reviewer_name || "A guest"}</span>
+      {r.stars ? <Stars score={r.stars} /> : null}
+    </div>
+    <p className="text-[14px] leading-relaxed mt-2 whitespace-pre-line" style={{ color: C.ink }}>“{r.quote}”</p>
+    <div className="flex flex-wrap items-center gap-x-2 gap-y-1 mt-2.5 text-[12px]" style={{ color: C.muted }}>
+      <span>On {r.place_name}'s Google page{r.review_year ? ` · ${r.review_month ? MONTHS_LONG[r.review_month - 1].slice(0, 3) + " " : ""}${r.review_year}` : ""}</span>
+      <a href={r.url} target="_blank" rel="noopener noreferrer nofollow" className="inline-flex items-center gap-1 font-semibold" style={{ color: C.pine }}>
+        See on Google <ExternalLink size={11} />
+      </a>
+    </div>
+    {children}
+  </div>
+);
+
+function GoogleReviewsCard({ talent, self }) {
+  const { rows, reload } = useGoogleReviews(talent.id, self);
+  const [adding, setAdding] = useState(false);
+  const [removing, setRemoving] = useState(null);
+  if (rows === null) return null;
+  const approved = rows.filter((r) => r.status === "approved");
+  const mine = self ? rows.filter((r) => r.status !== "approved") : [];
+  if (!self && approved.length === 0) return null;
+  const canAdd = self && (talent.role === "guide" || talent.role === "driver");
+  const remove = async (r) => {
+    setRemoving(r.id);
+    const { error } = await supabase.from("google_review_links").delete().eq("id", r.id);
+    if (!error && r.screenshot_path) supabase.storage.from("papers").remove([r.screenshot_path]).catch(() => {});
+    setRemoving(null);
+    if (error) { toast(failText("remove it")); return; }
+    reload();
+  };
+  return (
+    <div className="mt-6">
+      <div className="flex items-center justify-between mb-2.5">
+        <div>
+          <div className="text-[12px] font-semibold tracking-[.14em] uppercase inline-flex items-center gap-1.5" style={{ color: C.goldText }}><GoogleG size={12} /> From Google reviews</div>
+          <div className="text-[12px]" style={{ color: C.muted }}>
+            {approved.length ? `${approved.length} ${approved.length === 1 ? "review names" : "reviews name"} ${self ? "you" : String(talent.name || "them").split(" ")[0]} · checked by the hub` : "Reviews on an operator's Google page that name you"}
+          </div>
+        </div>
+        {canAdd && !adding && (
+          <button type="button" onClick={() => setAdding(true)} aria-label="Add a Google review" className="tap h-9 px-3 rounded-lg text-[13px] font-semibold shrink-0 inline-flex items-center gap-1" style={{ background: C.goldSoft, color: C.goldText }}>
+            <Plus size={14} /> Add
+          </button>
+        )}
+      </div>
+      {adding && <GoogleReviewForm talent={talent} onCancel={() => setAdding(false)} onSaved={() => { setAdding(false); reload(); }} />}
+      <div className="space-y-3">
+        {approved.map((r) => (
+          <GoogleReviewItem key={r.id} r={r}>
+            {self && (
+              <button type="button" onClick={() => remove(r)} disabled={removing === r.id} className="tap mt-2 text-[12px] font-semibold" style={{ color: C.maroon, background: "transparent", border: 0, padding: 0 }}>
+                {removing === r.id ? "Removing…" : "Remove"}
+              </button>
+            )}
+          </GoogleReviewItem>
+        ))}
+        {mine.map((r) => (
+          <GoogleReviewItem key={r.id} r={r}>
+            <div className="flex items-center justify-between gap-2 mt-2.5 rounded-lg px-2.5 py-2" style={{ background: r.status === "rejected" ? C.maroonSoft : C.goldSoft }}>
+              <span className="text-[12px] font-semibold" style={{ color: r.status === "rejected" ? C.maroon : C.goldText }}>
+                {r.status === "rejected" ? "Not approved — the link or words didn't match" : "Waiting for the hub to check it"}
+              </span>
+              <button type="button" onClick={() => remove(r)} disabled={removing === r.id} className="tap text-[12px] font-semibold shrink-0" style={{ color: C.maroon, background: "transparent", border: 0, padding: 0 }}>
+                {removing === r.id ? "…" : "Remove"}
+              </button>
+            </div>
+          </GoogleReviewItem>
+        ))}
+      </div>
+      {self && approved.length === 0 && mine.length === 0 && !adding && (
+        <p className="text-[12.5px] leading-snug rounded-xl px-3.5 py-3" style={{ background: C.bg, color: C.muted }}>
+          Did a guest name you in a Google review of the operator you guided for? Add its link and a screenshot. It shows here once the hub has checked it.
+        </p>
+      )}
+    </div>
+  );
+}
+
+function GoogleReviewForm({ talent, onCancel, onSaved }) {
+  const now = new Date();
+  const [shot, setShot] = useState(null);
+  const reader = useLicenceReader(shot);
+  const [f, setF] = useState({ url: "", place: "", name: "", stars: 5, quote: "", month: String(now.getMonth() + 1), year: String(now.getFullYear()) });
+  const [touched, setTouched] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const set = (k, v) => setF((x) => ({ ...x, [k]: v }));
+  const field = { background: C.card, border: `1px solid ${C.line}`, color: C.ink };
+  useEffect(() => { if (shot && reader.text !== null && !touched && !f.quote) set("quote", tidyReadText(reader.text).slice(0, 1500)); }, [shot, reader.text]);
+  const pick = (file) => { if (!file) return; const r = new FileReader(); r.onload = () => { setShot(r.result); setTouched(false); }; r.readAsDataURL(file); };
+  const save = async () => {
+    const url = googleLinkIn(f.url);
+    if (!isGoogleReviewUrl(url)) { setErr("Paste the review's link from Google Maps (Share → Copy link)."); return; }
+    if (f.place.trim().length < 2) { setErr("Whose Google page is it on? e.g. the operator's business name."); return; }
+    if (!shot) { setErr("Add a screenshot of the review."); return; }
+    if (f.quote.trim().length < 3) { setErr("Add the review's words, as written."); return; }
+    setBusy(true); setErr(null);
+    try {
+      const small = await shrinkImage(shot, 1600, 0.85);
+      const blob = await (await fetch(small)).blob();
+      const path = `${talent.id}/google/${makeReviewToken().slice(0, 16)}.jpg`;
+      const { error: ue } = await supabase.storage.from("papers").upload(path, blob, { contentType: "image/jpeg" });
+      if (ue) throw ue;
+      const { error } = await supabase.from("google_review_links").insert({
+        talent_id: talent.id, url, place_name: f.place.trim(), reviewer_name: f.name.trim() || null, stars: Number(f.stars) || null,
+        quote: maskContacts(f.quote.trim()).slice(0, 1500), review_month: Number(f.month) || null, review_year: Number(f.year) || null, screenshot_path: path,
+      });
+      if (error) { supabase.storage.from("papers").remove([path]).catch(() => {}); throw error; }
+      toast("Added. It shows on your profile once the hub has checked it.", "ok");
+      onSaved();
+    } catch (e) {
+      console.error("google review save failed:", e && e.message);
+      const m = (e && e.message) || "";
+      setErr(/duplicate|unique/i.test(m) ? "You've already added that review." : /up to 20/i.test(m) ? "Up to 20 Google reviews." : failText("add the review"));
+    }
+    setBusy(false);
+  };
+  return (
+    <div className="rounded-xl p-3 mb-3" style={{ background: C.bg, border: `1px solid ${C.line}` }}>
+      <input value={f.url} onChange={(e) => set("url", e.target.value)} inputMode="url" autoCapitalize="none" placeholder="The review's link (Google Maps → Share → Copy link)" aria-label="Google review link"
+        className="w-full h-11 px-3 rounded-lg text-[14px] mb-2" style={field} />
+      <input value={f.place} onChange={(e) => set("place", e.target.value)} maxLength={100} placeholder="Whose page, e.g. Ugyen Travels" aria-label="Business on Google"
+        className="w-full h-11 px-3 rounded-lg text-[14px] mb-2" style={field} />
+      <div className="text-[13px] font-medium mb-1.5" style={{ color: C.ink }}>Screenshot of the review</div>
+      {!shot ? <LicencePhotoPick onPick={(file) => pick(file)} has={false} /> : (
+        <div className="flex gap-3 items-start mb-2">
+          <img src={shot} alt="Screenshot" className="rounded-lg object-cover shrink-0" style={{ width: 72, height: 72, border: `1px solid ${C.line}` }} />
+          <div className="text-[12px] leading-snug" style={{ color: C.muted }}>
+            {reader.reading ? <span className="inline-flex items-center gap-1.5"><Loader2 size={12} className="animate-spin" /> Reading the words…</span> : "Check the words below against the screenshot."}
+            <button type="button" onClick={() => { setShot(null); if (!touched) set("quote", ""); setTouched(false); }} className="tap block mt-1 font-semibold" style={{ color: C.pine, background: "transparent", border: 0, padding: 0 }}>Choose another</button>
+          </div>
+        </div>
+      )}
+      <textarea value={f.quote} onChange={(e) => { set("quote", e.target.value); setTouched(true); }} rows={4} maxLength={1500} disabled={reader.reading}
+        placeholder="The review's words — keep just the review, as written" aria-label="The review's words"
+        className="w-full px-3 py-2.5 rounded-xl text-[14px] leading-snug resize-none mt-2 mb-2" style={field} />
+      <div className="grid grid-cols-2 gap-2 mb-2">
+        <input value={f.name} onChange={(e) => set("name", e.target.value)} maxLength={60} placeholder="Reviewer's name" aria-label="Reviewer's name"
+          className="h-11 px-3 rounded-lg text-[14px]" style={field} />
+        <select value={f.stars} onChange={(e) => set("stars", e.target.value)} aria-label="Stars" className="h-11 px-2 rounded-lg text-[14px]" style={field}>
+          {[5, 4, 3, 2, 1].map((n) => <option key={n} value={n}>{"★".repeat(n)} {n}</option>)}
+        </select>
+        <select value={f.month} onChange={(e) => set("month", e.target.value)} aria-label="Month" className="h-11 px-2 rounded-lg text-[13px]" style={field}>
+          {MONTHS_LONG.map((m, i) => <option key={m} value={i + 1}>{m}</option>)}
+        </select>
+        <input type="number" value={f.year} onChange={(e) => set("year", e.target.value)} min={2000} max={now.getFullYear()} aria-label="Year" className="h-11 px-2 rounded-lg text-[13px]" style={field} />
+      </div>
+      <p className="text-[11px] mb-2.5 leading-snug" style={{ color: C.muted }}>Shown as first name and initial. The hub opens the link to check it before it appears; only you and the hub see the screenshot.</p>
+      {err && <p role="alert" className="text-[13px] mb-2" style={{ color: C.maroon }}>{err}</p>}
+      <div className="flex gap-2">
+        <button type="button" onClick={onCancel} className="tap flex-1 h-10 rounded-lg text-[13px] font-semibold" style={{ background: C.card, color: C.muted }}>Cancel</button>
+        <button type="button" onClick={save} disabled={busy || reader.reading} className="tap flex-[1.4] h-10 rounded-lg text-[13px] font-semibold inline-flex items-center justify-center" style={{ background: C.pine, color: "#FFFFFF" }}>
+          {busy ? <Loader2 size={14} className="animate-spin" /> : "Add for checking"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* Admin → Users: Google reviews waiting to be checked. Open the link, compare, approve or not. */
+function AdminGoogleReviews() {
+  const [rows, setRows] = useState(null);
+  const [busy, setBusy] = useState(null);
+  const [viewing, setViewing] = useState(null);
+  const load = async () => {
+    if (!CLOUD) { setRows([]); return; }
+    const { data, error } = await supabase.from("google_review_links").select(GR_COLS).eq("status", "pending").order("created_at", { ascending: true }).limit(30);
+    setRows(error ? [] : data || []);
+  };
+  useEffect(() => { load(); }, []);
+  if (!rows || rows.length === 0) return null;
+  const decide = async (r, status) => {
+    setBusy(r.id);
+    const { error } = await supabase.from("google_review_links").update({ status }).eq("id", r.id);
+    setBusy(null);
+    if (error) { toast(failText("save that")); return; }
+    toast(status === "approved" ? "Approved — it's on their profile." : "Not approved.", "ok");
+    load();
+  };
+  return (
+    <div className="rounded-2xl p-3.5 mb-4" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+      <div className="text-[12px] font-semibold tracking-[.12em] uppercase mb-1 inline-flex items-center gap-1.5" style={{ color: C.goldText }}><GoogleG size={12} /> Google reviews to check · {rows.length}</div>
+      <p className="text-[12px] mb-3 leading-snug" style={{ color: C.muted }}>Open each link: approve only if it's a real Google review that names this person, with the same words.</p>
+      <div className="space-y-3">
+        {rows.map((r) => {
+          const t = talentById(r.talent_id);
+          return (
+            <div key={r.id} className="rounded-xl p-3" style={{ background: C.bg }}>
+              <div className="text-[13px] font-semibold mb-1.5" style={{ color: C.ink }}>For {(t && t.name) || "a member"}{t && t.role ? ` · ${roleWord(t.role)}` : ""}</div>
+              <div className="flex gap-2.5 items-start">
+                {r.screenshot_path && <PaperPhoto path={r.screenshot_path} size={56} onOpen={setViewing} />}
+                <div className="flex-1 min-w-0">
+                  <p className="text-[13px] leading-snug" style={{ color: C.ink }}>“{r.quote}”</p>
+                  <div className="text-[12px] mt-1" style={{ color: C.muted }}>{r.reviewer_name || "Guest"}{r.stars ? ` · ${r.stars}★` : ""} · on {r.place_name}</div>
+                  <a href={r.url} target="_blank" rel="noopener noreferrer nofollow" className="text-[12px] font-semibold inline-flex items-center gap-1 mt-1 break-all" style={{ color: C.pine }}>
+                    Open on Google <ExternalLink size={11} />
+                  </a>
+                </div>
+              </div>
+              <div className="flex gap-2 mt-2.5">
+                <button type="button" disabled={busy === r.id} onClick={() => decide(r, "rejected")} className="tap flex-1 h-9 rounded-lg text-[13px] font-semibold" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.muted }}>Not approved</button>
+                <button type="button" disabled={busy === r.id} onClick={() => decide(r, "approved")} className="tap flex-[1.4] h-9 rounded-lg text-[13px] font-semibold inline-flex items-center justify-center gap-1" style={{ background: C.pine, color: "#FFFFFF", border: 0 }}>
+                  {busy === r.id ? <Loader2 size={14} className="animate-spin" /> : <><Check size={14} /> Approve</>}
+                </button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <PhotoViewer url={viewing} onClose={() => setViewing(null)} />
+    </div>
   );
 }
 
