@@ -66,7 +66,7 @@ const CLOUD = Boolean(supabase);
   } catch (e) {}
 })();
 const DEMO_MODE = false;   // set true only for local demos without a database
-const BUILD = "BUILD 65 — 13 Oct";   // bump every deploy; shown at the top of the welcome screen
+const BUILD = "BUILD 66 — 15 Oct";   // bump every deploy; shown at the top of the welcome screen
 // which device someone is on — shown beside the build so a screenshot tells us both
 const DEVICE = (() => {
   try {
@@ -3508,7 +3508,8 @@ function TalentProfile({ talent, posts, canRequest, self, contactOnly, eng, onRe
         <ProfileTabs
           cv={
             <>
-              <GuestReviews talentId={t.id} isAdmin={eng?.isAdmin} isSelf={self} onAskOperator={() => setAskOperator(true)} />
+              {t.role === "operator" ? <CompanyReviewsCard operator={t} self={!!self} />
+                : <GuestReviews talentId={t.id} isAdmin={eng?.isAdmin} isSelf={self} onAskOperator={() => setAskOperator(true)} />}
               {(t.role === "guide" || t.role === "driver") && <GoogleReviewsCard talent={t} self={!!self} />}
 
               <div className="mt-6" />
@@ -5248,6 +5249,7 @@ function AdminUsers({ onChanged, currentAdminId }) {
       <AdminDraftsPanel adminId={currentAdminId} onChanged={onChanged} />
       <AdminTrailStatus />
       <AdminGoogleReviews />
+      <AdminCompanyReports />
 
       {rows === null ? (
         <div className="flex items-center gap-2 text-[14px] py-6 justify-center" style={{ color: C.muted }}><Loader2 size={17} className="animate-spin" /> Loading…</div>
@@ -7732,7 +7734,8 @@ const DetailStars = ({ label, hint, value, onChange }) => (
 const CrewPhoto = ({ person, size }) => <Avatar initials={initialsOf(person.name)} src={person.photo} size={size} />;
 
 const ReviewCard = ({ person, draft, onChange }) => {
-  const first = String(person.name || "").split(" ")[0] || "them";
+  const isCompany = Boolean(person.isCompany);   // BUILD 66: the trip's tour company, on the same page
+  const first = isCompany ? (person.name || "the company") : (String(person.name || "").split(" ")[0] || "them");
   const driver = /driver/i.test(person.role || "");
   const set = (k, v) => onChange({ ...draft, [k]: v });
   const head = (
@@ -7740,7 +7743,7 @@ const ReviewCard = ({ person, draft, onChange }) => {
       <CrewPhoto person={person} size={76} />
       <div className="text-[15px] font-semibold leading-tight mt-2.5" style={{ color: C.ink }}>{person.name}</div>
       <div className="text-[10.5px] font-semibold tracking-[.12em] uppercase mt-1" style={{ color: C.goldText }}>
-        {roleWord(person.role)}{person.base ? ` · ${person.base}` : ""}
+        {isCompany ? "Tour company" : roleWord(person.role)}{!isCompany && person.base ? ` · ${person.base}` : ""}
       </div>
     </div>
   );
@@ -7770,13 +7773,13 @@ const ReviewCard = ({ person, draft, onChange }) => {
             aria-label={`What stood out about ${first}?`} placeholder={`What stood out about ${first}?`}
             className="w-full px-2.5 py-2 rounded-xl leading-snug resize-none"
             style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
-          <button type="button" onClick={() => set("open", !draft.open)} aria-expanded={Boolean(draft.open)}
+          {!isCompany && <button type="button" onClick={() => set("open", !draft.open)} aria-expanded={Boolean(draft.open)}
             className="tap w-full flex items-center justify-between mt-1.5 py-1.5 text-[12.5px] font-medium"
             style={{ color: C.muted, background: "transparent", border: 0 }}>
             <span>Details · optional</span>
             <ChevronLeft size={15} color={C.muted} style={{ transform: draft.open ? "rotate(90deg)" : "rotate(-90deg)", transition: "transform .2s" }} />
-          </button>
-          {draft.open && (
+          </button>}
+          {!isCompany && draft.open && (
             <div className="fade rounded-xl px-2.5 py-1" style={{ background: C.bg }}>
               <DetailStars label="Knowledge" hint={driver ? "Roads, places, timing" : "Culture, history, nature"} value={draft.knowledge || 0} onChange={(n) => set("knowledge", n)} />
               <DetailStars label="Care" hint={driver ? "Safe, smooth driving" : "Looking after your group"} value={draft.care || 0} onChange={(n) => set("care", n)} />
@@ -7844,6 +7847,7 @@ function GuestReview({ token }) {
   const [me, setMe] = useState(null);              // the Google guest signed in here: { name: "Sarah T.", email: "s•••@gmail.com" }
   const [legacy, setLegacy] = useState(false);     // a database without BUILD 64: the review is sent without Google, as before
   const [crew, setCrew] = useState([]);            // the people this guest may review
+  const [company, setCompany] = useState(null);    // BUILD 66: the trip's tour company { id: "__company", name, photo, done }
   const [drafts, setDrafts] = useState({});        // person id → { rating, body, knowledge, care, comms, open }
   const [country, setCountry] = useState("");
   const [busy, setBusy] = useState(false);
@@ -7868,13 +7872,16 @@ function GuestReview({ token }) {
     if (people.length === 0) { setState("invalid"); return; }
     setInfo(data.token || {});
     setCrew(people);
+    const co = data.company && data.company.id ? { id: "__company", isCompany: true, name: data.company.name || "Your tour company", role: "company",
+      base: "", photo: data.company.photo_url || null, done: Boolean(data.company.done) } : null;
+    setCompany(co);
     const old = !Object.prototype.hasOwnProperty.call(data, "me");
     setLegacy(old);
     const m = data.me || null;
     if (!old && m && m.member) { setMe(null); setState("member"); return; }
     if (!old && !(m && m.google)) { setMe(null); setState("gate"); return; }
     setMe(m && m.google ? { name: m.name || "", email: m.email || "" } : null);
-    setState(people.every((p) => p.done) ? (old ? "used" : "alldone") : "form");
+    setState(people.every((p) => p.done) && (!co || co.done) ? (old ? "used" : "alldone") : "form");
   };
   useEffect(() => { load(); }, [token]);
 
@@ -7904,18 +7911,24 @@ function GuestReview({ token }) {
     load();
   };
 
-  const open = crew.filter((p) => !p.done);
+  const everyone = company ? [...crew, company] : crew;   // the crew, then the company
+  const open = everyone.filter((p) => !p.done);
   const rated = open.filter((p) => (drafts[p.id] || {}).rating > 0);
 
   const submit = async () => {
     if (rated.length === 0) { setErr("Tap the stars under someone's photo to rate them."); return; }
     setBusy(true); setErr(null);
-    const reviews = rated.map((p) => {
+    const reviews = rated.filter((p) => !p.isCompany).map((p) => {
       const d = drafts[p.id] || {};
       return { talent_id: p.id, rating: d.rating, knowledge: d.knowledge || null, care: d.care || null, communication: d.comms || null, body: String(d.body || "").trim() || null };
     });
     // All of this guest's reviews are saved together (one database step)
-    const { data, error } = await supabase.rpc("submit_guest_reviews", { p_token: token, p_reviews: reviews, p_country: country.trim() || null });
+    const cd = company && rated.some((p) => p.isCompany) ? drafts[company.id] || {} : null;
+    const args = { p_token: token, p_reviews: reviews, p_country: country.trim() || null };
+    let { data, error } = await supabase.rpc("submit_guest_reviews", cd ? { ...args, p_company: { rating: cd.rating, body: String(cd.body || "").trim() || null } } : args);
+    if (cd && error && /p_company|could not find the function|function .* does not exist/i.test(error.message || "")) {
+      ({ data, error } = await supabase.rpc("submit_guest_reviews", args));   // a database without BUILD 66
+    }
     if (!alive.current) return;
     setBusy(false);
     if (error) {
@@ -7935,7 +7948,8 @@ function GuestReview({ token }) {
     }
     // the database says whom it saved (anyone already reviewed by this guest through another link is left out)
     const savedIds = Array.isArray(data.saved) ? data.saved.map(String) : null;
-    setSentTo(rated.filter((p) => !savedIds || savedIds.includes(p.id)).map((p) => String(p.name).split(" ")[0]));
+    setSentTo(rated.filter((p) => p.isCompany ? Boolean(data.company) : (!savedIds || savedIds.includes(p.id)))
+      .map((p) => ({ name: p.isCompany ? p.name : String(p.name).split(" ")[0], company: Boolean(p.isCompany) })));
     setState("done");
     // the guest isn't kept signed in: the review is all they came for
     if (!legacy) { try { await supabase.auth.signOut({ scope: "local" }); } catch (e) {} }
@@ -7954,7 +7968,7 @@ function GuestReview({ token }) {
   if (state === "used") return <Message Icon={CheckCheck} title="Already sent — thank you"
     body="This review link has been used. If you'd like to add something, ask your guide or tour operator for a new link." tone="good" />;
   if (state === "alldone") return <Message Icon={CheckCheck} title="Already reviewed — thank you" tone="good"
-    body="You've reviewed everyone from this trip. Each guest reviews each guide and driver once." />;
+    body="You've reviewed everyone from this trip. Each guest reviews each guide, driver and the tour company once." />;
   if (state === "expired") return <Message Icon={Clock} title="This link has closed"
     body="Ask your guide or tour operator for a new one — we'd be glad to hear from you." />;
   if (state === "full") return <Message Icon={Clock} title="This link is full"
@@ -7966,8 +7980,11 @@ function GuestReview({ token }) {
   if (state === "done") {
     const guestFirst = me && me.name ? String(me.name).split(" ")[0] : info && info.guest_name ? String(info.guest_name).split(" ")[0] : "";
     const shownAs = me && me.name ? ` It will show as “${me.name}${country.trim() ? ` · ${country.trim()}` : ""}”.` : "";
+    const people = sentTo.filter((x) => !x.company).map((x) => x.name), co = sentTo.find((x) => x.company);
+    const crewPart = people.length ? `Your ${people.length > 1 ? "reviews" : "review"} of ${joinNames(people)} ${people.length > 1 ? "go" : "goes"} to your tour operator to confirm, then ${people.length > 1 ? "appear on their profiles" : "appears on their profile"} as part of their professional record.` : "";
+    const coPart = co ? `${people.length ? " " : ""}Your review of ${co.name} is on its page now.` : "";
     return <Message Icon={Check} title={guestFirst ? `Thank you, ${guestFirst}` : "Thank you"} tone="good"
-      body={`Your ${sentTo.length > 1 ? "reviews" : "review"} of ${joinNames(sentTo)} ${sentTo.length > 1 ? "go" : "goes"} to your tour operator to confirm, then ${sentTo.length > 1 ? "appear on their profiles" : "appears on their profile"} as part of their professional record.${shownAs}`} />;
+      body={`${crewPart}${coPart}${shownAs}`} />;
   }
 
   const who = crewPhrase(crew);
@@ -7990,11 +8007,11 @@ function GuestReview({ token }) {
         {tripPill}
       </div>
       <div className="flex justify-center flex-wrap gap-4 mb-6" aria-label="Who you can review">
-        {crew.map((p) => (
+        {everyone.map((p) => (
           <div key={p.id} className="flex flex-col items-center text-center" style={{ width: 112 }}>
             <CrewPhoto person={p} size={64} />
             <div className="text-[13px] font-semibold leading-tight mt-2 w-full" style={{ color: C.ink, overflowWrap: "anywhere" }}>{p.name}</div>
-            <div className="text-[10px] font-semibold tracking-[.12em] uppercase mt-0.5" style={{ color: C.goldText }}>{roleWord(p.role)}</div>
+            <div className="text-[10px] font-semibold tracking-[.12em] uppercase mt-0.5" style={{ color: C.goldText }}>{p.isCompany ? "Tour company" : roleWord(p.role)}</div>
           </div>
         ))}
       </div>
@@ -8031,7 +8048,7 @@ function GuestReview({ token }) {
   );
 
   const guestFirst = me && me.name ? String(me.name).split(" ")[0] : info && info.guest_name ? String(info.guest_name).split(" ")[0] : "";
-  const sendLabel = rated.length > 1 ? `Send ${rated.length} reviews` : rated.length === 1 ? `Send my review of ${String(rated[0].name).split(" ")[0]}` : "Send my review";
+  const sendLabel = rated.length > 1 ? `Send ${rated.length} reviews` : rated.length === 1 ? `Send my review of ${rated[0].isCompany ? rated[0].name : String(rated[0].name).split(" ")[0]}` : "Send my review";
   return (
     <ReviewPage>
       <div className="text-center mb-5">
@@ -8053,8 +8070,8 @@ function GuestReview({ token }) {
         )}
       </div>
 
-      <div className={`bth-crew-grid n${Math.min(crew.length, 3)}`}>
-        {crew.map((p) => (
+      <div className={`bth-crew-grid n${Math.min(everyone.length, 3)}`}>
+        {everyone.map((p) => (
           <ReviewCard key={p.id} person={p} draft={drafts[p.id] || {}}
             onChange={(d) => { setErr(null); setDrafts((x) => ({ ...x, [p.id]: d })); }} />
         ))}
@@ -8077,8 +8094,8 @@ function GuestReview({ token }) {
           {busy ? <Loader2 size={18} className="animate-spin" /> : sendLabel}
         </button>
         <p className="text-[12px] text-center leading-snug mt-3.5" style={{ color: C.muted }}>
-          Each review goes to your tour operator to confirm, then appears on that person's profile as part of their
-          professional record{me && me.name ? `, as “${me.name}” with your country` : ""}. Please be honest — that is what makes it worth something.
+          {company ? "Reviews of your guide and driver go to your tour operator to confirm; your review of the company goes straight onto its page. " : "Each review goes to your tour operator to confirm, then appears on that person's profile as part of their professional record. "}
+          {me && me.name ? `They show as “${me.name}” with your country. ` : ""}Please be honest — that is what makes it worth something.
         </p>
       </div>
     </ReviewPage>
@@ -8523,7 +8540,7 @@ ${url}`;
                   {people.slice(0, 4).map((p) => <div key={p.id} className="rounded-full" style={{ boxShadow: `0 0 0 2px ${C.bg}` }}><Avatar initials={p.initials} src={p.photo} size={34} /></div>)}
                 </div>
                 <p className="text-[13px] leading-snug" style={{ color: C.ink }}>
-                  One link for the whole group. Each guest signs in with Google and reviews {people.length > 1 ? "each of " : ""}<b>{people.map((p) => `${String(p.name).split(" ")[0]} (${roleWord(p.role).toLowerCase()})`).join(", ")}</b>{people.length > 1 ? ", separately" : ""}.
+                  One link for the whole group. Each guest signs in with Google and reviews each of <b>{people.map((p) => `${String(p.name).split(" ")[0]} (${roleWord(p.role).toLowerCase()})`).join(", ")}</b> and <b>{trip.operator || "the tour company"}</b>, separately.
                 </p>
               </div>
 
@@ -8559,6 +8576,9 @@ ${url}`;
             </>
           )}
 
+          {/* ---- reviews of the company from this trip (operator): published at once; report only ---- */}
+          {isOp && <TripCompanyReviews trip={trip} />}
+
           {/* ---- published (operator) ---- */}
           {isOp && published.length > 0 && (
             <div className="mb-5">
@@ -8581,9 +8601,9 @@ ${url}`;
           <div className="rounded-xl p-3.5 flex gap-2.5" style={{ background: C.bg, border: `1px solid ${C.line}` }}>
             <ShieldCheck size={16} color={C.gold} className="shrink-0 mt-0.5" />
             <p className="text-[12px] leading-snug" style={{ color: C.muted }}>
-              Guests sign in with Google, so each Google account reviews each of the crew once.
+              Guests sign in with Google, so each Google account reviews each of the crew, and the company, once — and no more guests than the trip had.
               Reviews show the guest's first name, last initial and country, never their email.
-              {isOp ? " Nothing appears on a profile until you publish it." : ` Nothing appears on your profile until ${opName} publishes it.`}
+              {isOp ? " Crew reviews appear once you publish them, marked “Attested by” your company. Reviews of your company appear at once; you can report one to the hub." : ` Nothing appears on your profile until ${opName} publishes it.`}
             </p>
           </div>
         </div>
@@ -8595,6 +8615,189 @@ ${url}`;
 /* ========================================================================== */
 /*  GUEST REVIEWS on a profile — with visible provenance                      */
 /* ========================================================================== */
+/*  REVIEWS OF A TOUR COMPANY (BUILD 66)                                      */
+/*  Guests rate the company on the same review page as its guides and         */
+/*  drivers. These publish at once: the operator can't hide them, only report  */
+/*  one to the hub (it stays visible until an admin keeps or hides it).       */
+/* ========================================================================== */
+const CR_COLS = "id,operator_id,trip_id,guest_name,guest_country,rating,body,trip_label,status,report_reason,reported_at,verified,created_at";
+
+function ReportCompanyReview({ r, onDone }) {
+  const [open, setOpen] = useState(false);
+  const [why, setWhy] = useState("");
+  const [busy, setBusy] = useState(false);
+  if (r.status === "reported") return <span className="text-[12px] font-semibold" style={{ color: C.goldText }}>Reported — the hub is checking</span>;
+  if (!open) return (
+    <button type="button" onClick={() => setOpen(true)} className="tap text-[12px] font-semibold" style={{ color: C.muted, background: "transparent", border: 0, padding: 0 }}>
+      Report to the hub
+    </button>
+  );
+  const send = async () => {
+    if (why.trim().length < 5) { toast("Say briefly what's wrong with it.", "info"); return; }
+    setBusy(true);
+    const { error } = await supabase.from("company_reviews").update({ status: "reported", report_reason: why.trim().slice(0, 300) }).eq("id", r.id);
+    setBusy(false);
+    if (error) { console.error("company_reviews report failed:", error.message); toast(failText("report it")); return; }
+    toast("Reported. It stays up until the hub has checked it.", "ok");
+    setOpen(false); onDone && onDone();
+  };
+  return (
+    <div className="mt-2 w-full">
+      <input value={why} onChange={(e) => setWhy(e.target.value)} maxLength={300} placeholder="What's wrong? e.g. not one of our guests" aria-label="Why report this review"
+        className="w-full h-10 px-3 rounded-lg text-[13px] mb-1.5" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
+      <div className="flex gap-2">
+        <button type="button" onClick={() => setOpen(false)} className="tap flex-1 h-9 rounded-lg text-[12px] font-semibold" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.muted }}>Cancel</button>
+        <button type="button" onClick={send} disabled={busy} className="tap flex-[1.4] h-9 rounded-lg text-[12px] font-semibold" style={{ background: C.maroon, color: "#FFFFFF", border: 0 }}>
+          {busy ? <Loader2 size={13} className="animate-spin" /> : "Report"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+const CompanyReviewItem = ({ r, children }) => (
+  <div className="rounded-2xl p-4" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+    <div className="flex items-center gap-2 flex-wrap">
+      <span className="text-[14px] font-semibold" style={{ color: C.ink }}>{shortGuest(r.guest_name) || "A guest"}</span>
+      {r.guest_country && <span className="text-[12px]" style={{ color: C.muted }}>· {r.guest_country}</span>}
+      <Stars score={Number(r.rating) || 0} />
+    </div>
+    {r.body && <p className="text-[14px] leading-relaxed mt-2 whitespace-pre-line" style={{ color: C.ink }}>{r.body}</p>}
+    <div className="flex flex-wrap items-center gap-1.5 mt-2.5">
+      {r.trip_label && <span className="text-[11px] rounded-full px-2 py-1" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.muted }}>{r.trip_label}</span>}
+      {r.verified === "google" && (
+        <span className="inline-flex items-center gap-1 text-[11px] font-semibold rounded-full px-2 py-1" style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.muted }}>
+          <GoogleG size={10} /> Verified with Google
+        </span>
+      )}
+      <span className="text-[11px]" style={{ color: C.muted }}>{relTime(new Date(r.created_at).getTime())}</span>
+    </div>
+    {children}
+  </div>
+);
+
+function CompanyReviewsCard({ operator, self }) {
+  const [rows, setRows] = useState(null);
+  const load = async () => {
+    if (!CLOUD || !operator.id) { setRows([]); return; }
+    const { data, error } = await supabase.from("company_reviews").select(CR_COLS).eq("operator_id", operator.id)
+      .in("status", ["published", "reported"]).order("created_at", { ascending: false }).limit(60);
+    setRows(error ? [] : data || []);   // a database without BUILD 66: nothing shows
+  };
+  useEffect(() => { load(); }, [operator.id]);
+  if (rows === null) return null;
+  const name = operator.company || operator.name || "this company";
+  if (!rows.length) {
+    return (
+      <div className="rounded-2xl px-5 py-7 flex flex-col items-center text-center mb-2" style={{ background: C.card, border: `1px dashed ${C.line}` }}>
+        <div className="w-12 h-12 rounded-2xl flex items-center justify-center mb-3" style={{ background: C.goldSoft }}><Star size={22} color={C.gold} /></div>
+        <div className="text-[15px] font-semibold" style={{ color: C.ink }}>No guest reviews of {name} yet</div>
+        <p className="text-[13px] leading-snug mt-1.5" style={{ color: C.muted }}>
+          {self ? "After a trip, the review link your guide, driver or you send asks guests about the company too." : "Guests review the company after real trips on the hub."}
+        </p>
+      </div>
+    );
+  }
+  const avg = rows.reduce((a, r) => a + (Number(r.rating) || 0), 0) / rows.length;
+  return (
+    <div className="mb-2">
+      <div className="rounded-2xl px-4 py-3.5 mb-3 flex items-center justify-between" style={{ background: C.pine }}>
+        <div>
+          <div className="text-[11px] font-semibold tracking-[.14em] uppercase" style={{ color: C.goldSoft }}>Guest reviews of {name}</div>
+          <div className="text-[13px] mt-0.5" style={{ color: "#ffffffcc" }}>{rows.length} {rows.length === 1 ? "review" : "reviews"}</div>
+        </div>
+        <div className="text-right">
+          <div className="text-[26px] font-semibold leading-none text-white">{avg.toFixed(1)}</div>
+          <div className="mt-1 flex justify-end"><Stars score={avg} light /></div>
+        </div>
+      </div>
+      <div className="space-y-3">
+        {rows.map((r) => (
+          <CompanyReviewItem key={r.id} r={r}>
+            {self && <div className="mt-2.5"><ReportCompanyReview r={r} onDone={load} /></div>}
+          </CompanyReviewItem>
+        ))}
+      </div>
+      <p className="text-[12px] text-center mt-4 leading-snug" style={{ color: C.muted }}>
+        Guests sign in with Google to review, once per trip, and no trip gets more reviews than it had guests. Companies can't remove reviews — only report one to the hub.
+      </p>
+    </div>
+  );
+}
+
+/* Admin → Users: company reviews an operator has reported. Keep it, or hide it. */
+function AdminCompanyReports() {
+  const [rows, setRows] = useState(null);
+  const [emails, setEmails] = useState({});
+  const [busy, setBusy] = useState(null);
+  const load = async () => {
+    if (!CLOUD) { setRows([]); return; }
+    const { data, error } = await supabase.from("company_reviews").select(CR_COLS).eq("status", "reported").order("reported_at", { ascending: true }).limit(30);
+    const list = error ? [] : data || [];
+    setRows(list);
+    if (list.length) {
+      const { data: P } = await supabase.from("company_review_private").select("review_id,email_masked").in("review_id", list.map((r) => r.id));
+      const m = {}; (P || []).forEach((x) => { m[x.review_id] = x.email_masked; }); setEmails(m);
+    }
+  };
+  useEffect(() => { load(); }, []);
+  if (!rows || rows.length === 0) return null;
+  const decide = async (r, status) => {
+    setBusy(r.id);
+    const { error } = await supabase.from("company_reviews").update({ status }).eq("id", r.id);
+    setBusy(null);
+    if (error) { toast(failText("save that")); return; }
+    toast(status === "hidden" ? "Hidden from the company's page." : "Kept — it stays on the company's page.", "ok");
+    load();
+  };
+  return (
+    <div className="rounded-2xl p-3.5 mb-4" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+      <div className="text-[12px] font-semibold tracking-[.12em] uppercase mb-1" style={{ color: C.maroon }}>Company reviews reported · {rows.length}</div>
+      <p className="text-[12px] mb-3 leading-snug" style={{ color: C.muted }}>A company asked you to look at these. Hide only if it clearly isn't a real guest of that trip — not because it's critical.</p>
+      <div className="space-y-3">
+        {rows.map((r) => {
+          const op = talentById(r.operator_id);
+          return (
+            <div key={r.id} className="rounded-xl p-3" style={{ background: C.bg }}>
+              <div className="text-[13px] font-semibold mb-1" style={{ color: C.ink }}>About {(op && (op.company || op.name)) || "a company"}</div>
+              <div className="text-[12px] mb-1" style={{ color: C.muted }}>{shortGuest(r.guest_name) || "Guest"} · {r.rating}★{emails[r.id] ? ` · ${emails[r.id]}` : ""}{r.trip_label ? ` · ${r.trip_label}` : ""}</div>
+              {r.body && <p className="text-[13px] leading-snug" style={{ color: C.ink }}>“{r.body}”</p>}
+              <div className="text-[12px] mt-1.5 rounded-lg px-2.5 py-1.5" style={{ background: C.maroonSoft, color: C.maroon }}>Their reason: {r.report_reason || "—"}</div>
+              <div className="flex gap-2 mt-2.5">
+                <button type="button" disabled={busy === r.id} onClick={() => decide(r, "hidden")} className="tap flex-1 h-9 rounded-lg text-[13px] font-semibold" style={{ background: C.card, border: `1px solid ${C.line}`, color: C.maroon }}>Hide it</button>
+                <button type="button" disabled={busy === r.id} onClick={() => decide(r, "published")} className="tap flex-[1.4] h-9 rounded-lg text-[13px] font-semibold" style={{ background: C.pine, color: "#FFFFFF", border: 0 }}>
+                  {busy === r.id ? <Loader2 size={14} className="animate-spin" /> : "Keep it"}
+                </button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// the company's reviews from one trip, in the operator's sheet
+function TripCompanyReviews({ trip }) {
+  const [rows, setRows] = useState(null);
+  const load = async () => {
+    if (!CLOUD) { setRows([]); return; }
+    const { data, error } = await supabase.from("company_reviews").select(CR_COLS).eq("trip_id", trip.id).in("status", ["published", "reported"]).order("created_at", { ascending: false });
+    setRows(error ? [] : data || []);
+  };
+  useEffect(() => { load(); }, [trip.id]);
+  if (!rows || !rows.length) return null;
+  return (
+    <div className="mb-5">
+      <div className="text-[12px] font-semibold tracking-[.12em] uppercase mb-2" style={{ color: C.goldText }}>About your company · {rows.length}</div>
+      <div className="space-y-2.5">
+        {rows.map((r) => <CompanyReviewItem key={r.id} r={r}><div className="mt-2.5"><ReportCompanyReview r={r} onDone={load} /></div></CompanyReviewItem>)}
+      </div>
+    </div>
+  );
+}
+
+/* ========================================================================== */
 function GuestReviews({ talentId, isAdmin, isSelf, onAskOperator, onCount }) {
   const [rows, setRows] = useState(null);
   const [busyId, setBusyId] = useState(null);
@@ -8603,9 +8806,12 @@ function GuestReviews({ talentId, isAdmin, isSelf, onAskOperator, onCount }) {
     if (!CLOUD) { setRows([]); return; }
     const cols = "id,guest_name,guest_country,rating,knowledge,care,communication,body,trip_label,created_at";
     let { data, error } = await supabase
-      .from("guest_reviews").select(cols + ",verified")
+      .from("guest_reviews").select(cols + ",verified,attested_by")
       .eq("talent_id", talentId).eq("status", "published")
       .order("created_at", { ascending: false });
+    if (error && /attested_by/i.test(error.message || "")) {   // a database without BUILD 66
+      ({ data, error } = await supabase.from("guest_reviews").select(cols + ",verified").eq("talent_id", talentId).eq("status", "published").order("created_at", { ascending: false }));
+    }
     if (error && /verified/i.test(error.message || "")) {   // a database without BUILD 64
       ({ data, error } = await supabase.from("guest_reviews").select(cols).eq("talent_id", talentId).eq("status", "published").order("created_at", { ascending: false }));
     }
@@ -8729,7 +8935,7 @@ function GuestReviews({ talentId, isAdmin, isSelf, onAskOperator, onCount }) {
               )}
               <span className="inline-flex items-center gap-1 text-[11px] font-semibold rounded-full px-2 py-1"
                 style={{ background: C.pineSoft, color: C.pine }}>
-                <ShieldCheck size={10} /> Guest of this trip
+                <ShieldCheck size={10} /> {r.attested_by ? `Attested by ${r.attested_by}` : "Guest of this trip"}
               </span>
               {r.verified === "google" && (
                 <span className="inline-flex items-center gap-1 text-[11px] font-semibold rounded-full px-2 py-1"
