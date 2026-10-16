@@ -66,7 +66,7 @@ const CLOUD = Boolean(supabase);
   } catch (e) {}
 })();
 const DEMO_MODE = false;   // set true only for local demos without a database
-const BUILD = "BUILD 67 — 15 Oct";   // bump every deploy; shown at the top of the welcome screen
+const BUILD = "BUILD 69 — 16 Oct";   // bump every deploy; shown at the top of the welcome screen
 // which device someone is on — shown beside the build so a screenshot tells us both
 const DEVICE = (() => {
   try {
@@ -1331,6 +1331,7 @@ export default function App() {
       permitsStatus: tr.permits_status || "not_needed", hotelsStatus: tr.hotels_status || "not_started",
       insuranceOk: !!tr.insurance_ok, nightTowns: (tr.night_towns && typeof tr.night_towns === "object") ? tr.night_towns : {},
       guestCount: tr.guest_count || null, guestNotes: tr.guest_notes || null,
+      specialNotes: tr.special_notes || null, allergies: tr.allergies || null,   // BUILD 68: shown in the crew's brief
       emergencyName: tr.emergency_name || null, emergencyPhone: tr.emergency_phone || null,
       members: (M || []).filter((m) => m.trip_id === tr.id).map((m) => {
         const p = talentById(m.user_id);
@@ -3914,10 +3915,35 @@ function TripHub({ user, meId, trip, actions, onBack, openSheet }) {
     { id: "guests", Icon: Users, title: "Guests", sub: (trip.guests || []).length ? `${trip.guests.length} listed${trip.guestCount && trip.guestCount !== trip.guests.length ? ` of ${trip.guestCount}` : ""}` : "No one listed yet", tone: (trip.guests || []).length ? "neutral" : "todo" },
     { id: "crew", Icon: UserCheck, title: "Crew", sub: (trip.members || []).length ? (trip.members || []).map((m) => `${m.name || talentById(m.id)?.name || "Crew"} · ${String(m.roleInTrip || m.role || "crew").replace("_", " ")}`).join(", ") : "No crew yet — invite a guide and a driver", tone: (trip.members || []).length ? "neutral" : "todo" },
     { id: "itinerary", Icon: CalendarDays, title: "Itinerary", sub: !plannedDays ? "No days planned yet" : nightsTotal ? `${plannedDays} of ${nightsTotal + 1} days planned` : `${plannedDays} days planned`, tone: plannedDays && nightsTotal && plannedDays >= nightsTotal + 1 ? "ok" : plannedDays ? "neutral" : "todo" },
-    { id: "details", Icon: Compass, title: "Trip details", sub: trip.arrivalFlight ? `Arrives ${trip.arrivalFlight}${trip.departureFlight ? ` · departs ${trip.departureFlight}` : ""}` : "Flights, arrival point, emergency contact", tone: trip.arrivalFlight ? "neutral" : "todo" },
+    { id: "details", Icon: Compass, title: "Trip details", sub: trip.arrivalFlight ? `Arrives ${trip.arrivalFlight}${trip.departureFlight ? ` · departs ${trip.departureFlight}` : ""}` : "Flights, allergies, special requests, emergency contact", tone: trip.arrivalFlight ? "neutral" : "todo" },
   ];
   const toneBg = { ok: C.successSoft, todo: C.goldSoft, warn: C.maroonSoft, neutral: C.pineSoft };
   const toneFg = { ok: C.success, todo: C.goldText, warn: C.maroon, neutral: C.pine };
+  // BUILD 68: the guide's or driver's review card, shown in the Reviews section of their brief
+  const crewReviewCard = isTalent && tripDone ? (() => {   // BUILD 64: the guide or driver sends the link themselves
+          const mine = (reviews.rows || []).filter((r) => r.talent_id === meId);
+          const live = mine.filter((r) => r.status === "published").length, waiting = mine.filter((r) => r.status === "pending").length;
+          return (
+            <button type="button" onClick={() => setInviting(true)}
+              className="tap w-full rounded-2xl p-4 mb-4 flex items-center gap-3 text-left"
+              style={{ background: C.goldSoft, border: `1px solid ${C.gold}33` }}>
+              <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0" style={{ background: C.gold }}>
+                <Star size={18} color="#fff" fill="#fff" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="text-[14px] font-semibold" style={{ color: C.goldText }}>Ask your guests for a review</div>
+                <div className="text-[13px] mt-0.5 leading-snug" style={{ color: C.goldText, opacity: .85 }}>
+                  {mine.length
+                    ? `${mine.length} ${mine.length === 1 ? "review" : "reviews"} of you${live ? ` · ${live} on your profile` : ""}${waiting ? ` · ${waiting} waiting for ${trip.operator || "the operator"}` : ""}`
+                    : linkInfo && linkInfo.sent && !linkInfo.mine ? `${String(linkInfo.by_name || "A team member").split(" ")[0]} sent the review link · waiting for reviews`
+                    : linkInfo && linkInfo.sent ? "You sent the review link · waiting for reviews"
+                    : "One link for the whole group. Guests sign in with Google."}
+                </div>
+              </div>
+              <ChevronLeft size={17} color={C.goldText} style={{ transform: "rotate(180deg)" }} />
+            </button>
+          );
+        })() : null;
   return (
     <div className="pb-6 fade">
       <div className="h-14 px-4 flex items-center gap-3" style={{ borderBottom: `1px solid ${C.lineSoft}` }}>
@@ -3928,7 +3954,7 @@ function TripHub({ user, meId, trip, actions, onBack, openSheet }) {
       </div>
 
       <div className="px-5 py-4">
-        {isTalent && <CrewBrief trip={trip} user={user} />}
+        {isTalent && <CrewBrief trip={trip} user={user} reviewCard={crewReviewCard} tripStarted={tripDone} />}
         {!isTalent && urgent && (
           <div className="rounded-xl px-3.5 py-3 mb-3 flex gap-2.5" style={{ background: C.maroonSoft }}>
             <ShieldAlert size={16} color={C.maroon} className="shrink-0 mt-0.5" />
@@ -3976,30 +4002,6 @@ function TripHub({ user, meId, trip, actions, onBack, openSheet }) {
           );
         })()}
 
-        {isTalent && tripDone && (() => {   // BUILD 64: the guide or driver sends the link themselves
-          const mine = (reviews.rows || []).filter((r) => r.talent_id === meId);
-          const live = mine.filter((r) => r.status === "published").length, waiting = mine.filter((r) => r.status === "pending").length;
-          return (
-            <button type="button" onClick={() => setInviting(true)}
-              className="tap w-full rounded-2xl p-4 mb-4 flex items-center gap-3 text-left"
-              style={{ background: C.goldSoft, border: `1px solid ${C.gold}33` }}>
-              <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0" style={{ background: C.gold }}>
-                <Star size={18} color="#fff" fill="#fff" />
-              </div>
-              <div className="flex-1 min-w-0">
-                <div className="text-[14px] font-semibold" style={{ color: C.goldText }}>Ask your guests for a review</div>
-                <div className="text-[13px] mt-0.5 leading-snug" style={{ color: C.goldText, opacity: .85 }}>
-                  {mine.length
-                    ? `${mine.length} ${mine.length === 1 ? "review" : "reviews"} of you${live ? ` · ${live} on your profile` : ""}${waiting ? ` · ${waiting} waiting for ${trip.operator || "the operator"}` : ""}`
-                    : linkInfo && linkInfo.sent && !linkInfo.mine ? `${String(linkInfo.by_name || "A team member").split(" ")[0]} sent the review link · waiting for reviews`
-                    : linkInfo && linkInfo.sent ? "You sent the review link · waiting for reviews"
-                    : "One link for the whole group. Guests sign in with Google."}
-                </div>
-              </div>
-              <ChevronLeft size={17} color={C.goldText} style={{ transform: "rotate(180deg)" }} />
-            </button>
-          );
-        })()}
 
         {canGrade && !grades.off && (() => {   // hidden until the database has grading
           const crew = gradableCrew(trip, meId);
@@ -10453,6 +10455,8 @@ function TripEssentials({ trip, canEdit, actions, onOpenHotels, show = "all" }) 
     arrival_point: trip.arrivalPoint || "Paro",
     guest_count: trip.guestCount || "",
     guest_notes: trip.guestNotes || "",
+    allergies: trip.allergies || "",            // BUILD 69: shown in the crew's brief (Dietary tile)
+    special_notes: trip.specialNotes || "",     // BUILD 69: shown in the crew's brief (Requests tile)
     emergency_name: trip.emergencyName || "",
     emergency_phone: trip.emergencyPhone || "",
   });
@@ -10478,6 +10482,8 @@ function TripEssentials({ trip, canEdit, actions, onOpenHotels, show = "all" }) 
       arrival_point: f.arrival_point || null,
       guest_count: f.guest_count ? Number(f.guest_count) : null,
       guest_notes: f.guest_notes.trim() || null,
+      allergies: f.allergies.trim() || null,
+      special_notes: f.special_notes.trim() || null,
       emergency_name: f.emergency_name.trim() || null,
       emergency_phone: f.emergency_phone.trim() || null,
     });
@@ -10504,7 +10510,7 @@ function TripEssentials({ trip, canEdit, actions, onOpenHotels, show = "all" }) 
         <div className="text-[14px] font-semibold mb-3" style={{ color: C.ink }}>Trip details</div>
 
         <Label>Arriving at</Label>
-        <div className="flex gap-2 mb-3">
+        <div className="flex flex-wrap gap-2 mb-3">
           {["Paro", "Phuentsholing", "Gelephu", "S. Jongkhar"].map((p) => (
             <Chip key={p} on={f.arrival_point === p} onClick={() => set("arrival_point", p)}>{p}</Chip>
           ))}
@@ -10545,11 +10551,24 @@ function TripEssentials({ trip, canEdit, actions, onOpenHotels, show = "all" }) 
           inputMode="numeric" placeholder="2" className="w-full h-11 px-3 rounded-xl text-[14px] mb-3"
           style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
 
-        <Label>Dietary, medical or altitude notes</Label>
+        <Label>Important — health, mobility or altitude</Label>
         <textarea value={f.guest_notes} onChange={(e) => set("guest_notes", e.target.value)} rows={2} maxLength={400}
-          placeholder="One vegetarian. Mrs Chen has a heart condition — avoid Chele La."
+          placeholder="Mrs Chen has a heart condition — avoid Chele La."
           className="w-full px-3 py-2.5 rounded-xl text-[14px] resize-none mb-3"
           style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
+
+        <Label>Allergies</Label>
+        <input value={f.allergies} onChange={(e) => set("allergies", e.target.value)} maxLength={200}
+          placeholder="Peanuts (Mr Lee), shellfish" aria-label="Allergies"
+          className="w-full h-11 px-3 rounded-xl text-[14px] mb-3"
+          style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
+
+        <Label>Special requests</Label>
+        <textarea value={f.special_notes} onChange={(e) => set("special_notes", e.target.value)} rows={2} maxLength={600}
+          placeholder="Anniversary dinner on day 3. Prefers a slow pace in the mornings." aria-label="Special requests"
+          className="w-full px-3 py-2.5 rounded-xl text-[14px] resize-none mb-1.5"
+          style={{ background: C.bg, border: `1px solid ${C.line}`, color: C.ink }} />
+        <p className="text-[12px] leading-snug mb-3" style={{ color: C.muted }}>Your guide and driver see these in their trip brief.</p>
 
         <div className="grid grid-cols-2 gap-3 mb-4">
           <div>
@@ -10630,7 +10649,7 @@ function TripEssentials({ trip, canEdit, actions, onOpenHotels, show = "all" }) 
             </p>
           )}
 
-          {(trip.guestCount || trip.guestNotes) && (
+          {(trip.guestCount || trip.guestNotes || trip.allergies || trip.specialNotes) && (
             <div className="mt-3 pt-3" style={{ borderTop: `1px solid ${C.lineSoft}` }}>
               {trip.guestCount > 0 && (
                 <div className="text-[13px] font-medium mb-1" style={{ color: C.ink }}>
@@ -10638,6 +10657,8 @@ function TripEssentials({ trip, canEdit, actions, onOpenHotels, show = "all" }) 
                 </div>
               )}
               {trip.guestNotes && <p className="text-[13px] leading-snug" style={{ color: C.muted }}>{trip.guestNotes}</p>}
+              {trip.allergies && <p className="text-[13px] leading-snug mt-1.5" style={{ color: C.maroon }}><b>Allergies:</b> {trip.allergies}</p>}
+              {trip.specialNotes && <p className="text-[13px] leading-snug mt-1.5 whitespace-pre-line" style={{ color: C.muted }}><b style={{ color: C.ink }}>Special requests:</b> {trip.specialNotes}</p>}
             </div>
           )}
 
@@ -10796,8 +10817,45 @@ const AIRLINES = [
   { name: "Bhutan Airlines", url: "https://www.bhutanairlines.bt/", note: "Tashi Air" },
 ];
 
-function CrewBrief({ trip, user }) {
-  const [open, setOpen] = useState(true);
+/* BUILD 68: the guide's and driver's trip page in sections that open and close — Your brief (with Flight, Dietary
+   and Requests side by side), Itinerary (map, trails, days), Hotels, Reviews. Everything here is view only. */
+function CrewSection({ id, Icon, title, sub, open, onToggle, tone, children }) {
+  const fg = tone === "warn" ? C.maroon : C.pine;
+  return (
+    <section className="rounded-2xl overflow-hidden mb-3" style={{ background: C.card, border: `1px solid ${open ? C.pine + "33" : C.line}` }} aria-label={title}>
+      <button type="button" onClick={onToggle} aria-expanded={open} aria-controls={`crew-sec-${id}`}
+        className="tap w-full px-4 py-3 flex items-center gap-3 text-left" style={{ background: open ? C.pine : C.card, border: 0 }}>
+        <div className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0" style={{ background: open ? "rgba(255,255,255,.15)" : C.pineSoft }}>
+          <Icon size={16} color={open ? C.goldSoft : fg} />
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="text-[14.5px] font-semibold" style={{ color: open ? "#FFFFFF" : C.ink }}>{title}</div>
+          {sub && <div className="text-[12px] truncate" style={{ color: open ? "#ffffffbb" : tone === "warn" ? C.maroon : C.muted }}>{sub}</div>}
+        </div>
+        <ChevronLeft size={16} color={open ? "#FFFFFF" : C.muted} style={{ transform: open ? "rotate(90deg)" : "rotate(-90deg)", transition: "transform .2s" }} />
+      </button>
+      {open && <div id={`crew-sec-${id}`} className="px-4 py-3.5 fade">{children}</div>}
+    </section>
+  );
+}
+
+function useCrewHotels(trip) {
+  const [list, setList] = useState(null);
+  useEffect(() => {
+    if (!CLOUD) { setList([]); return; }
+    let on = true;
+    supabase.from("room_bookings").select("*").eq("trip_id", trip.id).eq("status", "confirmed").order("check_in", { ascending: true })
+      .then(({ data }) => { if (on) setList((data || []).map(bookingFromRow)); });
+    return () => { on = false; };
+  }, [trip.id]);
+  return list;
+}
+
+function CrewBrief({ trip, user, reviewCard, tripStarted }) {
+  const [open, setOpen] = useState({ brief: true, itinerary: false, hotels: false, reviews: Boolean(reviewCard) });
+  const [tile, setTile] = useState(null);   // which quick tile is open: flight | dietary | requests
+  const toggle = (k) => setOpen((o) => ({ ...o, [k]: !o[k] }));
+  const hotels = useCrewHotels(trip);
 
   const fmtWhen = (iso) => {
     if (!iso) return null;
@@ -10807,170 +10865,214 @@ function CrewBrief({ trip, user }) {
       return d.toLocaleString("en-GB", { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
     } catch (e) { return null; }
   };
-
   const arrival = fmtWhen(trip.arrivalAt);
   const departure = fmtWhen(trip.departureAt);
   const days = trip.start ? Math.ceil((new Date(trip.start + "T00:00") - Date.now()) / 86400e3) : null;
   const myRole = (trip.members || []).find((m) => m && m.id === (user.talentId || user.id))?.roleInTrip;
+  const guests = trip.guests || [];
+  const dietary = guests.filter((g) => g.dietary);
+  const requests = [trip.guestNotes, trip.specialNotes].filter(Boolean);
+  const plan = trip.itinerary || [];
 
-  return (
-    <div className="rounded-2xl overflow-hidden mb-4" style={{ background: C.card, border: `1px solid ${C.pine}33` }}>
-      {/* heading */}
-      <div className="px-4 py-3 flex items-center gap-2.5" style={{ background: C.pine }}>
-        <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0" style={{ background: "rgba(255,255,255,.15)" }}>
-          <Compass size={16} color={C.goldSoft} />
-        </div>
-        <div className="flex-1 min-w-0">
-          <div className="text-[14px] font-semibold text-white">Your brief</div>
-          <div className="text-[12px]" style={{ color: "#ffffffbb" }}>
-            {myRole ? `You're the ${String(myRole).replace("_", " ")}` : "Trip details"}
-            {days !== null && days >= 0 ? ` · starts in ${days === 0 ? "today" : days === 1 ? "1 day" : `${days} days`}` : ""}
+  // the three quick tiles, side by side
+  const tiles = [
+    { id: "flight", Icon: ArrowRight, label: "Flight", value: trip.arrivalFlight || (arrival ? "Arrival" : "Not added"), warn: !(trip.arrivalFlight || arrival) },
+    { id: "dietary", Icon: Heart, label: "Dietary", value: dietary.length || trip.allergies ? `${dietary.length + (trip.allergies ? 1 : 0)} to note` : "None noted" },
+    { id: "requests", Icon: Star, label: "Requests", value: requests.length ? `${requests.length} to read` : "None", warn: Boolean(trip.guestNotes) },
+  ];
+
+  const flightDetail = (
+    <>
+      {trip.arrivalFlight || arrival ? (
+        <div className="rounded-xl px-3.5 py-3 mb-3" style={{ background: C.bg, border: `1px solid ${C.line}` }}>
+          <div className="flex items-start gap-2.5">
+            <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0" style={{ background: C.pineSoft }}><ArrowRight size={14} color={C.pine} /></div>
+            <div className="flex-1 min-w-0">
+              <div className="text-[14px] font-semibold" style={{ color: C.ink }}>{trip.arrivalFlight || "Arrival"}{trip.arrivalPoint ? ` · ${trip.arrivalPoint}` : ""}</div>
+              <div className="text-[13px] mt-0.5" style={{ color: C.muted }}>{arrival || "Time not confirmed yet"}</div>
+              {trip.guestCount > 0 && <div className="text-[13px] mt-1.5 font-medium" style={{ color: C.pine }}>Collecting {trip.guestCount} {trip.guestCount === 1 ? "guest" : "guests"}</div>}
+            </div>
           </div>
-        </div>
-        <button onClick={() => setOpen((v) => !v)} className="tap w-8 h-8 rounded-full flex items-center justify-center"
-          style={{ background: "rgba(255,255,255,.14)" }} aria-label="Toggle brief">
-          <ChevronLeft size={15} color="#fff" style={{ transform: open ? "rotate(90deg)" : "rotate(-90deg)", transition: "transform .2s" }} />
-        </button>
-      </div>
-
-      {open && (
-        <div className="px-4 py-3.5">
-          {/* 1. where to be, when — the flight comes first */}
-          <div className="text-[12px] font-semibold tracking-[.12em] uppercase mb-2" style={{ color: C.goldText }}>Collection</div>
-          {trip.arrivalFlight || arrival ? (
-            <div className="rounded-xl px-3.5 py-3 mb-3" style={{ background: C.bg, border: `1px solid ${C.line}` }}>
-              <div className="flex items-start gap-2.5">
-                <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0" style={{ background: C.pineSoft }}>
-                  <ArrowRight size={14} color={C.pine} />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="text-[14px] font-semibold" style={{ color: C.ink }}>
-                    {trip.arrivalFlight || "Arrival"}
-                    {trip.arrivalPoint ? ` · ${trip.arrivalPoint}` : ""}
-                  </div>
-                  <div className="text-[13px] mt-0.5" style={{ color: C.muted }}>{arrival || "Time not confirmed yet"}</div>
-                  {trip.guestCount > 0 && (
-                    <div className="text-[13px] mt-1.5 font-medium" style={{ color: C.pine }}>
-                      Collecting {trip.guestCount} {trip.guestCount === 1 ? "guest" : "guests"}
-                    </div>
-                  )}
-                </div>
-              </div>
-              {departure && (
-                <div className="flex items-center gap-2.5 mt-3 pt-3" style={{ borderTop: `1px solid ${C.line}` }}>
-                  <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0" style={{ background: C.goldSoft }}>
-                    <ArrowRight size={14} color={C.gold} style={{ transform: "rotate(180deg)" }} />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="text-[14px] font-medium" style={{ color: C.ink }}>
-                      Drop-off · {trip.departureFlight || "departure"}
-                    </div>
-                    <div className="text-[13px]" style={{ color: C.muted }}>{departure}</div>
-                  </div>
-                </div>
-              )}
-            </div>
-          ) : (
-            <div className="rounded-xl px-3.5 py-3 mb-3 text-[13px]" style={{ background: C.bg, border: `1px dashed ${C.line}`, color: C.muted }}>
-              Flight details not added yet. Ask the operator in the trip chat so you know when to be at the airport.
-            </div>
-          )}
-
-          {/* 2. check the flight (seats, delays) */}
-          <div className="text-[12px] font-semibold tracking-[.12em] uppercase mb-2" style={{ color: C.goldText }}>Check the flight</div>
-          <div className="flex gap-2 mb-3">
-            {AIRLINES.map((a) => (
-              <a key={a.name} href={a.url} target="_blank" rel="noreferrer"
-                className="tap flex-1 rounded-xl px-3 py-2.5 text-left"
-                style={{ background: C.bg, border: `1px solid ${C.line}` }}>
-                <div className="text-[13px] font-semibold" style={{ color: C.ink }}>{a.name}</div>
-                <div className="text-[11px] inline-flex items-center gap-1 mt-0.5" style={{ color: C.pine }}>
-                  Open <ExternalLink size={9} />
-                </div>
-              </a>
-            ))}
-          </div>
-          <p className="text-[12px] leading-snug mb-3" style={{ color: C.muted }}>
-            Paro arrivals shift with weather and the valley closes early. Check the morning of the flight —
-            a delayed landing changes everyone's day.
-          </p>
-
-          {/* 3. the route */}
-          {(trip.itinerary || []).length > 0 && (
-            <>
-              <div className="text-[12px] font-semibold tracking-[.12em] uppercase mb-2" style={{ color: C.goldText }}>
-                The route · {(trip.itinerary || []).length} days
-              </div>
-              <div className="mb-3">
-                {/* BUILD 59: the same itinerary the operator sees — map, days and tips — without any way to change it */}
-                <ItineraryBuilder trip={trip} canEdit={false} embedded />
-              </div>
-            </>
-          )}
-
-          {/* 4. the guests: what must not be got wrong, and who they are */}
-          {trip.guestNotes && (
-            <div className="rounded-xl px-3.5 py-3 mb-3 flex gap-2.5" style={{ background: C.maroonSoft }}>
-              <ShieldAlert size={16} color={C.maroon} className="shrink-0 mt-0.5" />
-              <div>
-                <div className="text-[13px] font-bold mb-0.5" style={{ color: C.maroon }}>Important — read before the trip</div>
-                <p className="text-[13px] leading-snug" style={{ color: C.maroon }}>{trip.guestNotes}</p>
-              </div>
-            </div>
-          )}
-
-          {/* who is in the group: names, nationality, dietary — never documents */}
-          {(trip.guests || []).length > 0 && (
-            <>
-              <div className="text-[12px] font-semibold tracking-[.12em] uppercase mb-2" style={{ color: C.goldText }}>Who's travelling</div>
-              <div className="rounded-xl px-3.5 py-3 mb-3" style={{ background: C.bg, border: `1px solid ${C.line}` }}>
-                {trip.guests.map((g, k) => (
-                  <div key={g.id} className="text-[13px] leading-snug" style={{ color: C.muted, marginTop: k ? 4 : 0 }}>
-                    <span className="font-medium" style={{ color: C.ink }}>{g.name}</span>{g.nationality ? ` · ${g.nationality}` : ""}{g.dietary ? ` · ${g.dietary}` : ""}
-                  </div>
-                ))}
-              </div>
-            </>
-          )}
-
-          {/* 5. who to call */}
-          {trip.emergencyPhone && (
-            <a href={`tel:${dialNumber(trip.emergencyPhone)}`}
-              className="tap w-full rounded-xl px-3.5 py-3 flex items-center gap-3"
-              style={{ background: C.pineSoft }}>
-              <div className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0" style={{ background: C.pine }}>
-                <PhoneCall size={15} color="#fff" />
-              </div>
+          {departure && (
+            <div className="flex items-center gap-2.5 mt-3 pt-3" style={{ borderTop: `1px solid ${C.line}` }}>
+              <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0" style={{ background: C.goldSoft }}><ArrowRight size={14} color={C.gold} style={{ transform: "rotate(180deg)" }} /></div>
               <div className="flex-1 min-w-0">
-                <div className="text-[13px] font-semibold" style={{ color: C.pine }}>
-                  Emergency contact{trip.emergencyName ? ` · ${trip.emergencyName}` : ""}
-                </div>
-                <div className="text-[12px]" style={{ color: C.pine, opacity: .8 }}>{prettyNumber(trip.emergencyPhone)}</div>
+                <div className="text-[14px] font-medium" style={{ color: C.ink }}>Drop-off · {trip.departureFlight || "departure"}</div>
+                <div className="text-[13px]" style={{ color: C.muted }}>{departure}</div>
               </div>
-            </a>
+            </div>
           )}
-
-          <button
-            onClick={() => {
-              const lines = [
-                trip.title,
-                `${fmtDate(trip.start)} – ${fmtDate(trip.end)}`,
-                trip.arrivalFlight ? `Arrival: ${trip.arrivalFlight}${arrival ? ` · ${arrival}` : ""}` : null,
-                trip.guestCount ? `Guests: ${trip.guestCount}` : null,
-                trip.guestNotes ? `Important: ${trip.guestNotes}` : null,
-                (trip.itinerary || []).length ? "\nPlan:" : null,
-                ...(trip.itinerary || []).map((d) => `Day ${d.day}: ${d.title}`),
-              ].filter(Boolean).join("\n");
-              if (navigator.share) navigator.share({ title: trip.title, text: lines }).catch(() => {});
-              else navigator.clipboard?.writeText(lines);
-            }}
-            className="tap w-full h-10 rounded-xl text-[13px] font-semibold inline-flex items-center justify-center gap-1.5 mt-3"
-            style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }}>
-            <Download size={13} /> Save this brief to my phone
-          </button>
+        </div>
+      ) : (
+        <div className="rounded-xl px-3.5 py-3 mb-3 text-[13px]" style={{ background: C.bg, border: `1px dashed ${C.line}`, color: C.muted }}>
+          Flight details not added yet. Ask the operator in the trip chat so you know when to be at the airport.
         </div>
       )}
-      <CrewHotelsBrief trip={trip} />
+      <div className="text-[12px] font-semibold tracking-[.12em] uppercase mb-2" style={{ color: C.goldText }}>Check the flight</div>
+      <div className="flex gap-2 mb-2">
+        {AIRLINES.map((a) => (
+          <a key={a.name} href={a.url} target="_blank" rel="noreferrer" className="tap flex-1 rounded-xl px-3 py-2.5 text-left" style={{ background: C.bg, border: `1px solid ${C.line}` }}>
+            <div className="text-[13px] font-semibold" style={{ color: C.ink }}>{a.name}</div>
+            <div className="text-[11px] inline-flex items-center gap-1 mt-0.5" style={{ color: C.pine }}>Open <ExternalLink size={9} /></div>
+          </a>
+        ))}
+      </div>
+      <p className="text-[12px] leading-snug" style={{ color: C.muted }}>Paro arrivals shift with weather and the valley closes early. Check the morning of the flight — a delayed landing changes everyone's day.</p>
+    </>
+  );
+  const dietaryDetail = (
+    dietary.length || trip.allergies ? (
+      <div className="rounded-xl px-3.5 py-3" style={{ background: C.bg, border: `1px solid ${C.line}` }}>
+        {trip.allergies && <div className="text-[13px] leading-snug mb-1.5" style={{ color: C.maroon }}><b>Allergies:</b> {trip.allergies}</div>}
+        {dietary.map((g, k) => (
+          <div key={g.id || k} className="text-[13px] leading-snug" style={{ color: C.muted, marginTop: k ? 4 : 0 }}>
+            <span className="font-medium" style={{ color: C.ink }}>{g.name}</span> · {g.dietary}
+          </div>
+        ))}
+      </div>
+    ) : <p className="text-[13px]" style={{ color: C.muted }}>No dietary needs noted for this group. If you hear of any, tell the operator in the trip chat.</p>
+  );
+  const requestsDetail = (
+    requests.length ? (
+      <div className="space-y-2">
+        {trip.guestNotes && (
+          <div className="rounded-xl px-3.5 py-3 flex gap-2.5" style={{ background: C.maroonSoft }}>
+            <ShieldAlert size={16} color={C.maroon} className="shrink-0 mt-0.5" />
+            <div>
+              <div className="text-[13px] font-bold mb-0.5" style={{ color: C.maroon }}>Important — read before the trip</div>
+              <p className="text-[13px] leading-snug" style={{ color: C.maroon }}>{trip.guestNotes}</p>
+            </div>
+          </div>
+        )}
+        {trip.specialNotes && (
+          <div className="rounded-xl px-3.5 py-3" style={{ background: C.bg, border: `1px solid ${C.line}` }}>
+            <div className="text-[13px] font-semibold mb-0.5" style={{ color: C.ink }}>Special requests</div>
+            <p className="text-[13px] leading-snug whitespace-pre-line" style={{ color: C.muted }}>{trip.specialNotes}</p>
+          </div>
+        )}
+      </div>
+    ) : <p className="text-[13px]" style={{ color: C.muted }}>No special requests from this group.</p>
+  );
+
+  const nights = (hotels || []).length;
+  return (
+    <div className="mb-1">
+      {/* 1. Your brief */}
+      <CrewSection id="brief" Icon={Compass} title="Your brief" open={open.brief} onToggle={() => toggle("brief")}
+        sub={`${myRole ? `You're the ${String(myRole).replace("_", " ")}` : "Trip details"}${days !== null && days >= 0 ? ` · starts ${days === 0 ? "today" : days === 1 ? "in 1 day" : `in ${days} days`}` : ""}`}>
+        <div className="grid grid-cols-3 gap-2 mb-3" role="tablist" aria-label="Quick details">
+          {tiles.map((t) => {
+            const on = tile === t.id;
+            return (
+              <button key={t.id} type="button" role="tab" aria-selected={on} onClick={() => setTile(on ? null : t.id)}
+                className="tap rounded-xl px-2.5 py-2.5 text-left min-w-0"
+                style={{ background: on ? C.pine : C.bg, border: `1px solid ${on ? C.pine : t.warn ? C.maroon + "55" : C.line}` }}>
+                <t.Icon size={15} color={on ? C.goldSoft : t.warn ? C.maroon : C.pine} />
+                <div className="text-[12px] font-semibold mt-1" style={{ color: on ? "#FFFFFF" : C.ink }}>{t.label}</div>
+                <div className="text-[11.5px] leading-tight truncate" style={{ color: on ? "#ffffffcc" : t.warn ? C.maroon : C.muted }}>{t.value}</div>
+              </button>
+            );
+          })}
+        </div>
+        {tile && (
+          <div className="fade mb-3" role="tabpanel">
+            {tile === "flight" ? flightDetail : tile === "dietary" ? dietaryDetail : requestsDetail}
+          </div>
+        )}
+        {/* always in view: what must not be got wrong */}
+        {tile !== "requests" && trip.guestNotes && (
+          <div className="rounded-xl px-3.5 py-3 mb-3 flex gap-2.5" style={{ background: C.maroonSoft }}>
+            <ShieldAlert size={16} color={C.maroon} className="shrink-0 mt-0.5" />
+            <div>
+              <div className="text-[13px] font-bold mb-0.5" style={{ color: C.maroon }}>Important — read before the trip</div>
+              <p className="text-[13px] leading-snug" style={{ color: C.maroon }}>{trip.guestNotes}</p>
+            </div>
+          </div>
+        )}
+        {guests.length > 0 && (
+          <>
+            <div className="text-[12px] font-semibold tracking-[.12em] uppercase mb-2" style={{ color: C.goldText }}>Who's travelling · {guests.length}</div>
+            <div className="rounded-xl px-3.5 py-3 mb-3" style={{ background: C.bg, border: `1px solid ${C.line}` }}>
+              {guests.map((g, k) => (
+                <div key={g.id || k} className="text-[13px] leading-snug" style={{ color: C.muted, marginTop: k ? 4 : 0 }}>
+                  <span className="font-medium" style={{ color: C.ink }}>{g.name}</span>{g.nationality ? ` · ${g.nationality}` : ""}{g.dietary ? ` · ${g.dietary}` : ""}
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+        {trip.emergencyPhone && (
+          <a href={`tel:${dialNumber(trip.emergencyPhone)}`} className="tap w-full rounded-xl px-3.5 py-3 flex items-center gap-3 mb-3" style={{ background: C.pineSoft }}>
+            <div className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0" style={{ background: C.pine }}><PhoneCall size={15} color="#fff" /></div>
+            <div className="flex-1 min-w-0">
+              <div className="text-[13px] font-semibold" style={{ color: C.pine }}>Emergency contact{trip.emergencyName ? ` · ${trip.emergencyName}` : ""}</div>
+              <div className="text-[12px]" style={{ color: C.pine, opacity: .8 }}>{prettyNumber(trip.emergencyPhone)}</div>
+            </div>
+          </a>
+        )}
+        <button
+          onClick={() => {
+            const lines = [
+              trip.title,
+              `${fmtDate(trip.start)} – ${fmtDate(trip.end)}`,
+              trip.arrivalFlight ? `Arrival: ${trip.arrivalFlight}${arrival ? ` · ${arrival}` : ""}` : null,
+              trip.guestCount ? `Guests: ${trip.guestCount}` : null,
+              trip.guestNotes ? `Important: ${trip.guestNotes}` : null,
+              trip.specialNotes ? `Special requests: ${trip.specialNotes}` : null,
+              trip.allergies ? `Allergies: ${trip.allergies}` : null,
+              ...dietary.map((g) => `Dietary — ${g.name}: ${g.dietary}`),
+              plan.length ? "\nPlan:" : null,
+              ...plan.map((d) => `Day ${d.day}: ${d.title}`),
+            ].filter(Boolean).join("\n");
+            if (navigator.share) navigator.share({ title: trip.title, text: lines }).catch(() => {});
+            else navigator.clipboard?.writeText(lines);
+          }}
+          className="tap w-full h-10 rounded-xl text-[13px] font-semibold inline-flex items-center justify-center gap-1.5"
+          style={{ background: C.card, border: `1px solid ${C.line}`, color: C.ink }}>
+          <Download size={13} /> Save this brief to my phone
+        </button>
+      </CrewSection>
+
+      {/* 2. Itinerary — the operator's plan, map and trails; view only */}
+      <CrewSection id="itinerary" Icon={MapIcon} title="Itinerary" open={open.itinerary} onToggle={() => toggle("itinerary")}
+        sub={plan.length ? `${plan.length} ${plan.length === 1 ? "day" : "days"} · map, trails and tips` : "Not planned yet"}>
+        {plan.length ? (
+          /* BUILD 59: the same itinerary the operator sees — map, trails, days and tips — without any way to change it */
+          <ItineraryBuilder trip={trip} canEdit={false} embedded />
+        ) : (
+          <p className="text-[13px]" style={{ color: C.muted }}>The operator hasn't added the day plan yet. It shows here, with the map, once they do.</p>
+        )}
+      </CrewSection>
+
+      {/* 3. Hotels — confirmed rooms, view only */}
+      <CrewSection id="hotels" Icon={BedDouble} title="Hotels" open={open.hotels} onToggle={() => toggle("hotels")}
+        sub={hotels === null ? "Loading…" : nights ? `${nights} ${nights === 1 ? "stay" : "stays"} confirmed` : "None confirmed yet"}>
+        {hotels === null ? (
+          <div className="flex items-center gap-2 text-[13px] py-2" style={{ color: C.muted }}><Loader2 size={14} className="animate-spin" /> Loading…</div>
+        ) : nights ? hotels.map((b, i) => { const h = talentById(b.hotelId);
+          return (
+            <div key={b.id} className="flex items-start gap-3 py-2" style={{ borderTop: i ? `1px solid ${C.lineSoft}` : "none" }}>
+              <BedDouble size={16} color={C.pine} className="shrink-0 mt-0.5" />
+              <div className="flex-1 min-w-0">
+                <div className="text-[14px] font-semibold" style={{ color: C.ink }}>{h?.company || h?.name || "Hotel"}{h?.hotelTown ? <span className="font-normal" style={{ color: C.muted }}> · {hotelTownName(h.hotelTown)}</span> : null}</div>
+                <div className="text-[12px]" style={{ color: C.muted }}>{fmtNights(b.checkIn, b.checkOut)} · {b.rooms} {b.rooms === 1 ? "room" : "rooms"}{h?.hotelCheckin ? ` · check-in from ${h.hotelCheckin}` : ""}</div>
+              </div>
+              {h?.phone && <a href={`tel:${dialNumber(h.phone)}`} className="tap w-8 h-8 rounded-lg inline-flex items-center justify-center shrink-0" style={{ background: C.pineSoft }} aria-label="Call hotel"><Phone size={14} color={C.pine} /></a>}
+            </div>
+          ); }) : (
+          <p className="text-[13px]" style={{ color: C.muted }}>No rooms confirmed for this trip yet. The operator books them; they show here once the hotel confirms.</p>
+        )}
+      </CrewSection>
+
+      {/* 4. Reviews */}
+      <CrewSection id="reviews" Icon={Award} title="Reviews" open={open.reviews} onToggle={() => toggle("reviews")}
+        sub={reviewCard ? "Ask your guests · see where reviews stand" : tripStarted ? "Nothing to show yet" : "Opens once the trip starts"}>
+        {reviewCard || (
+          <p className="text-[13px]" style={{ color: C.muted }}>
+            {tripStarted ? "Reviews for this trip will show here." : "Once the trip starts, you can ask your guests for a review here — one link for the whole group."}
+          </p>
+        )}
+      </CrewSection>
     </div>
   );
 }
